@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Violations - Parking Ltd.</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body data-page="violations">
+<header><h1>Parking Ltd. - Customer Portal</h1></header>
+<nav>
+    <a href="dashboard.html">Live Map & Wallet</a>
+    <a href="reserve.html">Reserve Slot</a>
+    <a href="violations.html">Violations Tracker</a>
+    <a href="#" id="logoutBtn">Logout</a>
+</nav>
+<div class="container">
+    <div class="card">
+        <h2>Billing & Violations Tracker</h2>
+        <form id="violationForm">
+            <div class="form-group">
+                <label>Search by License Plate</label>
+                <input type="text" id="searchPlate" required>
+            </div>
+            <button type="submit">Check Records</button>
+        </form>
+        <div id="violationResults" style="margin-top: 1rem;"></div>
+    </div>
+</div>
+<script src="js/app.js"></script>
+</body>
+</html>

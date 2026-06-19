@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Reserve - Parking Ltd.</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body data-page="reserve">
+<header><h1>Parking Ltd. - Customer Portal</h1></header>
+<nav>
+    <a href="dashboard.html">Live Map & Wallet</a>
+    <a href="reserve.html">Reserve Slot</a>
+    <a href="violations.html">Violations Tracker</a>
+    <a href="#" id="logoutBtn">Logout</a>
+</nav>
+<div class="container">
+    <div class="card">
+        <h2>Reserve a Parking Slot</h2>
+        <form id="reservationForm">
+            <div class="form-group">
+                <label>Select Zone</label>
+                <select id="zoneSelect" required>
+                    <option value="B">Zone B (Standard)</option>
+                    <option value="C">Zone C (Standard)</option>
+                    <option value="D">Zone D (Standard)</option>
+                    <option value="E">Zone E (Standard)</option>
+                    <option value="A">Zone A (PWD/VIP Only)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Duration (Days)</label>
+                <input type="number" id="duration" min="1" max="3" value="1" required>
+            </div>
+            <p><strong>Total Fee:</strong> ₱<span id="feeDisplay">60.00</span></p>
+            <button type="submit">Confirm Payment & Book</button>
+        </form>
+    </div>
+</div>
+<script src="js/app.js"></script>
+</body>
+</html>
