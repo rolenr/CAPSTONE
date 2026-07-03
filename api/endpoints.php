@@ -50,19 +50,114 @@ if ($method === 'POST' && $action === 'reserve') {
         }
     }
 
-    // Insert Reservation & Generate Token
-    $token = "QR_" . uniqid();
-    $insert = $db->prepare("
-        INSERT INTO reservations (license_plate, zone_id, start_date, duration_days, payment_status, token_id) 
-        VALUES (?, ?, CURRENT_DATE, ?, 'PAID_RESERVATION', ?)
+// --- ROUTE: Handle Reservation ---
+if ($method === 'POST' && $action === 'reserve') {
+
+    $data = json_decode(file_get_contents("php://input"), true);
+
+    $plate = strtoupper(trim($data["plate"]));
+    $zone = $data["zone"];
+    $days = (int)$data["days"];
+
+    // Find vehicle
+    $vehicle = $db->prepare("
+        SELECT vehicle_id
+        FROM vehicles
+        WHERE plate_number = ?
     ");
-    
-    if ($insert->execute([$plate, $zone, $duration, $token])) {
-        echo json_encode(["success" => true, "qr_token" => $token, "fee" => $totalAmount]);
-    } else {
-        http_response_code(500);
-        echo json_encode(["error" => "Failed to secure database transaction."]);
+
+    $vehicle->execute([$plate]);
+
+    $vehicle = $vehicle->fetch(PDO::FETCH_ASSOC);
+
+    if (!$vehicle) {
+
+        echo json_encode([
+            "success"=>false,
+            "message"=>"Vehicle not registered."
+        ]);
+
+        exit;
     }
+
+    // Find first available slot
+    $slot = $db->prepare("
+        SELECT slot_id, slot_number
+        FROM parking_slots
+        WHERE zone = ?
+        AND is_occupied = 0
+        AND slot_id NOT IN (
+
+            SELECT slot_id
+            FROM reservations
+            WHERE status='ACTIVE'
+
+        )
+
+        LIMIT 1
+    ");
+
+    $slot->execute([$zone]);
+
+    $slot = $slot->fetch(PDO::FETCH_ASSOC);
+
+    if (!$slot) {
+
+        echo json_encode([
+            "success"=>false,
+            "message"=>"No available slots in Zone ".$zone
+        ]);
+
+        exit;
+    }
+
+    // Create reservation
+
+    $expiry = date(
+        "Y-m-d H:i:s",
+        strtotime("+15 minutes")
+    );
+
+    $reserve = $db->prepare("
+
+        INSERT INTO reservations(
+
+            vehicle_id,
+            slot_id,
+            expiry_time,
+            status
+
+        )
+
+        VALUES(
+
+            ?, ?, ?, 'ACTIVE'
+
+        )
+
+    ");
+
+    $reserve->execute([
+
+        $vehicle["vehicle_id"],
+        $slot["slot_id"],
+        $expiry
+
+    ]);
+
+    $fee = $days * 60;
+
+    echo json_encode([
+
+        "success"=>true,
+        "message"=>"Reservation Successful!",
+
+        "slot"=>$slot["slot_number"],
+
+        "fee"=>$fee
+
+    ]);
+
     exit;
 }
 

@@ -126,4 +126,31 @@ violationForm.addEventListener('submit', async (e) => {
     } catch (error) {
         console.error("Failed to fetch violations", error);
     }
+
+    async function reserveSlot() {
+
+    const plate = document.getElementById("plateNumber").value;
+    const zone = document.getElementById("zoneSelect").value;
+    const days = document.getElementById("duration").value;
+
+    const response = await fetch("api/endpoints.php?action=reserve", {
+
+        method: "POST",
+
+        headers: {
+            "Content-Type": "application/json"
+        },
+
+        body: JSON.stringify({
+            plate: plate,
+            zone: zone,
+            days: days
+        })
+
+    });
+
+    const result = await response.json();
+
+    alert(result.message);
+}
 });
