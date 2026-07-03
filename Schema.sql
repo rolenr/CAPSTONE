@@ -9,6 +9,7 @@ CREATE TABLE vehicles (
 CREATE TABLE parking_slots (
     slot_id INTEGER PRIMARY KEY AUTOINCREMENT,
     slot_number TEXT NOT NULL UNIQUE,
+    zone TEXT,
     slot_type TEXT,
     is_occupied INTEGER DEFAULT 0
 );
@@ -19,8 +20,20 @@ CREATE TABLE parking_sessions (
     slot_id INTEGER,
     entry_time DATETIME DEFAULT CURRENT_TIMESTAMP,
     exit_time DATETIME,
-    total_fee REAL,
-    
+    total_fee REAL DEFAULT 0,
+
+    FOREIGN KEY(vehicle_id) REFERENCES vehicles(vehicle_id),
+    FOREIGN KEY(slot_id) REFERENCES parking_slots(slot_id)
+);
+
+CREATE TABLE reservations (
+    reservation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vehicle_id INTEGER,
+    slot_id INTEGER,
+    reservation_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expiry_time DATETIME,
+    status TEXT DEFAULT 'ACTIVE',
+
     FOREIGN KEY(vehicle_id) REFERENCES vehicles(vehicle_id),
     FOREIGN KEY(slot_id) REFERENCES parking_slots(slot_id)
 );
@@ -30,6 +43,7 @@ CREATE TABLE violations (
     session_id INTEGER,
     violation_type TEXT,
     penalty_amount REAL,
+    status TEXT DEFAULT 'UNPAID',
     issued_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
     FOREIGN KEY(session_id) REFERENCES parking_sessions(session_id)
