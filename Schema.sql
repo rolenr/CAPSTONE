@@ -9,7 +9,7 @@ CREATE TABLE vehicles (
 CREATE TABLE parking_slots (
     slot_id INTEGER PRIMARY KEY AUTOINCREMENT,
     slot_number TEXT NOT NULL UNIQUE,
-    zone TEXT,
+    zone TEXT NOT NULL,
     slot_type TEXT,
     is_occupied INTEGER DEFAULT 0
 );
