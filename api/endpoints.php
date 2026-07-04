@@ -1,7 +1,7 @@
 <?php
 // Initialize SQLite Connection
 try {
-    $db = new PDO('sqlite:../database/parking_central.db');
+    $db = new PDO('sqlite:../parking.db');
     $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 } catch (PDOException $e) {
     die(json_encode(["error" => "Database connection failed."]));
@@ -27,28 +27,6 @@ if ($method === 'GET' && $action === 'map') {
     echo json_encode($zones);
     exit;
 }
-
-// --- ROUTE: Handle Reservation ---
-if ($method === 'POST' && $action === 'reserve') {
-    $data = json_decode(file_get_contents('php://input'), true);
-    
-    $plate = $data['plate'];
-    $zone = $data['zone'];
-    $duration = (int)$data['days'];
-    $baseFee = 60.00;
-    $totalAmount = $baseFee * $duration;
-
-    // Verify Zone A restrictions
-    if ($zone === 'A') {
-        $vipCheck = $db->prepare("SELECT is_vip FROM accounts WHERE license_plate = ?");
-        $vipCheck->execute([$plate]);
-        $user = $vipCheck->fetch();
-        if (!$user || !$user['is_vip']) {
-            http_response_code(403);
-            echo json_encode(["error" => "Zone A is restricted to PWD/VIP."]);
-            exit;
-        }
-    }
 
 // --- ROUTE: Handle Reservation ---
 if ($method === 'POST' && $action === 'reserve') {
@@ -163,13 +141,26 @@ if ($method === 'POST' && $action === 'reserve') {
 
 // --- ROUTE: Violations Tracker ---
 if ($method === 'GET' && $action === 'violations') {
-    $plate = $_GET['plate'] ?? '';
-    
-    $stmt = $db->prepare("SELECT violation_type, fine_amount, status, image_proof_path FROM violations WHERE license_plate = ? AND status = 'UNPAID'");
+
+    $plate = strtoupper(trim($_GET['plate'] ?? ''));
+
+    $stmt = $db->prepare("
+        SELECT
+            v.violation_type,
+            v.penalty_amount,
+            v.status,
+            v.issued_at
+        FROM violations v
+        JOIN parking_sessions ps
+            ON v.session_id = ps.session_id
+        JOIN vehicles ve
+            ON ps.vehicle_id = ve.vehicle_id
+        WHERE ve.plate_number = ?
+    ");
+
     $stmt->execute([$plate]);
-    $violations = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    echo json_encode($violations);
+
+    echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
     exit;
 }
 ?>
