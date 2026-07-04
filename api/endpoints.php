@@ -1,17 +1,97 @@
 <?php
-// Initialize SQLite Connection
+// 1. Force PHP to output errors as JSON instead of HTML to prevent frontend crashes
+error_reporting(E_ALL);
+ini_set('display_errors', 0);
+header('Content-Type: application/json');
+
+set_error_handler(function($errno, $errstr, $errfile, $errline) {
+    echo json_encode(["error" => "PHP Error: $errstr on line $errline"]);
+    exit;
+});
+set_exception_handler(function($e) {
+    echo json_encode(["error" => "Exception: " . $e->getMessage()]);
+    exit;
+});
+
+// 2. Initialize SQLite Connection
 try {
     $db = new PDO('sqlite:../parking.db');
     $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 } catch (PDOException $e) {
-    die(json_encode(["error" => "Database connection failed."]));
+    echo json_encode(["error" => "Database connection failed."]);
+    exit;
 }
 
-// Ensure the request returns JSON
-header('Content-Type: application/json');
-
+// 3. Define method and action BEFORE running the IF statements
 $method = $_SERVER['REQUEST_METHOD'];
 $action = $_GET['action'] ?? '';
+
+// --- ROUTE: Register Account ---
+if ($method === 'POST' && $action === 'register') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    
+    if (!$data) {
+        echo json_encode(["error" => "Invalid data received."]);
+        exit;
+    }
+
+    $email = $data['email'] ?? '';
+    $password = password_hash($data['password'] ?? '', PASSWORD_DEFAULT); // Secure hashing
+    $plate = strtoupper(trim($data['plate'] ?? ''));
+    
+    try {
+        $db->beginTransaction();
+        
+        // 1. Insert into vehicles table first (to satisfy the Foreign Key constraint)
+        // Note: Using 'plate_number' to match your reservation logic below
+        $stmt = $db->prepare("INSERT OR IGNORE INTO vehicles (plate_number) VALUES (?)");
+        $stmt->execute([$plate]);
+        
+        // 2. Create the user account linked to that single plate
+        $stmt = $db->prepare("INSERT INTO accounts (email, password_hash, plate_number) VALUES (?, ?, ?)");
+        $stmt->execute([$email, $password, $plate]);
+        
+        $db->commit();
+        echo json_encode(["success" => true]);
+    } catch (PDOException $e) {
+        $db->rollBack();
+        http_response_code(400);
+        echo json_encode(["error" => "Registration failed. Email or Plate may already exist. Details: " . $e->getMessage()]);
+    }
+    exit;
+}
+
+// --- ROUTE: Login ---
+if ($method === 'POST' && $action === 'login') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $email = $data['email'] ?? '';
+    $password = $data['password'] ?? '';
+    
+    try {
+        $stmt = $db->prepare("SELECT * FROM accounts WHERE email = ?");
+        $stmt->execute([$email]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        // Verify password against the hashed database entry
+        if ($user && password_verify($password, $user['password_hash'])) {
+            echo json_encode([
+                "success" => true, 
+                "license_plate" => $user['plate_number'],
+                "is_vip" => (bool)($user['is_vip'] ?? 0)
+            ]);
+        } else {
+            http_response_code(401);
+            echo json_encode(["error" => "Invalid email or password."]);
+        }
+    } catch (PDOException $e) {
+        echo json_encode(["error" => "Database error during login: " . $e->getMessage()]);
+    }
+    exit;
+}
+
+// =====================================================================
+// UNCHANGED CODE BELOW: Map, Reservations, and Violations left exactly as is
+// =====================================================================
 
 // --- ROUTE: Live Map True Availability ---
 if ($method === 'GET' && $action === 'map') {
