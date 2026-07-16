@@ -118,15 +118,36 @@ if (liveMap) {
     fetchLiveMap();
 }
 
-// ---------------- BILLING ----------------
-if (durationInput && feeDisplay) {
-    durationInput.addEventListener('input', (e) => {
-        let days = parseInt(e.target.value);
-        if (days > 3) days = 3;
-        if (days < 1) days = 1;
-        e.target.value = days;
-        feeDisplay.textContent = (days * 60).toFixed(2);
-    });
+// ---------------- BILLING & DATE LOGIC ----------------
+const startDate = document.getElementById('startDate');
+const endDate = document.getElementById('endDate');
+
+function calculateDays() {
+    const start = new Date(startDate.value);
+    const end = new Date(endDate.value);
+    
+    // Calculate difference in milliseconds and convert to days
+    let diffTime = end - start;
+    let days = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1; // +1 to include start day
+
+    if (days < 1) days = 1;
+    if (days > 3) {
+        alert("Maximum reservation period is 3 days.");
+        endDate.value = startDate.value; // Reset end date
+        days = 1;
+    }
+
+    // Fee calculation logic
+    const base_fee = 60.00 * days;
+    const surcharge = (days >= 2) ? 100.00 : 0.00;
+    feeDisplay.textContent = (base_fee + surcharge).toFixed(2);
+    
+    return days;
+}
+
+if (startDate && endDate) {
+    startDate.addEventListener('change', calculateDays);
+    endDate.addEventListener('change', calculateDays);
 }
 
 // ---------------- RESERVATION ----------------
@@ -141,8 +162,11 @@ if (reservationForm) {
             return;
         }
 
+        const days = calculateDays(); 
         const zone = document.getElementById('zoneSelect').value;
-        const days = document.getElementById('duration').value;
+        // Grab the dates from the new inputs
+        const startDate = document.getElementById('startDate').value;
+        const endDate = document.getElementById('endDate').value;
 
         try {
             const response = await fetch('api/endpoints.php?action=reserve', {
@@ -151,7 +175,9 @@ if (reservationForm) {
                 body: JSON.stringify({ 
                     plate: currentUser.licensePlate, 
                     zone: zone, 
-                    days: days 
+                    days: days,
+                    startDate: startDate, // Added
+                    endDate: endDate      // Added
                 })
             });
             const data = await response.json();
