@@ -17,6 +17,7 @@
     <div class="card">
         <h2>Reserve a Parking Slot</h2>
         <form id="reservationForm">
+            <!-- Zone Selection -->
             <div class="form-group">
                 <label>Select Zone</label>
                 <select id="zoneSelect" required>
@@ -27,15 +28,28 @@
                     <option value="A">Zone A (PWD/VIP Only)</option>
                 </select>
             </div>
-            <div class="form-group">
-                <label>License Plate</label>
-                <input type="text" id="plateNumber" required>
+            
+           <!-- Replace the Duration input in reserve.html with this -->
+           <div class="form-group">
+                <label>Start Date</label>
+                <input type="date" id="startDate" value="2026-07-15" min="2026-07-15" required>
             </div>
+            <div class="form-group">
+                <label>End Date</label>
+                <input type="date" id="endDate" value="2026-07-15" min="2026-07-15" required>
+             </div>
+
             <p><strong>Total Fee:</strong> ₱<span id="feeDisplay">60.00</span></p>
             <button type="submit">Confirm Payment & Book</button>
         </form>
+
+        <!-- QR Wallet Section (Hidden by default, shown after reservation) -->
+        <div id="qrWalletSection" style="display:none; margin-top: 20px; text-align: center;">
+            <h3>Your Digital Entry Token</h3>
+            <img id="qrCodeImage" alt="Reservation QR Code">
+        </div>
     </div>
 </div>
-<script src="js/app.js"></script>
+<script src="js/main.js"></script>
 </body>
 </html>
