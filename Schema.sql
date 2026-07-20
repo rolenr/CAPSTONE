@@ -1,4 +1,3 @@
--- 1. VEHICLES (Your original table)
 CREATE TABLE vehicles (
     vehicle_id INTEGER PRIMARY KEY AUTOINCREMENT,
     plate_number TEXT NOT NULL UNIQUE,
@@ -7,7 +6,6 @@ CREATE TABLE vehicles (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- 2. ACCOUNTS (Added for Login/Register system)
 CREATE TABLE accounts (
     account_id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT UNIQUE NOT NULL,
@@ -18,7 +16,7 @@ CREATE TABLE accounts (
     FOREIGN KEY(plate_number) REFERENCES vehicles(plate_number)
 );
 
--- 3. SPATIAL ALLOCATION (Added for the Dashboard Live Map)
+
 CREATE TABLE spatial_allocation (
     zone_id TEXT PRIMARY KEY,
     max_capacity INTEGER NOT NULL,
@@ -26,16 +24,13 @@ CREATE TABLE spatial_allocation (
     active_reservation_count INTEGER DEFAULT 0
 );
 
--- 4. PARKING SLOTS (Your original table)
 CREATE TABLE parking_slots (
     slot_id INTEGER PRIMARY KEY AUTOINCREMENT,
     slot_number TEXT NOT NULL UNIQUE,
     zone TEXT NOT NULL,
-    slot_type TEXT,
     is_occupied INTEGER DEFAULT 0
 );
 
--- 5. PARKING SESSIONS (Your original table)
 CREATE TABLE parking_sessions (
     session_id INTEGER PRIMARY KEY AUTOINCREMENT,
     vehicle_id INTEGER,
@@ -47,19 +42,20 @@ CREATE TABLE parking_sessions (
     FOREIGN KEY(slot_id) REFERENCES parking_slots(slot_id)
 );
 
--- 6. RESERVATIONS (Your original table)
 CREATE TABLE reservations (
     reservation_id INTEGER PRIMARY KEY AUTOINCREMENT,
     vehicle_id INTEGER,
     slot_id INTEGER,
     reservation_time DATETIME DEFAULT CURRENT_TIMESTAMP,
     expiry_time DATETIME,
-    status TEXT DEFAULT 'ACTIVE',
+    status TEXT DEFAULT 'ACTIVE', 
+    token_id INTEGER, 
+    start_date datetime, 
+    end_date datetime,
     FOREIGN KEY(vehicle_id) REFERENCES vehicles(vehicle_id),
     FOREIGN KEY(slot_id) REFERENCES parking_slots(slot_id)
 );
 
--- 7. VIOLATIONS (Your original table)
 CREATE TABLE violations (
     violation_id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER,
