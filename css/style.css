@@ -95,7 +95,7 @@ button:hover {
 }
 
 /* Map & Wallet Styles */
-.map-grid {
+/* .map-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
     gap: 1rem;
@@ -118,6 +118,42 @@ button:hover {
 .zone.full {
     background-color: #fed7d7;
     color: var(--alert);
+}
+*/
+.map-grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(250px,1fr));
+    gap:20px;
+}
+
+.zone-card{
+    background:#fff;
+    border-radius:10px;
+    padding:15px;
+    box-shadow:0 2px 8px rgba(0,0,0,.15);
+}
+
+.slot-row{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    margin:8px 0;
+}
+
+.free,
+.occupied{
+    width:14px;
+    height:14px;
+    border-radius:50%;
+    display:inline-block;
+}
+
+.free{
+    background:#2ecc71;
+}
+
+.occupied{
+    background:#e74c3c;
 }
 
 .qr-wallet {

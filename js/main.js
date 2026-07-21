@@ -91,25 +91,52 @@ if (logoutBtn) {
 // ---------------- MAP ----------------
 async function fetchLiveMap() {
     if (!liveMap) return;
-    
+
     try {
         const response = await fetch('api/endpoints.php?action=map');
         const data = await response.json();
-        
-        let mapHTML = '';
-        data.forEach(zone => {
-            const isFull = zone.true_available <= 0;
-            const statusClass = isFull ? 'full' : 'available';
-            mapHTML += `
-                <div class="zone ${statusClass}">
-                    <h3>Zone ${zone.zone_id}</h3>
-                    <p>${zone.true_available} / ${zone.max_capacity} Slots</p>
-                </div>
-            `;
+
+        const zones = {};
+
+        // Group slots by zone
+        data.forEach(slot => {
+            if (!zones[slot.zone]) {
+                zones[slot.zone] = [];
+            }
+            zones[slot.zone].push(slot);
         });
+
+        let mapHTML = "";
+
+        Object.keys(zones).forEach(zone => {
+
+            mapHTML += `
+                <div class="zone-card">
+                    <h3>Zone ${zone}</h3>
+            `;
+
+            zones[zone].forEach(slot => {
+
+                mapHTML += `
+                    <div class="slot-row">
+                        <span>${slot.slot_number}</span>
+
+                        <span class="${slot.is_occupied == 1 ? 'occupied' : 'free'}"></span>
+
+                        <span>${slot.is_occupied == 1 ? 'Occupied' : 'Free'}</span>
+                    </div>
+                `;
+
+            });
+
+            mapHTML += `</div>`;
+        });
+
         liveMap.innerHTML = mapHTML;
+
     } catch (error) {
-        liveMap.innerHTML = '<p>Error loading live map data.</p>';
+        console.error(error);
+        liveMap.innerHTML = "<p>Error loading live map.</p>";
     }
 }
 

@@ -87,15 +87,17 @@ if ($method === 'POST' && $action === 'login') {
 
 // --- ROUTE: Live Map True Availability ---
 if ($method === 'GET' && $action === 'map') {
+
     $stmt = $db->query("
-        SELECT 
-            zone_id, 
-            max_capacity, 
-            (max_capacity - active_parked_count - active_reservation_count) AS true_available 
-        FROM spatial_allocation
+        SELECT
+            slot_number,
+            zone,
+            is_occupied
+        FROM parking_slots
+        ORDER BY zone, slot_number
     ");
-    $zones = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    echo json_encode($zones);
+
+    echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
     exit;
 }
 
