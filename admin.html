@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Admin - Parking Ltd.</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body data-page="admin">
+<header><h1>Parking Ltd. - Admin Portal</h1></header>
+<nav>
+    <a href="admin.html">System Overview</a>
+    <a href="dashboard.html">Live Map & Wallet</a>
+    <a href="reserve.html">Reserve Slot</a>
+    <a href="violations.html">Violations Tracker</a>
+    <a href="#" id="logoutBtn">Logout</a>
+</nav>
+
+<div class="container">
+    <!-- Analytics Overview Cards -->
+    <div class="card">
+        <h2>System Status & Overview</h2>
+        <div style="display: flex; gap: 15px; justify-content: space-between; flex-wrap: wrap; margin-top: 10px;">
+            <div>
+                <h3>Total Capacity</h3>
+                <p><strong id="statTotalCapacity">0</strong> Slots</p>
+            </div>
+            <div>
+                <h3>Occupied</h3>
+                <p><strong id="statOccupied" style="color: var(--alert);">0</strong> Slots</p>
+            </div>
+            <div>
+                <h3>Available</h3>
+                <p><strong id="statAvailable" style="color: var(--success);">0</strong> Slots</p>
+            </div>
+            <div>
+                <h3>Active Violations</h3>
+                <p><strong id="statViolations" style="color: #dd6b20;">0</strong> Cases</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Live ALPR Logs -->
+    <div class="card">
+        <h2>Live ALPR Feed & Detection Logs</h2>
+        <p>Real-time vehicle detection via YOLOv8 & ALPR.</p>
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Plate Number</th>
+                    <th>Assigned Slot</th>
+                    <th>Confidence</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody id="alprLogsTable">
+                <tr><td colspan="5">Loading logs...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Interactive Slot Overrides -->
+    <div class="card">
+        <h2>Slot Management & Manual Overrides</h2>
+        <div id="adminMapControls" class="admin-grid">
+            Loading parking slots...
+        </div>
+    </div>
+</div>
+
+<script src="js/main.js"></script>
+</body>
+</html>

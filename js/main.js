@@ -258,3 +258,119 @@ if (violationForm) {
         }
     });
 }
+
+// ---------------- ADMIN PORTAL ----------------
+const adminPage = document.querySelector('body[data-page="admin"]');
+
+async function loadAdminStats() {
+    try {
+        const response = await fetch('api/endpoints.php?action=admin_stats');
+        const data = await response.json();
+
+        if (data.success) {
+            document.getElementById('statTotalCapacity').textContent = data.total;
+            document.getElementById('statOccupied').textContent = data.occupied;
+            document.getElementById('statAvailable').textContent = data.available;
+            document.getElementById('statViolations').textContent = data.violations;
+        }
+    } catch (err) {
+        console.error('Error fetching admin stats:', err);
+    }
+}
+
+async function loadAlprLogs() {
+    const alprTable = document.getElementById('alprLogsTable');
+    if (!alprTable) return;
+
+    try {
+        const response = await fetch('api/endpoints.php?action=alpr_logs');
+        const logs = await response.json();
+
+        if (!logs || logs.length === 0) {
+            alprTable.innerHTML = `<tr><td colspan="5">No active detections found.</td></tr>`;
+            return;
+        }
+
+        alprTable.innerHTML = logs.map(log => {
+            const isPaid = log.status === 'PAID_RESERVATION' || log.status === 'PAID';
+            return `
+                <tr>
+                    <td>${log.timestamp || 'N/A'}</td>
+                    <td><strong>${log.plate_number}</strong></td>
+                    <td>Slot ${log.slot_number || 'Unassigned'}</td>
+                    <td>98.5%</td>
+                    <td class="status-text ${isPaid ? 'available' : 'occupied'}">
+                        ${log.status}
+                    </td>
+                </tr>
+            `;
+        }).join('');
+    } catch (err) {
+        console.error('Error loading ALPR logs:', err);
+    }
+}
+
+async function loadAdminMap() {
+    const adminMap = document.getElementById('adminMapControls');
+    if (!adminMap) return;
+
+    try {
+        const response = await fetch('api/endpoints.php?action=map');
+        const slots = await response.json();
+
+        if (!slots || slots.length === 0) {
+            adminMap.innerHTML = "<p>No slots found in database.</p>";
+            return;
+        }
+
+        adminMap.innerHTML = slots.map(slot => {
+            const isOccupied = slot.is_occupied == 1;
+            const statusClass = isOccupied ? 'slot-occupied' : 'slot-available';
+            const plateDisplay = isOccupied && slot.plate_number ? slot.plate_number : '—';
+
+            return `
+                <div class="admin-slot-card ${statusClass}">
+                    <strong>Zone ${slot.zone} - ${slot.slot_number}</strong>
+                    <div style="font-size: 0.85rem; font-weight: 600; color: #4a5568; margin-top: 4px;">
+                        ${plateDisplay}
+                    </div>
+                    <p class="status-text ${statusClass}">
+                        ${isOccupied ? 'Occupied' : 'Available'}
+                    </p>
+                    <button class="btn-action" onclick="toggleSlotOverride(${slot.slot_id}, ${isOccupied ? 0 : 1})">
+                        ${isOccupied ? 'Force Free' : 'Force Occupied'}
+                    </button>
+                </div>
+            `;
+        }).join('');
+    } catch (err) {
+        console.error('Error loading admin map controls:', err);
+    }
+}
+
+async function toggleSlotOverride(slotId, newOccupiedState) {
+    try {
+        const response = await fetch('api/endpoints.php?action=toggle_slot', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ slot_id: slotId, is_occupied: newOccupiedState })
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            loadAdminStats();
+            loadAdminMap();
+        } else {
+            alert(data.error || 'Failed to update slot.');
+        }
+    } catch (err) {
+        alert('Server connection failed.');
+    }
+}
+
+// Auto-run if on admin.html
+if (adminPage) {
+    loadAdminStats();
+    loadAlprLogs();
+    loadAdminMap();
+}

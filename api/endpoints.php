@@ -86,15 +86,22 @@ if ($method === 'POST' && $action === 'login') {
 }
 
 // --- ROUTE: Live Map True Availability ---
+// --- ROUTE: Live Map True Availability ---
 if ($method === 'GET' && $action === 'map') {
 
     $stmt = $db->query("
         SELECT
-            slot_number,
-            zone,
-            is_occupied
-        FROM parking_slots
-        ORDER BY zone, slot_number
+            s.slot_id,
+            s.slot_number,
+            s.zone,
+            s.is_occupied,
+            v.plate_number
+        FROM parking_slots s
+        LEFT JOIN parking_sessions ps 
+            ON s.slot_id = ps.slot_id AND ps.exit_time IS NULL
+        LEFT JOIN vehicles v 
+            ON ps.vehicle_id = v.vehicle_id
+        ORDER BY s.zone, s.slot_number
     ");
 
     echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
@@ -246,6 +253,69 @@ if ($method === 'POST' && $action === 'checkout') {
         echo json_encode(["success" => true, "duration_minutes" => $total_minutes, "final_fee" => $fee, "payment_status" => $status]);
     } else {
         echo json_encode(["error" => "Failed to finalize transaction audit."]);
+    }
+    exit;
+}
+
+// --- ROUTE: Admin Overview Statistics ---
+if ($method === 'GET' && $action === 'admin_stats') {
+    try {
+        // Count total slots
+        $totalSlots = $db->query("SELECT COUNT(*) FROM parking_slots")->fetchColumn();
+
+        // Count occupied slots
+        $occupiedSlots = $db->query("SELECT COUNT(*) FROM parking_slots WHERE is_occupied = 1")->fetchColumn();
+
+        // Count pending violations
+        $pendingViolations = $db->query("SELECT COUNT(*) FROM violations WHERE status = 'PENDING'")->fetchColumn();
+
+        echo json_encode([
+            "success" => true,
+            "total" => (int)$totalSlots,
+            "occupied" => (int)$occupiedSlots,
+            "available" => (int)($totalSlots - $occupiedSlots),
+            "violations" => (int)$pendingViolations
+        ]);
+    } catch (PDOException $e) {
+        echo json_encode(["error" => "Failed to fetch stats: " . $e->getMessage()]);
+    }
+    exit;
+}
+
+// --- ROUTE: ALPR / Parking Session Logs ---
+if ($method === 'GET' && $action === 'alpr_logs') {
+    try {
+        $stmt = $db->query("
+            SELECT ps.entry_time AS timestamp, ve.plate_number, sl.slot_number, ps.payment_status AS status
+            FROM parking_sessions ps
+            JOIN vehicles ve ON ps.vehicle_id = ve.vehicle_id
+            LEFT JOIN parking_slots sl ON ps.slot_id = sl.slot_id
+            ORDER BY ps.entry_time DESC
+            LIMIT 10
+        ");
+        echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
+    } catch (PDOException $e) {
+        echo json_encode([]);
+    }
+    exit;
+}
+
+// --- ROUTE: Admin Manual Slot Toggle (Override) ---
+if ($method === 'POST' && $action === 'toggle_slot') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $slotId = $data['slot_id'] ?? null;
+    $isOccupied = $data['is_occupied'] ?? 0;
+
+    if (!$slotId) {
+        echo json_encode(["error" => "Slot ID required."]);
+        exit;
+    }
+
+    $stmt = $db->prepare("UPDATE parking_slots SET is_occupied = ? WHERE slot_id = ?");
+    if ($stmt->execute([$isOccupied, $slotId])) {
+        echo json_encode(["success" => true]);
+    } else {
+        echo json_encode(["error" => "Failed to update slot status."]);
     }
     exit;
 }
