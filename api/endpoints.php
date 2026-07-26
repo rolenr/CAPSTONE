@@ -269,3 +269,113 @@ if ($method === 'GET' && $action === 'violations') {
 echo json_encode(["error" => "Invalid API route requested."]);
 exit;
 ?>
+
+
+// --- ROUTE: Entry Check-In & Instant Dynamic Slot Allocation ---
+if ($method === 'POST' && $action === 'checkin') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $plate = strtoupper(trim($data['plate'] ?? ''));
+    $preferredZone = $data['zone'] ?? null;
+
+    if (empty($plate)) {
+        echo json_encode(["error" => "License plate is required."]);
+        exit;
+    }
+
+    try {
+        $db->beginTransaction();
+
+        // 1. Check or register vehicle
+        $stmt = $db->prepare("SELECT vehicle_id FROM vehicles WHERE plate_number = ?");
+        $stmt->execute([$plate]);
+        $vehicle = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$vehicle) {
+            $stmt = $db->prepare("INSERT INTO vehicles (plate_number) VALUES (?)");
+            $stmt->execute([$plate]);
+            $vehicleId = $db->lastInsertId();
+        } else {
+            $vehicleId = $vehicle['vehicle_id'];
+        }
+
+        // 2. Prevent double check-in
+        $stmt = $db->prepare("SELECT session_id FROM parking_sessions WHERE vehicle_id = ? AND exit_time IS NULL");
+        $stmt->execute([$vehicleId]);
+        if ($stmt->fetch()) {
+            $db->rollBack();
+            echo json_encode(["error" => "Vehicle already has an active check-in session."]);
+            exit;
+        }
+
+        // 3. Check VIP privileges
+        $stmt = $db->prepare("SELECT is_vip FROM accounts WHERE plate_number = ?");
+        $stmt->execute([$plate]);
+        $account = $stmt->fetch(PDO::FETCH_ASSOC);
+        $isVip = $account ? (bool)$account['is_vip'] : false;
+
+        // 4. Find lowest open, unreserved slot
+        $query = "
+            SELECT s.slot_id, s.slot_number, s.zone 
+            FROM parking_slots s
+            WHERE s.is_occupied = 0 
+              AND s.slot_id NOT IN (
+                  SELECT slot_id FROM reservations WHERE status = 'ACTIVE'
+              )
+        ";
+        $params = [];
+
+        if (!$isVip) {
+            $query .= " AND s.zone != 'A'";
+        }
+
+        if (!empty($preferredZone)) {
+            $query .= " AND s.zone = ?";
+            $params[] = $preferredZone;
+        }
+
+        $query .= " ORDER BY s.zone ASC, s.slot_number ASC LIMIT 1";
+
+        $stmt = $db->prepare($query);
+        $stmt->execute($params);
+        $slot = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$slot) {
+            $db->rollBack();
+            echo json_encode(["error" => "No available open slots."]);
+            exit;
+        }
+
+        // 5. Update slot state
+        $stmt = $db->prepare("UPDATE parking_slots SET is_occupied = 1 WHERE slot_id = ?");
+        $stmt->execute([$slot['slot_id']]);
+
+        // 6. Update capacity counter
+        $stmt = $db->prepare("UPDATE spatial_allocation SET active_parked_count = active_parked_count + 1 WHERE zone_id = ?");
+        $stmt->execute([$slot['zone']]);
+
+        // 7. Create session record
+        $entryToken = "ENTRY_" . $slot['slot_number'] . "_" . time();
+        $entryTime = date("Y-m-d H:i:s");
+
+        $stmt = $db->prepare("
+            INSERT INTO parking_sessions (vehicle_id, slot_id, entry_time) 
+            VALUES (?, ?, ?)
+        ");
+        $stmt->execute([$vehicleId, $slot['slot_id'], $entryTime]);
+
+        $db->commit();
+
+        echo json_encode([
+            "success" => true,
+            "assigned_slot" => $slot['slot_number'],
+            "zone" => $slot['zone'],
+            "qr_token" => $entryToken,
+            "qr_url" => "https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=" . urlencode($entryToken)
+        ]);
+
+    } catch (PDOException $e) {
+        $db->rollBack();
+        echo json_encode(["error" => "Database error: " . $e->getMessage()]);
+    }
+    exit;
+}

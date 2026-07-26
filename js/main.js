@@ -231,3 +231,64 @@ if (violationForm) {
         }
     });
 }
+
+// --- EXPRESS CHECK-IN / AUTO SLOT ALLOCATION ---
+const checkinForm = document.getElementById('checkinForm');
+if (checkinForm) {
+    checkinForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const plateInput = document.getElementById('checkinPlate');
+        const zoneSelect = document.getElementById('checkinZone');
+        
+        // Auto-fill plate from session if input is left empty
+        const plate = (plateInput && plateInput.value.trim()) ? plateInput.value.trim() : currentUser.licensePlate;
+        const zone = zoneSelect ? zoneSelect.value : '';
+
+        if (!plate) {
+            alert('Please enter or log in with a valid license plate.');
+            return;
+        }
+
+        try {
+            const response = await fetch('api/endpoints.php?action=checkin', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ plate: plate, zone: zone })
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                // Update QR Wallet elements
+                const assignedSlotDisplay = document.getElementById('assignedSlotDisplay');
+                const qrImage = document.getElementById('qrCodeImage');
+                const qrWalletSection = document.getElementById('qrWalletSection');
+                const tokenStatus = document.getElementById('tokenStatus');
+
+                if (assignedSlotDisplay) {
+                    assignedSlotDisplay.textContent = `Assigned Spot: ${data.assigned_slot} (Zone ${data.zone})`;
+                }
+                if (qrImage) {
+                    qrImage.src = data.qr_url;
+                }
+                if (tokenStatus) {
+                    tokenStatus.textContent = 'PAID_CHECKIN';
+                }
+                if (qrWalletSection) {
+                    qrWalletSection.style.display = 'block';
+                }
+
+                // Immediately refresh live map
+                if (typeof fetchLiveMap === 'function') {
+                    fetchLiveMap();
+                }
+            } else {
+                alert(data.error || 'Check-in failed.');
+            }
+        } catch (err) {
+            console.error('Error during checkin:', err);
+            alert('Failed to connect to the backend server.');
+        }
+    });
+}
