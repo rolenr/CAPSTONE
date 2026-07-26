@@ -1,6 +1,6 @@
 // --- DOM Elements ---
 const authForm = document.getElementById('authForm');
-const registerForm = document.getElementById('registerForm'); // Added for registration
+const registerForm = document.getElementById('registerForm');
 const liveMap = document.getElementById('liveMap');
 const reservationForm = document.getElementById('reservationForm');
 const reservationFormContainer = document.getElementById('reservationFormContainer');
@@ -17,7 +17,6 @@ const violationResults = document.getElementById('violationResults');
 const logoutBtn = document.getElementById('logoutBtn');
 
 // --- Global State ---
-// Pull user data from the browser's session storage so it survives page reloads
 let currentUser = {
     isVIP: sessionStorage.getItem('isVIP') === 'true',
     licensePlate: sessionStorage.getItem('licensePlate') || ''
@@ -39,11 +38,8 @@ if (authForm) {
             const data = await response.json();
 
             if (data.success) {
-                // Save to session memory
                 sessionStorage.setItem('licensePlate', data.license_plate);
                 sessionStorage.setItem('isVIP', data.is_vip);
-                
-                // Physically route the browser to the dashboard
                 window.location.href = 'dashboard.html';
             } else {
                 alert(data.error || 'Invalid credentials');
@@ -88,8 +84,8 @@ if (registerForm) {
 if (logoutBtn) {
     logoutBtn.addEventListener('click', (e) => {
         e.preventDefault();
-        sessionStorage.clear(); // Wipe the saved plate
-        window.location.href = 'login.html'; // Send back to login
+        sessionStorage.clear();
+        window.location.href = 'login.html';
     });
 }
 
@@ -103,7 +99,6 @@ async function fetchLiveMap() {
 
         const zones = {};
 
-        // Group slots by zone
         data.forEach(slot => {
             if (!zones[slot.zone]) {
                 zones[slot.zone] = [];
@@ -114,24 +109,19 @@ async function fetchLiveMap() {
         let mapHTML = "";
 
         Object.keys(zones).forEach(zone => {
-
             mapHTML += `
                 <div class="zone-card">
                     <h3>Zone ${zone}</h3>
             `;
 
             zones[zone].forEach(slot => {
-
                 mapHTML += `
                     <div class="slot-row">
                         <span>${slot.slot_number}</span>
-
                         <span class="${slot.is_occupied == 1 ? 'occupied' : 'free'}"></span>
-
                         <span>${slot.is_occupied == 1 ? 'Occupied' : 'Free'}</span>
                     </div>
                 `;
-
             });
 
             mapHTML += `</div>`;
@@ -145,7 +135,6 @@ async function fetchLiveMap() {
     }
 }
 
-// Auto-load map if we are on the dashboard
 if (liveMap) {
     fetchLiveMap();
 }
@@ -154,43 +143,39 @@ if (liveMap) {
 const startDate = document.getElementById('startDate');
 const endDate = document.getElementById('endDate');
 
-// Default both date inputs to today, and prevent picking a date in the past.
-// (Doing this in JS instead of a hardcoded HTML value keeps it correct on
-// whatever day the page is actually opened.)
 if (startDate && endDate) {
     const todayStr = new Date().toISOString().split('T')[0];
     startDate.min = todayStr;
     endDate.min = todayStr;
-    startDate.value = todayStr;
-    endDate.value = todayStr;
+    if (!startDate.value) startDate.value = todayStr;
+    if (!endDate.value) endDate.value = todayStr;
 }
 
 function calculateDays() {
+    if (!startDate || !endDate) return 1;
     const start = new Date(startDate.value);
     const end = new Date(endDate.value);
     
-    // Calculate difference in milliseconds and convert to days
     let diffTime = end - start;
-    let days = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1; // +1 to include start day
+    let days = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
 
     if (days < 1) days = 1;
     if (days > 3) {
         alert("Maximum reservation period is 3 days.");
-        endDate.value = startDate.value; // Reset end date
+        endDate.value = startDate.value;
         days = 1;
     }
 
-    // Fee calculation logic
     const base_fee = 60.00 * days;
     const surcharge = (days >= 2) ? 100.00 : 0.00;
-    feeDisplay.textContent = (base_fee + surcharge).toFixed(2);
+    if (feeDisplay) feeDisplay.textContent = (base_fee + surcharge).toFixed(2);
     
     return days;
 }
 
 if (startDate && endDate) {
     startDate.addEventListener('change', () => {
-        endDate.min = startDate.value; // can't pick an end date before the new start date
+        endDate.min = startDate.value;
         calculateDays();
     });
     endDate.addEventListener('change', calculateDays);
@@ -198,30 +183,30 @@ if (startDate && endDate) {
 
 // ---------------- RESERVATION DETAILS / QR RENDERING ----------------
 function renderReservationDetails(data, plate) {
-    if (!qrCodeImage || !qrWalletSection) return;
+    if (!qrWalletSection) return;
 
-    // Encode the reservation id + plate (not just the raw token) into the QR
     const qrPayload = JSON.stringify({
         reservation_id: data.reservation_id,
         plate: plate
     });
 
-    qrCodeImage.src = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(qrPayload)}`;
+    if (qrCodeImage) {
+        qrCodeImage.src = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(qrPayload)}`;
+    }
 
     if (qrZone) qrZone.textContent = data.zone || '';
     if (qrSlotNumber) qrSlotNumber.textContent = data.slot || '';
     if (qrDates) qrDates.textContent = `${data.start_date} to ${data.end_date}`;
     if (qrFee) qrFee.textContent = Number(data.fee).toFixed(2);
 
-    // Show the QR/details view, hide the booking form
     qrWalletSection.style.display = 'block';
     if (reservationFormContainer) reservationFormContainer.style.display = 'none';
 }
 
-// If we're on the reservation page, check whether this plate already has
-// an active reservation, and if so, show the QR + details instead of the form.
 async function checkActiveReservation() {
-    if (!reservationForm || !currentUser.licensePlate) return;
+    // Allows running on both reserve.html and dashboard.html
+    const walletOrForm = document.getElementById('qrWalletSection') || document.getElementById('reservationForm');
+    if (!walletOrForm || !currentUser.licensePlate) return;
 
     try {
         const response = await fetch(`api/endpoints.php?action=active_reservation&plate=${encodeURIComponent(currentUser.licensePlate)}`);
@@ -242,7 +227,6 @@ if (reservationForm) {
     reservationForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         
-        // Ensure user is actually logged in
         if (!currentUser.licensePlate) {
             alert("Session expired. Please log in again.");
             window.location.href = 'login.html';
@@ -251,9 +235,8 @@ if (reservationForm) {
 
         const days = calculateDays(); 
         const zone = document.getElementById('zoneSelect').value;
-        // Grab the dates from the new inputs
-        const startDate = document.getElementById('startDate').value;
-        const endDate = document.getElementById('endDate').value;
+        const sDate = document.getElementById('startDate').value;
+        const eDate = document.getElementById('endDate').value;
 
         try {
             const response = await fetch('api/endpoints.php?action=reserve', {
@@ -263,15 +246,14 @@ if (reservationForm) {
                     plate: currentUser.licensePlate, 
                     zone: zone, 
                     days: days,
-                    startDate: startDate, // Added
-                    endDate: endDate      // Added
+                    startDate: sDate,
+                    endDate: eDate
                 })
             });
             const data = await response.json();
 
             if (data.success) {
                 alert(`Payment of ₱${data.fee.toFixed(2)} processed successfully!`);
-                // Render the digital QR wallet with slot allocation details
                 renderReservationDetails(data, currentUser.licensePlate);
             } else {
                 alert(data.error || 'Reservation failed.');
@@ -300,9 +282,9 @@ if (violationForm) {
             let html = "";
             data.forEach(v => {
                 html += `
-                    <div class="card" style="background-color: #ffeaea; border: 1px solid red;">
-                        <h3 style="color: red;">${v.violation_type}</h3>
-                        <p><strong>Penalty:</strong> ₱${parseFloat(v.fine_amount).toFixed(2)}</p>
+                    <div class="card" style="background-color: #ffeaea; border: 1px solid red; margin-bottom: 12px; padding: 12px;">
+                        <h3 style="color: red; margin: 0 0 8px 0;">${v.violation_type}</h3>
+                        <p><strong>Penalty:</strong> ₱${parseFloat(v.penalty_amount || 0).toFixed(2)}</p>
                         <p><strong>Status:</strong> ${v.status}</p>
                         <p><strong>Issued:</strong> ${v.issued_at}</p>
                     </div>
@@ -325,10 +307,10 @@ async function loadAdminStats() {
         const data = await response.json();
 
         if (data.success) {
-            document.getElementById('statTotalCapacity').textContent = data.total;
-            document.getElementById('statOccupied').textContent = data.occupied;
-            document.getElementById('statAvailable').textContent = data.available;
-            document.getElementById('statViolations').textContent = data.violations;
+            if (document.getElementById('statTotalCapacity')) document.getElementById('statTotalCapacity').textContent = data.total;
+            if (document.getElementById('statOccupied')) document.getElementById('statOccupied').textContent = data.occupied;
+            if (document.getElementById('statAvailable')) document.getElementById('statAvailable').textContent = data.available;
+            if (document.getElementById('statViolations')) document.getElementById('statViolations').textContent = data.violations;
         }
     } catch (err) {
         console.error('Error fetching admin stats:', err);
@@ -425,7 +407,6 @@ async function toggleSlotOverride(slotId, newOccupiedState) {
     }
 }
 
-// Auto-run if on admin.html
 if (adminPage) {
     loadAdminStats();
     loadAlprLogs();

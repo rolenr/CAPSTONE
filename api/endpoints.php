@@ -86,7 +86,6 @@ if ($method === 'POST' && $action === 'login') {
 }
 
 // --- ROUTE: Live Map True Availability ---
-// --- ROUTE: Live Map True Availability ---
 if ($method === 'GET' && $action === 'map') {
 
     $stmt = $db->query("
@@ -114,7 +113,6 @@ if ($method === 'POST' && $action === 'reserve') {
     $plate = strtoupper(trim($data["plate"]));
     $zone = $data["zone"];
     $days = (int)$data["days"];
-    // Explicitly grab the dates from the payload
     $startDate = $data["startDate"]; 
     $endDate = $data["endDate"];
 
@@ -146,13 +144,11 @@ if ($method === 'POST' && $action === 'reserve') {
     $expiry = date("Y-m-d H:i:s", strtotime("+15 minutes"));
     $token = "QR_" . uniqid(); 
 
-    // INSERT includes the new columns here
     $reserve = $db->prepare("
         INSERT INTO reservations(vehicle_id, slot_id, expiry_time, status, token_id, start_date, end_date)
         VALUES(?, ?, ?, 'ACTIVE', ?, ?, ?)
     ");
     
-    // Execute includes the variables here
     $reserve->execute([$vehicle["vehicle_id"], $slot["slot_id"], $expiry, $token, $startDate, $endDate]);
     $reservationId = $db->lastInsertId();
 
@@ -205,7 +201,6 @@ if ($method === 'GET' && $action === 'active_reservation') {
         exit;
     }
 
-    // Recompute the fee the same way the reserve route does, so it always matches
     $start = new DateTime($reservation['start_date']);
     $end = new DateTime($reservation['end_date']);
     $days = (int)$start->diff($end)->days + 1;
@@ -320,13 +315,8 @@ if ($method === 'POST' && $action === 'checkout') {
 // --- ROUTE: Admin Overview Statistics ---
 if ($method === 'GET' && $action === 'admin_stats') {
     try {
-        // Count total slots
         $totalSlots = $db->query("SELECT COUNT(*) FROM parking_slots")->fetchColumn();
-
-        // Count occupied slots
         $occupiedSlots = $db->query("SELECT COUNT(*) FROM parking_slots WHERE is_occupied = 1")->fetchColumn();
-
-        // Count pending violations
         $pendingViolations = $db->query("SELECT COUNT(*) FROM violations WHERE status = 'PENDING'")->fetchColumn();
 
         echo json_encode([

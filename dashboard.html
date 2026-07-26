@@ -19,11 +19,22 @@
         <div class="map-grid" id="liveMap">Loading capacity data...</div>
     </div>
     
+    <!-- DIGITAL TOKEN WALLET -->
     <div class="card qr-wallet" id="qrWalletSection" style="display: none;">
         <h2>Your Digital Token Wallet</h2>
         <p>Scan this at the entrance/exit terminals.</p>
-        <img id="qrCodeImage" src="" alt="Reserved QR Token">
-        <p><strong>Status:</strong> <span style="color: #38a169">PAID_RESERVATION</span></p>
+        
+        <div style="text-align: center; margin: 15px 0;">
+            <img id="qrCodeImage" src="" alt="Reserved QR Token">
+        </div>
+
+        <div class="reservation-summary-details">
+            <p><strong>Status:</strong> <span style="color: #38a169; font-weight: bold;">PAID_RESERVATION</span></p>
+            <p><strong>Assigned Zone:</strong> Zone <span id="qrZone"></span></p>
+            <p><strong>Assigned Slot:</strong> Slot <span id="qrSlotNumber"></span></p>
+            <p><strong>Validity Period:</strong> <span id="qrDates"></span></p>
+            <p><strong>Total Fee Paid:</strong> ₱<span id="qrFee">0.00</span></p>
+        </div>
     </div>
 </div>
 <script src="js/main.js"></script>
