@@ -3,10 +3,15 @@ const authForm = document.getElementById('authForm');
 const registerForm = document.getElementById('registerForm'); // Added for registration
 const liveMap = document.getElementById('liveMap');
 const reservationForm = document.getElementById('reservationForm');
+const reservationFormContainer = document.getElementById('reservationFormContainer');
 const durationInput = document.getElementById('duration');
 const feeDisplay = document.getElementById('feeDisplay');
 const qrWalletSection = document.getElementById('qrWalletSection');
 const qrCodeImage = document.getElementById('qrCodeImage');
+const qrZone = document.getElementById('qrZone');
+const qrSlotNumber = document.getElementById('qrSlotNumber');
+const qrDates = document.getElementById('qrDates');
+const qrFee = document.getElementById('qrFee');
 const violationForm = document.getElementById('violationForm');
 const violationResults = document.getElementById('violationResults');
 const logoutBtn = document.getElementById('logoutBtn');
@@ -149,6 +154,17 @@ if (liveMap) {
 const startDate = document.getElementById('startDate');
 const endDate = document.getElementById('endDate');
 
+// Default both date inputs to today, and prevent picking a date in the past.
+// (Doing this in JS instead of a hardcoded HTML value keeps it correct on
+// whatever day the page is actually opened.)
+if (startDate && endDate) {
+    const todayStr = new Date().toISOString().split('T')[0];
+    startDate.min = todayStr;
+    endDate.min = todayStr;
+    startDate.value = todayStr;
+    endDate.value = todayStr;
+}
+
 function calculateDays() {
     const start = new Date(startDate.value);
     const end = new Date(endDate.value);
@@ -173,9 +189,53 @@ function calculateDays() {
 }
 
 if (startDate && endDate) {
-    startDate.addEventListener('change', calculateDays);
+    startDate.addEventListener('change', () => {
+        endDate.min = startDate.value; // can't pick an end date before the new start date
+        calculateDays();
+    });
     endDate.addEventListener('change', calculateDays);
 }
+
+// ---------------- RESERVATION DETAILS / QR RENDERING ----------------
+function renderReservationDetails(data, plate) {
+    if (!qrCodeImage || !qrWalletSection) return;
+
+    // Encode the reservation id + plate (not just the raw token) into the QR
+    const qrPayload = JSON.stringify({
+        reservation_id: data.reservation_id,
+        plate: plate
+    });
+
+    qrCodeImage.src = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(qrPayload)}`;
+
+    if (qrZone) qrZone.textContent = data.zone || '';
+    if (qrSlotNumber) qrSlotNumber.textContent = data.slot || '';
+    if (qrDates) qrDates.textContent = `${data.start_date} to ${data.end_date}`;
+    if (qrFee) qrFee.textContent = Number(data.fee).toFixed(2);
+
+    // Show the QR/details view, hide the booking form
+    qrWalletSection.style.display = 'block';
+    if (reservationFormContainer) reservationFormContainer.style.display = 'none';
+}
+
+// If we're on the reservation page, check whether this plate already has
+// an active reservation, and if so, show the QR + details instead of the form.
+async function checkActiveReservation() {
+    if (!reservationForm || !currentUser.licensePlate) return;
+
+    try {
+        const response = await fetch(`api/endpoints.php?action=active_reservation&plate=${encodeURIComponent(currentUser.licensePlate)}`);
+        const data = await response.json();
+
+        if (data.success && data.active) {
+            renderReservationDetails(data, currentUser.licensePlate);
+        }
+    } catch (error) {
+        console.error('Failed to check active reservation:', error);
+    }
+}
+
+checkActiveReservation();
 
 // ---------------- RESERVATION ----------------
 if (reservationForm) {
@@ -211,11 +271,8 @@ if (reservationForm) {
 
             if (data.success) {
                 alert(`Payment of ₱${data.fee.toFixed(2)} processed successfully!`);
-                // Render the digital QR wallet
-                if (qrCodeImage && qrWalletSection) {
-                    qrCodeImage.src = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${data.qr_token}`;
-                    qrWalletSection.style.display = 'block';
-                }
+                // Render the digital QR wallet with slot allocation details
+                renderReservationDetails(data, currentUser.licensePlate);
             } else {
                 alert(data.error || 'Reservation failed.');
             }

@@ -16,37 +16,49 @@
 <div class="container">
     <div class="card">
         <h2>Reserve a Parking Slot</h2>
-        <form id="reservationForm">
-            <!-- Zone Selection -->
-            <div class="form-group">
-                <label>Select Zone</label>
-                <select id="zoneSelect" required>
-                    <option value="B">Zone B (Standard)</option>
-                    <option value="C">Zone C (Standard)</option>
-                    <option value="D">Zone D (Standard)</option>
-                    <option value="E">Zone E (Standard)</option>
-                    <option value="A">Zone A (PWD/VIP Only)</option>
-                </select>
-            </div>
-            
-           <!-- Replace the Duration input in reserve.html with this -->
-           <div class="form-group">
-                <label>Start Date</label>
-                <input type="date" id="startDate" value="2026-07-15" min="2026-07-15" required>
-            </div>
-            <div class="form-group">
-                <label>End Date</label>
-                <input type="date" id="endDate" value="2026-07-15" min="2026-07-15" required>
-             </div>
 
-            <p><strong>Total Fee:</strong> ₱<span id="feeDisplay">60.00</span></p>
-            <button type="submit">Confirm Payment & Book</button>
-        </form>
+        <!-- Reservation Form (hidden whenever the customer already has an active reservation) -->
+        <div id="reservationFormContainer">
+            <form id="reservationForm">
+                <!-- Zone Selection -->
+                <div class="form-group">
+                    <label>Select Zone</label>
+                    <select id="zoneSelect" required>
+                        <option value="B">Zone B (Standard)</option>
+                        <option value="C">Zone C (Standard)</option>
+                        <option value="D">Zone D (Standard)</option>
+                        <option value="E">Zone E (Standard)</option>
+                        <option value="A">Zone A (PWD/VIP Only)</option>
+                    </select>
+                </div>
 
-        <!-- QR Wallet Section (Hidden by default, shown after reservation) -->
-        <div id="qrWalletSection" style="display:none; margin-top: 20px; text-align: center;">
+               <!-- Replace the Duration input in reserve.html with this -->
+               <div class="form-group">
+                    <label>Start Date</label>
+                    <input type="date" id="startDate" required>
+                </div>
+                <div class="form-group">
+                    <label>End Date</label>
+                    <input type="date" id="endDate" required>
+                 </div>
+
+                <p><strong>Total Fee:</strong> ₱<span id="feeDisplay">60.00</span></p>
+                <button type="submit">Confirm Payment & Book</button>
+            </form>
+        </div>
+
+        <!-- QR Wallet Section (Hidden by default, shown once there's an active reservation) -->
+        <div id="qrWalletSection" class="qr-wallet" style="display:none; margin-top: 20px; text-align: center;">
             <h3>Your Digital Entry Token</h3>
             <img id="qrCodeImage" alt="Reservation QR Code">
+
+            <div class="form-group" style="text-align:left; margin-top: 1rem;">
+                <p class="slot-allocation-highlight">
+                    Slot Allocation: Zone <span id="qrZone"></span> - <span id="qrSlotNumber"></span>
+                </p>
+                <p><strong>Reservation Dates:</strong> <span id="qrDates"></span></p>
+                <p><strong>Total Fee:</strong> ₱<span id="qrFee"></span></p>
+            </div>
         </div>
     </div>
 </div>

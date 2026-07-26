@@ -154,6 +154,7 @@ if ($method === 'POST' && $action === 'reserve') {
     
     // Execute includes the variables here
     $reserve->execute([$vehicle["vehicle_id"], $slot["slot_id"], $expiry, $token, $startDate, $endDate]);
+    $reservationId = $db->lastInsertId();
 
     $base_fee = 60.00 * $days;
     $overnight_surcharge = ($days >= 2) ? 100.00 : 0.00; 
@@ -162,9 +163,68 @@ if ($method === 'POST' && $action === 'reserve') {
     echo json_encode([
         "success" => true,
         "message" => "Reservation Successful!",
+        "reservation_id" => $reservationId,
+        "zone" => $zone,
         "slot" => $slot["slot_number"],
+        "start_date" => $startDate,
+        "end_date" => $endDate,
         "fee" => $fee,
         "qr_token" => $token
+    ]);
+    exit;
+}
+
+// --- ROUTE: Check Active Reservation ---
+if ($method === 'GET' && $action === 'active_reservation') {
+    $plate = strtoupper(trim($_GET['plate'] ?? ''));
+
+    if (!$plate) {
+        echo json_encode(["error" => "Plate is required."]);
+        exit;
+    }
+
+    $stmt = $db->prepare("
+        SELECT
+            r.reservation_id,
+            r.token_id,
+            r.start_date,
+            r.end_date,
+            s.zone,
+            s.slot_number
+        FROM reservations r
+        JOIN vehicles v ON r.vehicle_id = v.vehicle_id
+        JOIN parking_slots s ON r.slot_id = s.slot_id
+        WHERE v.plate_number = ? AND r.status = 'ACTIVE'
+        LIMIT 1
+    ");
+    $stmt->execute([$plate]);
+    $reservation = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$reservation) {
+        echo json_encode(["success" => true, "active" => false]);
+        exit;
+    }
+
+    // Recompute the fee the same way the reserve route does, so it always matches
+    $start = new DateTime($reservation['start_date']);
+    $end = new DateTime($reservation['end_date']);
+    $days = (int)$start->diff($end)->days + 1;
+    if ($days < 1) $days = 1;
+
+    $base_fee = 60.00 * $days;
+    $overnight_surcharge = ($days >= 2) ? 100.00 : 0.00;
+    $fee = $base_fee + $overnight_surcharge;
+
+    echo json_encode([
+        "success" => true,
+        "active" => true,
+        "reservation_id" => $reservation['reservation_id'],
+        "qr_token" => $reservation['token_id'],
+        "zone" => $reservation['zone'],
+        "slot" => $reservation['slot_number'],
+        "start_date" => $reservation['start_date'],
+        "end_date" => $reservation['end_date'],
+        "fee" => $fee
     ]);
     exit;
 }
