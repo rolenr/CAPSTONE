@@ -10,8 +10,9 @@ CREATE TABLE accounts (
     account_id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
-    plate_number TEXT UNIQUE NOT NULL, -- Links directly to vehicles table
-    is_vip INTEGER DEFAULT 0, -- 1 for PWD/VIP (Unlocks Zone A)
+    plate_number TEXT UNIQUE NOT NULL,
+    is_vip INTEGER DEFAULT 0, 
+    is_admin INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(plate_number) REFERENCES vehicles(plate_number)
 );
@@ -28,6 +29,7 @@ CREATE TABLE parking_slots (
     slot_id INTEGER PRIMARY KEY AUTOINCREMENT,
     slot_number TEXT NOT NULL UNIQUE,
     zone TEXT NOT NULL,
+    slot_type TEXT,
     is_occupied INTEGER DEFAULT 0
 );
 
