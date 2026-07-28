@@ -40,7 +40,13 @@ if (authForm) {
             if (data.success) {
                 sessionStorage.setItem('licensePlate', data.license_plate);
                 sessionStorage.setItem('isVIP', data.is_vip);
-                window.location.href = 'dashboard.html';
+                sessionStorage.setItem('isAdmin', data.is_admin);
+
+                if (data.is_admin) {
+                    window.location.href = 'admin.html';
+                } else {
+                    window.location.href = 'dashboard.html';
+                }
             } else {
                 alert(data.error || 'Invalid credentials');
             }

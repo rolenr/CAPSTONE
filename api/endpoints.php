@@ -73,7 +73,8 @@ if ($method === 'POST' && $action === 'login') {
             echo json_encode([
                 "success" => true, 
                 "license_plate" => $user['plate_number'],
-                "is_vip" => (bool)($user['is_vip'] ?? 0)
+                "is_vip" => (bool)($user['is_vip'] ?? 0),
+                "is_admin" => (bool)($user['is_admin'] ?? 0)
             ]);
         } else {
             http_response_code(401);
