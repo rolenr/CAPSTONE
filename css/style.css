@@ -126,6 +126,130 @@ button:hover {
     gap:20px;
 }
 
+.map-hint {
+    margin: -0.5rem 0 1rem 0;
+    color: #718096;
+    font-size: 0.9rem;
+}
+
+/* --- Photo-based Live Map --- */
+.lot-photo-wrap {
+    position: relative;
+    width: 100%;
+    border-radius: 8px;
+    overflow: hidden;
+    line-height: 0;
+    background: #000;
+}
+
+.lot-photo {
+    width: 100%;
+    display: block;
+}
+
+.zone-marker {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: auto;
+    max-width: none;
+    transform: translate(-50%, -50%);
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 2px solid white;
+    background: rgba(0, 0, 0, 0.55);
+    color: white;
+    cursor: pointer;
+    font-family: inherit;
+    line-height: 1.2;
+    white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    transition: transform 0.15s ease, background 0.15s ease;
+    z-index: 2;
+}
+
+.zone-marker:hover,
+.zone-marker:focus {
+    transform: translate(-50%, -50%) scale(1.08);
+    outline: none;
+}
+
+.zone-marker.available {
+    border-color: var(--success);
+}
+
+.zone-marker.full {
+    border-color: var(--alert);
+}
+
+.zone-marker-label {
+    font-weight: 800;
+    font-size: 0.95rem;
+}
+
+.zone-marker-count {
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.zone-marker.available .zone-marker-count {
+    color: #9ae6b4;
+}
+
+.zone-marker.full .zone-marker-count {
+    color: #feb2b2;
+}
+
+.zone-detail-panel {
+    margin-top: 1.25rem;
+    padding-top: 1rem;
+    border-top: 2px solid var(--border);
+}
+
+.slot-dot {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    border-radius: 50%;
+    border: 2px solid white;
+    transform: translate(-50%, -50%);
+    cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.6);
+    transition: transform 0.15s ease;
+    z-index: 3;
+}
+
+.slot-dot:hover,
+.slot-dot:focus {
+    transform: translate(-50%, -50%) scale(1.4);
+    outline: none;
+}
+
+.slot-dot.free {
+    background: #2ecc71;
+}
+
+.slot-dot.occupied {
+    background: #e74c3c;
+}
+
+.zone-detail-panel h3 {
+    margin: 0 0 0.75rem 0;
+}
+
+.zone-detail-slots {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 6px 16px;
+}
+
 .zone-card{
     background:#fff;
     border-radius:10px;

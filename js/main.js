@@ -96,6 +96,45 @@ if (logoutBtn) {
 }
 
 // ---------------- MAP ----------------
+// Zone label marker positions (as % of photo width/height)
+const zonePositions = {
+    'A': { top: 38, left: 69 },
+    'B': { top: 16, left: 43 },
+    'C': { top: 34, left: 60 },
+    'D': { top: 34, left: 47 },
+    'E': { top: 38, left: 38 }
+};
+
+// Each zone's row of real slots in the photo, as a line from one end to the other (% of photo).
+// Individual slot dots are spread evenly along this line.
+const zoneStrips = {
+    'A': { axis: 'vertical',   fixed: 66,   from: 44, to: 87 },
+    'B': { axis: 'horizontal', fixed: 19,   from: 48, to: 62 },
+    'C': { axis: 'vertical',   fixed: 55,   from: 37, to: 76 },
+    'D': { axis: 'vertical',   fixed: 50,   from: 37, to: 76 },
+    'E': { axis: 'vertical',   fixed: 41,   from: 44, to: 92 }
+};
+
+function getSlotDotPositions(zone, count) {
+    const strip = zoneStrips[zone];
+    if (!strip || count <= 0) return [];
+
+    const positions = [];
+    for (let i = 0; i < count; i++) {
+        const ratio = count === 1 ? 0.5 : i / (count - 1);
+        const along = strip.from + (strip.to - strip.from) * ratio;
+
+        if (strip.axis === 'vertical') {
+            positions.push({ top: along, left: strip.fixed });
+        } else {
+            positions.push({ top: strip.fixed, left: along });
+        }
+    }
+    return positions;
+}
+
+let zonesCache = {};
+
 async function fetchLiveMap() {
     if (!liveMap) return;
 
@@ -112,33 +151,94 @@ async function fetchLiveMap() {
             zones[slot.zone].push(slot);
         });
 
-        let mapHTML = "";
+        zonesCache = zones;
+
+        let markersHTML = `<img src="images/parking-lot.jpg" alt="Parking Lot Aerial View" class="lot-photo">`;
+        let fallbackHTML = "";
 
         Object.keys(zones).forEach(zone => {
-            mapHTML += `
-                <div class="zone-card">
-                    <h3>Zone ${zone}</h3>
-            `;
+            const slots = zones[zone];
+            const total = slots.length;
+            const free = slots.filter(s => s.is_occupied != 1).length;
+            const pos = zonePositions[zone];
 
-            zones[zone].forEach(slot => {
-                mapHTML += `
-                    <div class="slot-row">
-                        <span>${slot.slot_number}</span>
-                        <span class="${slot.is_occupied == 1 ? 'occupied' : 'free'}"></span>
-                        <span>${slot.is_occupied == 1 ? 'Occupied' : 'Free'}</span>
+            if (pos) {
+                markersHTML += `
+                    <button type="button" class="zone-marker ${free > 0 ? 'available' : 'full'}"
+                        style="top:${pos.top}%; left:${pos.left}%;"
+                        data-zone="${zone}">
+                        <span class="zone-marker-label">Zone ${zone}</span>
+                        <span class="zone-marker-count">${free}/${total} free</span>
+                    </button>
+                `;
+
+                // Individual slot dots, pinned along the zone's real row in the photo
+                const dotPositions = getSlotDotPositions(zone, slots.length);
+                slots.forEach((slot, i) => {
+                    const dp = dotPositions[i];
+                    if (!dp) return;
+                    const isOccupied = slot.is_occupied == 1;
+                    const label = `Zone ${zone} - ${slot.slot_number}: ${isOccupied ? 'Occupied' : 'Free'}`;
+
+                    markersHTML += `
+                        <button type="button" class="slot-dot ${isOccupied ? 'occupied' : 'free'}"
+                            style="top:${dp.top}%; left:${dp.left}%;"
+                            data-zone="${zone}"
+                            title="${label}"
+                            aria-label="${label}">
+                        </button>
+                    `;
+                });
+            } else {
+                // Fallback list for any zone without a mapped photo position
+                fallbackHTML += `
+                    <div class="zone-card">
+                        <h3>Zone ${zone}</h3>
+                        ${slots.map(slot => `
+                            <div class="slot-row">
+                                <span>${slot.slot_number}</span>
+                                <span class="${slot.is_occupied == 1 ? 'occupied' : 'free'}"></span>
+                                <span>${slot.is_occupied == 1 ? 'Occupied' : 'Free'}</span>
+                            </div>
+                        `).join('')}
                     </div>
                 `;
-            });
-
-            mapHTML += `</div>`;
+            }
         });
 
-        liveMap.innerHTML = mapHTML;
+        liveMap.innerHTML = `<div class="lot-photo-wrap">${markersHTML}</div>` +
+            (fallbackHTML ? `<div class="map-grid">${fallbackHTML}</div>` : '');
+
+        liveMap.querySelectorAll('.zone-marker, .slot-dot').forEach(btn => {
+            btn.addEventListener('click', () => showZoneDetail(btn.dataset.zone));
+        });
 
     } catch (error) {
         console.error(error);
         liveMap.innerHTML = "<p>Error loading live map.</p>";
     }
+}
+
+function showZoneDetail(zone) {
+    const panel = document.getElementById('zoneDetailPanel');
+    if (!panel || !zonesCache[zone]) return;
+
+    const slots = zonesCache[zone];
+
+    panel.innerHTML = `
+        <h3>Zone ${zone} — Slot Details</h3>
+        <div class="zone-detail-slots">
+            ${slots.map(slot => `
+                <div class="slot-row">
+                    <span>${slot.slot_number}</span>
+                    <span class="${slot.is_occupied == 1 ? 'occupied' : 'free'}"></span>
+                    <span>${slot.is_occupied == 1 ? `Occupied${slot.plate_number ? ' &ndash; ' + slot.plate_number : ''}` : 'Free'}</span>
+                </div>
+            `).join('')}
+        </div>
+    `;
+    panel.style.display = 'block';
+    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 if (liveMap) {
