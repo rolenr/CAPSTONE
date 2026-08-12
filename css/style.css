@@ -139,7 +139,8 @@ button:hover {
     border-radius: 8px;
     overflow: hidden;
     line-height: 0;
-    background: #000;
+    background: #fff;
+    border: 1px solid var(--border);
 }
 
 .lot-photo {

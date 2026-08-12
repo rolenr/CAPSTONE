@@ -96,23 +96,25 @@ if (logoutBtn) {
 }
 
 // ---------------- MAP ----------------
-// Zone label marker positions (as % of photo width/height)
+// Zone label marker positions (as % of photo width/height) — matches images/parking-lot-map.png
 const zonePositions = {
-    'A': { top: 38, left: 69 },
-    'B': { top: 16, left: 43 },
-    'C': { top: 34, left: 60 },
-    'D': { top: 34, left: 47 },
-    'E': { top: 38, left: 38 }
+    'E': { top: 34, left: 30.6 },
+    'D': { top: 34, left: 43.5 },
+    'B': { top: 34, left: 53.6 },
+    'A': { top: 34, left: 67.8 },
+    'C': { top: 8,  left: 51.3 },
+    'F': { top: 30, left: 85.9 }
 };
 
-// Each zone's row of real slots in the photo, as a line from one end to the other (% of photo).
+// Each zone's row of real slots in the diagram, as a line from one end to the other (% of image).
 // Individual slot dots are spread evenly along this line.
 const zoneStrips = {
-    'A': { axis: 'vertical',   fixed: 66,   from: 44, to: 87 },
-    'B': { axis: 'horizontal', fixed: 19,   from: 48, to: 62 },
-    'C': { axis: 'vertical',   fixed: 55,   from: 37, to: 76 },
-    'D': { axis: 'vertical',   fixed: 50,   from: 37, to: 76 },
-    'E': { axis: 'vertical',   fixed: 41,   from: 44, to: 92 }
+    'E': { axis: 'vertical',   fixed: 30.6, from: 40, to: 95 },
+    'D': { axis: 'vertical',   fixed: 43.5, from: 40, to: 95 },
+    'B': { axis: 'vertical',   fixed: 53.6, from: 40, to: 95 },
+    'A': { axis: 'vertical',   fixed: 67.8, from: 40, to: 95 },
+    'C': { axis: 'horizontal', fixed: 21,   from: 40, to: 62 },
+    'F': { axis: 'horizontal', fixed: 34,   from: 75, to: 98 }
 };
 
 function getSlotDotPositions(zone, count) {
@@ -153,7 +155,7 @@ async function fetchLiveMap() {
 
         zonesCache = zones;
 
-        let markersHTML = `<img src="images/parking-lot.jpg" alt="Parking Lot Aerial View" class="lot-photo">`;
+        let markersHTML = `<img src="images/parking-lot-map.png" alt="Parking Lot Zone Map" class="lot-photo">`;
         let fallbackHTML = "";
 
         Object.keys(zones).forEach(zone => {
