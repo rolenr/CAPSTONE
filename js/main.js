@@ -96,7 +96,6 @@ if (logoutBtn) {
 }
 
 // ---------------- MAP ----------------
-// Zone label marker positions (as % of photo width/height) — matches images/parking-lot-map.png
 const zonePositions = {
     'E': { top: 34, left: 30.6 },
     'D': { top: 34, left: 43.5 },
@@ -106,8 +105,6 @@ const zonePositions = {
     'F': { top: 30, left: 85.9 }
 };
 
-// Each zone's row of real slots in the diagram, as a line from one end to the other (% of image).
-// Individual slot dots are spread evenly along this line.
 const zoneStrips = {
     'E': { axis: 'vertical',   fixed: 30.6, from: 40, to: 95 },
     'D': { axis: 'vertical',   fixed: 43.5, from: 40, to: 95 },
@@ -174,25 +171,25 @@ async function fetchLiveMap() {
                     </button>
                 `;
 
-                // Individual slot dots, pinned along the zone's real row in the photo
-                const dotPositions = getSlotDotPositions(zone, slots.length);
-                slots.forEach((slot, i) => {
-                    const dp = dotPositions[i];
-                    if (!dp) return;
-                    const isOccupied = slot.is_occupied == 1;
-                    const label = `Zone ${zone} - ${slot.slot_number}: ${isOccupied ? 'Occupied' : 'Free'}`;
+                if (zone !== 'F') {
+                    const dotPositions = getSlotDotPositions(zone, slots.length);
+                    slots.forEach((slot, i) => {
+                        const dp = dotPositions[i];
+                        if (!dp) return;
+                        const isOccupied = slot.is_occupied == 1;
+                        const label = `Zone ${zone} - ${slot.slot_number}: ${isOccupied ? 'Occupied' : 'Free'}`;
 
-                    markersHTML += `
-                        <button type="button" class="slot-dot ${isOccupied ? 'occupied' : 'free'}"
-                            style="top:${dp.top}%; left:${dp.left}%;"
-                            data-zone="${zone}"
-                            title="${label}"
-                            aria-label="${label}">
-                        </button>
-                    `;
-                });
+                        markersHTML += `
+                            <button type="button" class="slot-dot ${isOccupied ? 'occupied' : 'free'}"
+                                style="top:${dp.top}%; left:${dp.left}%;"
+                                data-zone="${zone}"
+                                title="${label}"
+                                aria-label="${label}">
+                            </button>
+                        `;
+                    });
+                }
             } else {
-                // Fallback list for any zone without a mapped photo position
                 fallbackHTML += `
                     <div class="zone-card">
                         <h3>Zone ${zone}</h3>
@@ -312,7 +309,6 @@ function renderReservationDetails(data, plate) {
 }
 
 async function checkActiveReservation() {
-    // Allows running on both reserve.html and dashboard.html
     const walletOrForm = document.getElementById('qrWalletSection') || document.getElementById('reservationForm');
     if (!walletOrForm || !currentUser.licensePlate) return;
 
@@ -341,8 +337,15 @@ if (reservationForm) {
             return;
         }
 
-        const days = calculateDays(); 
         const zone = document.getElementById('zoneSelect').value;
+
+        // STRICT VIP VALIDATION CHECK - Intercepts non-VIP users instantly
+        if (zone === 'E' && !currentUser.isVIP) {
+            alert("Error: Zone E reservations are restricted to VIP accounts only.");
+            return; // Stops the form from proceeding to the backend
+        }
+
+        const days = calculateDays(); 
         const sDate = document.getElementById('startDate').value;
         const eDate = document.getElementById('endDate').value;
 
