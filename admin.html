@@ -36,7 +36,54 @@
                 <h3>Active Violations</h3>
                 <p><strong id="statViolations" style="color: #dd6b20;">0</strong> Cases</p>
             </div>
+            <div>
+                <h3>Ongoing Reservations</h3>
+                <p><strong id="statReservations" style="color: var(--primary);">0</strong> Active</p>
+            </div>
         </div>
+    </div>
+
+    <!-- Ongoing Reservations -->
+    <div class="card">
+        <h2>Ongoing Reservations</h2>
+        <p>All currently active reservations. Overriding cancels the reservation and frees the assigned slot.</p>
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th>Plate</th>
+                    <th>Account</th>
+                    <th>Zone / Slot</th>
+                    <th>Start</th>
+                    <th>End</th>
+                    <th>Fee</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="adminReservationsTable">
+                <tr><td colspan="7">Loading reservations...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- VIP / Account Management -->
+    <div class="card">
+        <h2>Account Management &amp; VIP Status</h2>
+        <p>Search by email or plate number and toggle VIP status (VIP accounts can reserve Zone E).</p>
+        <input type="text" id="accountSearchInput" placeholder="Search by email or plate number..." style="width: 100%; padding: 8px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 6px;">
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th>Email</th>
+                    <th>Plate</th>
+                    <th>VIP Status</th>
+                    <th>Role</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="adminAccountsTable">
+                <tr><td colspan="5">Loading accounts...</td></tr>
+            </tbody>
+        </table>
     </div>
 
     <!-- Live ALPR Logs -->

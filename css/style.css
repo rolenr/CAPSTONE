@@ -303,13 +303,51 @@ button:hover {
     margin: 1rem 0;
 }
 
-/* --- Admin Grid & Slot Cards --- */
+/* --- Admin Zone Sections --- */
+#adminMapControls {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.zone-section {
+    width: 100%;
+    margin-bottom: 1.5rem;
+}
+
+.zone-section:last-child {
+    margin-bottom: 0;
+}
+
+.zone-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 8px;
+    margin-bottom: 12px;
+    border-bottom: 2px solid var(--border);
+}
+
+.zone-header h3 {
+    margin: 0;
+    font-size: 1.05rem;
+    color: var(--primary);
+}
+
+.zone-badge {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #4a5568;
+    background: #edf2f7;
+    padding: 4px 10px;
+    border-radius: 999px;
+}
+
 /* --- Admin Grid & Slot Cards --- */
 .admin-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
     gap: 12px;
-    margin-top: 1rem;
 }
 
 .admin-slot-card {
@@ -322,6 +360,14 @@ button:hover {
     display: flex;
     flex-direction: column;
     justify-content: space-between;
+}
+
+.slot-plate {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #4a5568;
+    margin-top: 4px;
+    min-height: 1.1em;
 }
 
 .admin-slot-card.slot-occupied {

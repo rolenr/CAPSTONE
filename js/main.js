@@ -422,9 +422,138 @@ async function loadAdminStats() {
             if (document.getElementById('statOccupied')) document.getElementById('statOccupied').textContent = data.occupied;
             if (document.getElementById('statAvailable')) document.getElementById('statAvailable').textContent = data.available;
             if (document.getElementById('statViolations')) document.getElementById('statViolations').textContent = data.violations;
+            if (document.getElementById('statReservations')) document.getElementById('statReservations').textContent = data.active_reservations;
         }
     } catch (err) {
         console.error('Error fetching admin stats:', err);
+    }
+}
+
+// ---------------- ADMIN: ONGOING RESERVATIONS ----------------
+async function loadAdminReservations() {
+    const table = document.getElementById('adminReservationsTable');
+    if (!table) return;
+
+    try {
+        const response = await fetch('api/endpoints.php?action=admin_reservations');
+        const data = await response.json();
+
+        if (!data.success) {
+            table.innerHTML = `<tr><td colspan="7">${data.error || 'Failed to load reservations.'}</td></tr>`;
+            return;
+        }
+
+        const reservations = data.reservations;
+
+        if (!reservations || reservations.length === 0) {
+            table.innerHTML = `<tr><td colspan="7">No ongoing reservations.</td></tr>`;
+            return;
+        }
+
+        table.innerHTML = reservations.map(r => `
+            <tr>
+                <td><strong>${r.plate_number}</strong></td>
+                <td>${r.email || '—'} ${r.is_vip ? '<span style="color: var(--primary); font-weight: bold;">(VIP)</span>' : ''}</td>
+                <td>Zone ${r.zone} - ${r.slot_number}</td>
+                <td>${r.start_date || 'N/A'}</td>
+                <td>${r.end_date || 'N/A'}</td>
+                <td>₱${Number(r.fee).toFixed(2)}</td>
+                <td>
+                    <button class="btn-action" onclick="overrideReservation(${r.reservation_id})">Override / Cancel</button>
+                </td>
+            </tr>
+        `).join('');
+    } catch (err) {
+        console.error('Error loading admin reservations:', err);
+        table.innerHTML = `<tr><td colspan="7">Failed to load reservations.</td></tr>`;
+    }
+}
+
+async function overrideReservation(reservationId) {
+    if (!confirm('Override this reservation? This will cancel it and free the assigned slot.')) return;
+
+    try {
+        const response = await fetch('api/endpoints.php?action=override_reservation', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reservation_id: reservationId, status: 'CANCELLED', release_slot: true })
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            loadAdminReservations();
+            loadAdminStats();
+            loadAdminMap();
+        } else {
+            alert(data.error || 'Failed to override reservation.');
+        }
+    } catch (err) {
+        alert('Server connection failed.');
+    }
+}
+
+// ---------------- ADMIN: ACCOUNT / VIP MANAGEMENT ----------------
+async function loadAdminAccounts(search = '') {
+    const table = document.getElementById('adminAccountsTable');
+    if (!table) return;
+
+    try {
+        const url = 'api/endpoints.php?action=admin_accounts' + (search ? `&search=${encodeURIComponent(search)}` : '');
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (!data.success) {
+            table.innerHTML = `<tr><td colspan="5">${data.error || 'Failed to load accounts.'}</td></tr>`;
+            return;
+        }
+
+        const accounts = data.accounts;
+
+        if (!accounts || accounts.length === 0) {
+            table.innerHTML = `<tr><td colspan="5">No accounts found.</td></tr>`;
+            return;
+        }
+
+        table.innerHTML = accounts.map(a => {
+            const isVip = Number(a.is_vip) === 1;
+            const isAdmin = Number(a.is_admin) === 1;
+            return `
+                <tr>
+                    <td>${a.email}</td>
+                    <td>${a.plate_number}</td>
+                    <td class="status-text ${isVip ? 'slot-available' : 'slot-occupied'}">${isVip ? 'VIP' : 'Standard'}</td>
+                    <td>${isAdmin ? 'Admin' : 'User'}</td>
+                    <td>
+                        <button class="btn-action" onclick="setVip(${a.account_id}, ${isVip ? 0 : 1})">
+                            ${isVip ? 'Remove VIP' : 'Make VIP'}
+                        </button>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+    } catch (err) {
+        console.error('Error loading admin accounts:', err);
+        table.innerHTML = `<tr><td colspan="5">Failed to load accounts.</td></tr>`;
+    }
+}
+
+async function setVip(accountId, newVipState) {
+    try {
+        const response = await fetch('api/endpoints.php?action=set_vip', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ account_id: accountId, is_vip: newVipState })
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            const searchInput = document.getElementById('accountSearchInput');
+            loadAdminAccounts(searchInput ? searchInput.value.trim() : '');
+        } else {
+            alert(data.error || 'Failed to update VIP status.');
+        }
+    } catch (err) {
+        alert('Server connection failed.');
     }
 }
 
@@ -473,23 +602,46 @@ async function loadAdminMap() {
             return;
         }
 
-        adminMap.innerHTML = slots.map(slot => {
-            const isOccupied = slot.is_occupied == 1;
-            const statusClass = isOccupied ? 'slot-occupied' : 'slot-available';
-            const plateDisplay = isOccupied && slot.plate_number ? slot.plate_number : '—';
+        // Group slots by zone, preserving sorted zone order
+        const zones = {};
+        slots.forEach(slot => {
+            if (!zones[slot.zone]) zones[slot.zone] = [];
+            zones[slot.zone].push(slot);
+        });
+
+        adminMap.innerHTML = Object.keys(zones).sort().map(zone => {
+            const zoneSlots = zones[zone];
+            const occupiedCount = zoneSlots.filter(s => s.is_occupied == 1).length;
+            const totalCount = zoneSlots.length;
+
+            const cards = zoneSlots.map(slot => {
+                const isOccupied = slot.is_occupied == 1;
+                const statusClass = isOccupied ? 'slot-occupied' : 'slot-available';
+                const plateDisplay = isOccupied && slot.plate_number ? slot.plate_number : '—';
+
+                return `
+                    <div class="admin-slot-card ${statusClass}">
+                        <strong>${slot.slot_number}</strong>
+                        <div class="slot-plate">${plateDisplay}</div>
+                        <p class="status-text ${statusClass}">
+                            ${isOccupied ? 'Occupied' : 'Available'}
+                        </p>
+                        <button class="btn-action" onclick="toggleSlotOverride(${slot.slot_id}, ${isOccupied ? 0 : 1})">
+                            ${isOccupied ? 'Force Free' : 'Force Occupied'}
+                        </button>
+                    </div>
+                `;
+            }).join('');
 
             return `
-                <div class="admin-slot-card ${statusClass}">
-                    <strong>Zone ${slot.zone} - ${slot.slot_number}</strong>
-                    <div style="font-size: 0.85rem; font-weight: 600; color: #4a5568; margin-top: 4px;">
-                        ${plateDisplay}
+                <div class="zone-section">
+                    <div class="zone-header">
+                        <h3>Zone ${zone}</h3>
+                        <span class="zone-badge">${totalCount - occupiedCount} / ${totalCount} available</span>
                     </div>
-                    <p class="status-text ${statusClass}">
-                        ${isOccupied ? 'Occupied' : 'Available'}
-                    </p>
-                    <button class="btn-action" onclick="toggleSlotOverride(${slot.slot_id}, ${isOccupied ? 0 : 1})">
-                        ${isOccupied ? 'Force Free' : 'Force Occupied'}
-                    </button>
+                    <div class="admin-grid">
+                        ${cards}
+                    </div>
                 </div>
             `;
         }).join('');
@@ -518,8 +670,19 @@ async function toggleSlotOverride(slotId, newOccupiedState) {
     }
 }
 
+const accountSearchInput = document.getElementById('accountSearchInput');
+if (accountSearchInput) {
+    let searchDebounce;
+    accountSearchInput.addEventListener('input', (e) => {
+        clearTimeout(searchDebounce);
+        searchDebounce = setTimeout(() => loadAdminAccounts(e.target.value.trim()), 300);
+    });
+}
+
 if (adminPage) {
     loadAdminStats();
     loadAlprLogs();
     loadAdminMap();
+    loadAdminReservations();
+    loadAdminAccounts();
 }

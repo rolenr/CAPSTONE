@@ -337,16 +337,172 @@ if ($method === 'GET' && $action === 'admin_stats') {
         $totalSlots = $db->query("SELECT COUNT(*) FROM parking_slots")->fetchColumn();
         $occupiedSlots = $db->query("SELECT COUNT(*) FROM parking_slots WHERE is_occupied = 1")->fetchColumn();
         $pendingViolations = $db->query("SELECT COUNT(*) FROM violations WHERE status = 'PENDING'")->fetchColumn();
+        $activeReservations = $db->query("SELECT COUNT(*) FROM reservations WHERE status = 'ACTIVE'")->fetchColumn();
 
         echo json_encode([
             "success" => true,
             "total" => (int)$totalSlots,
             "occupied" => (int)$occupiedSlots,
             "available" => (int)($totalSlots - $occupiedSlots),
-            "violations" => (int)$pendingViolations
+            "violations" => (int)$pendingViolations,
+            "active_reservations" => (int)$activeReservations
         ]);
     } catch (PDOException $e) {
         echo json_encode(["error" => "Failed to fetch stats: " . $e->getMessage()]);
+    }
+    exit;
+}
+
+// --- ROUTE: Admin - List Ongoing Reservations ---
+if ($method === 'GET' && $action === 'admin_reservations') {
+    try {
+        $stmt = $db->query("
+            SELECT
+                r.reservation_id,
+                r.status,
+                r.token_id,
+                r.reservation_time,
+                r.expiry_time,
+                r.start_date,
+                r.end_date,
+                v.plate_number,
+                a.email,
+                a.is_vip,
+                s.slot_id,
+                s.zone,
+                s.slot_number
+            FROM reservations r
+            JOIN vehicles v ON r.vehicle_id = v.vehicle_id
+            LEFT JOIN accounts a ON a.plate_number = v.plate_number
+            JOIN parking_slots s ON r.slot_id = s.slot_id
+            WHERE r.status = 'ACTIVE'
+            ORDER BY r.start_date ASC
+        ");
+        $reservations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach ($reservations as &$r) {
+            $start = new DateTime($r['start_date']);
+            $end = new DateTime($r['end_date']);
+            $days = (int)$start->diff($end)->days + 1;
+            if ($days < 1) $days = 1;
+            $base_fee = 60.00 * $days;
+            $overnight_surcharge = ($days >= 2) ? 100.00 : 0.00;
+            $r['fee'] = $base_fee + $overnight_surcharge;
+            $r['is_vip'] = (bool)($r['is_vip'] ?? 0);
+        }
+        unset($r);
+
+        echo json_encode(["success" => true, "reservations" => $reservations]);
+    } catch (PDOException $e) {
+        echo json_encode(["error" => "Failed to fetch reservations: " . $e->getMessage()]);
+    }
+    exit;
+}
+
+// --- ROUTE: Admin - Override / Cancel a Reservation ---
+if ($method === 'POST' && $action === 'override_reservation') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $reservationId = $data['reservation_id'] ?? null;
+    $newStatus = $data['status'] ?? 'CANCELLED';
+    $releaseSlot = $data['release_slot'] ?? true;
+
+    if (!$reservationId) {
+        echo json_encode(["error" => "Reservation ID required."]);
+        exit;
+    }
+
+    if (!in_array($newStatus, ['CANCELLED', 'COMPLETED'])) {
+        echo json_encode(["error" => "Invalid override status."]);
+        exit;
+    }
+
+    try {
+        $db->beginTransaction();
+
+        $res = $db->prepare("SELECT slot_id, status FROM reservations WHERE reservation_id = ?");
+        $res->execute([$reservationId]);
+        $reservation = $res->fetch(PDO::FETCH_ASSOC);
+
+        if (!$reservation) {
+            $db->rollBack();
+            echo json_encode(["error" => "Reservation not found."]);
+            exit;
+        }
+
+        if ($reservation['status'] !== 'ACTIVE') {
+            $db->rollBack();
+            echo json_encode(["error" => "Reservation is not currently active."]);
+            exit;
+        }
+
+        $update = $db->prepare("UPDATE reservations SET status = ? WHERE reservation_id = ?");
+        $update->execute([$newStatus, $reservationId]);
+
+        if ($releaseSlot) {
+            $freeSlot = $db->prepare("UPDATE parking_slots SET is_occupied = 0 WHERE slot_id = ?");
+            $freeSlot->execute([$reservation['slot_id']]);
+        }
+
+        $db->commit();
+        echo json_encode(["success" => true, "message" => "Reservation overridden and slot released."]);
+    } catch (PDOException $e) {
+        $db->rollBack();
+        echo json_encode(["error" => "Failed to override reservation: " . $e->getMessage()]);
+    }
+    exit;
+}
+
+// --- ROUTE: Admin - List / Search Accounts ---
+if ($method === 'GET' && $action === 'admin_accounts') {
+    try {
+        $search = trim($_GET['search'] ?? '');
+
+        if ($search !== '') {
+            $like = "%$search%";
+            $stmt = $db->prepare("
+                SELECT account_id, email, plate_number, is_vip, is_admin
+                FROM accounts
+                WHERE email LIKE ? OR plate_number LIKE ?
+                ORDER BY email ASC
+            ");
+            $stmt->execute([$like, $like]);
+        } else {
+            $stmt = $db->query("
+                SELECT account_id, email, plate_number, is_vip, is_admin
+                FROM accounts
+                ORDER BY email ASC
+            ");
+        }
+
+        echo json_encode(["success" => true, "accounts" => $stmt->fetchAll(PDO::FETCH_ASSOC)]);
+    } catch (PDOException $e) {
+        echo json_encode(["error" => "Failed to fetch accounts: " . $e->getMessage()]);
+    }
+    exit;
+}
+
+// --- ROUTE: Admin - Set / Unset VIP Status ---
+if ($method === 'POST' && $action === 'set_vip') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $accountId = $data['account_id'] ?? null;
+    $isVip = array_key_exists('is_vip', $data) ? (int)!!$data['is_vip'] : null;
+
+    if (!$accountId || $isVip === null) {
+        echo json_encode(["error" => "Account ID and VIP status are required."]);
+        exit;
+    }
+
+    try {
+        $stmt = $db->prepare("UPDATE accounts SET is_vip = ? WHERE account_id = ?");
+        $stmt->execute([$isVip, $accountId]);
+
+        if ($stmt->rowCount() > 0) {
+            echo json_encode(["success" => true, "message" => $isVip ? "Account upgraded to VIP." : "VIP status removed."]);
+        } else {
+            echo json_encode(["error" => "Account not found or status unchanged."]);
+        }
+    } catch (PDOException $e) {
+        echo json_encode(["error" => "Failed to update VIP status: " . $e->getMessage()]);
     }
     exit;
 }
