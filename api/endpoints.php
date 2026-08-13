@@ -117,6 +117,24 @@ if ($method === 'POST' && $action === 'reserve') {
     $startDate = $data["startDate"]; 
     $endDate = $data["endDate"];
 
+    // VIP SECURITY CHECK
+    $accountCheck = $db->prepare("SELECT is_vip FROM accounts WHERE plate_number = ?");
+    $accountCheck->execute([$plate]);
+    $account = $accountCheck->fetch(PDO::FETCH_ASSOC);
+
+    $is_vip = $account ? (int)$account['is_vip'] : 0;
+
+    if ($zone === 'E' && $is_vip !== 1) {
+        echo json_encode(["error" => "Zone E reservations are restricted to VIP accounts only."]);
+        exit;
+    }
+
+    if (!in_array($zone, ['A', 'B', 'C', 'D', 'E'])) {
+        echo json_encode(["error" => "Invalid zone selected."]);
+        exit;
+    }
+    // END VIP SECURITY CHECK
+
     $vehicle = $db->prepare("SELECT vehicle_id FROM vehicles WHERE plate_number = ?");
     $vehicle->execute([$plate]);
     $vehicle = $vehicle->fetch(PDO::FETCH_ASSOC);
