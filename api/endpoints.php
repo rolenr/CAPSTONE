@@ -73,7 +73,8 @@ if ($method === 'POST' && $action === 'login') {
             echo json_encode([
                 "success" => true, 
                 "license_plate" => $user['plate_number'],
-                "is_vip" => (bool)($user['is_vip'] ?? 0)
+                "is_vip" => (bool)($user['is_vip'] ?? 0),
+                "is_admin" => (bool)($user['is_admin'] ?? 0)
             ]);
         } else {
             http_response_code(401);
@@ -87,15 +88,23 @@ if ($method === 'POST' && $action === 'login') {
 
 // --- ROUTE: Live Map True Availability ---
 if ($method === 'GET' && $action === 'map') {
+
     $stmt = $db->query("
-        SELECT 
-            zone_id, 
-            max_capacity, 
-            (max_capacity - active_parked_count - active_reservation_count) AS true_available 
-        FROM spatial_allocation
+        SELECT
+            s.slot_id,
+            s.slot_number,
+            s.zone,
+            s.is_occupied,
+            v.plate_number
+        FROM parking_slots s
+        LEFT JOIN parking_sessions ps 
+            ON s.slot_id = ps.slot_id AND ps.exit_time IS NULL
+        LEFT JOIN vehicles v 
+            ON ps.vehicle_id = v.vehicle_id
+        ORDER BY s.zone, s.slot_number
     ");
-    $zones = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    echo json_encode($zones);
+
+    echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
     exit;
 }
 
@@ -105,9 +114,26 @@ if ($method === 'POST' && $action === 'reserve') {
     $plate = strtoupper(trim($data["plate"]));
     $zone = $data["zone"];
     $days = (int)$data["days"];
-    // Explicitly grab the dates from the payload
     $startDate = $data["startDate"]; 
     $endDate = $data["endDate"];
+
+    // VIP SECURITY CHECK
+    $accountCheck = $db->prepare("SELECT is_vip FROM accounts WHERE plate_number = ?");
+    $accountCheck->execute([$plate]);
+    $account = $accountCheck->fetch(PDO::FETCH_ASSOC);
+
+    $is_vip = $account ? (int)$account['is_vip'] : 0;
+
+    if ($zone === 'E' && $is_vip !== 1) {
+        echo json_encode(["error" => "Zone E reservations are restricted to VIP accounts only."]);
+        exit;
+    }
+
+    if (!in_array($zone, ['A', 'B', 'C', 'D', 'E'])) {
+        echo json_encode(["error" => "Invalid zone selected."]);
+        exit;
+    }
+    // END VIP SECURITY CHECK
 
     $vehicle = $db->prepare("SELECT vehicle_id FROM vehicles WHERE plate_number = ?");
     $vehicle->execute([$plate]);
@@ -137,14 +163,13 @@ if ($method === 'POST' && $action === 'reserve') {
     $expiry = date("Y-m-d H:i:s", strtotime("+15 minutes"));
     $token = "QR_" . uniqid(); 
 
-    // INSERT includes the new columns here
     $reserve = $db->prepare("
         INSERT INTO reservations(vehicle_id, slot_id, expiry_time, status, token_id, start_date, end_date)
         VALUES(?, ?, ?, 'ACTIVE', ?, ?, ?)
     ");
     
-    // Execute includes the variables here
     $reserve->execute([$vehicle["vehicle_id"], $slot["slot_id"], $expiry, $token, $startDate, $endDate]);
+    $reservationId = $db->lastInsertId();
 
     $base_fee = 60.00 * $days;
     $overnight_surcharge = ($days >= 2) ? 100.00 : 0.00; 
@@ -153,9 +178,67 @@ if ($method === 'POST' && $action === 'reserve') {
     echo json_encode([
         "success" => true,
         "message" => "Reservation Successful!",
+        "reservation_id" => $reservationId,
+        "zone" => $zone,
         "slot" => $slot["slot_number"],
+        "start_date" => $startDate,
+        "end_date" => $endDate,
         "fee" => $fee,
         "qr_token" => $token
+    ]);
+    exit;
+}
+
+// --- ROUTE: Check Active Reservation ---
+if ($method === 'GET' && $action === 'active_reservation') {
+    $plate = strtoupper(trim($_GET['plate'] ?? ''));
+
+    if (!$plate) {
+        echo json_encode(["error" => "Plate is required."]);
+        exit;
+    }
+
+    $stmt = $db->prepare("
+        SELECT
+            r.reservation_id,
+            r.token_id,
+            r.start_date,
+            r.end_date,
+            s.zone,
+            s.slot_number
+        FROM reservations r
+        JOIN vehicles v ON r.vehicle_id = v.vehicle_id
+        JOIN parking_slots s ON r.slot_id = s.slot_id
+        WHERE v.plate_number = ? AND r.status = 'ACTIVE'
+        LIMIT 1
+    ");
+    $stmt->execute([$plate]);
+    $reservation = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$reservation) {
+        echo json_encode(["success" => true, "active" => false]);
+        exit;
+    }
+
+    $start = new DateTime($reservation['start_date']);
+    $end = new DateTime($reservation['end_date']);
+    $days = (int)$start->diff($end)->days + 1;
+    if ($days < 1) $days = 1;
+
+    $base_fee = 60.00 * $days;
+    $overnight_surcharge = ($days >= 2) ? 100.00 : 0.00;
+    $fee = $base_fee + $overnight_surcharge;
+
+    echo json_encode([
+        "success" => true,
+        "active" => true,
+        "reservation_id" => $reservation['reservation_id'],
+        "qr_token" => $reservation['token_id'],
+        "zone" => $reservation['zone'],
+        "slot" => $reservation['slot_number'],
+        "start_date" => $reservation['start_date'],
+        "end_date" => $reservation['end_date'],
+        "fee" => $fee
     ]);
     exit;
 }
@@ -244,6 +327,220 @@ if ($method === 'POST' && $action === 'checkout') {
         echo json_encode(["success" => true, "duration_minutes" => $total_minutes, "final_fee" => $fee, "payment_status" => $status]);
     } else {
         echo json_encode(["error" => "Failed to finalize transaction audit."]);
+    }
+    exit;
+}
+
+// --- ROUTE: Admin Overview Statistics ---
+if ($method === 'GET' && $action === 'admin_stats') {
+    try {
+        $totalSlots = $db->query("SELECT COUNT(*) FROM parking_slots")->fetchColumn();
+        $occupiedSlots = $db->query("SELECT COUNT(*) FROM parking_slots WHERE is_occupied = 1")->fetchColumn();
+        $pendingViolations = $db->query("SELECT COUNT(*) FROM violations WHERE status = 'PENDING'")->fetchColumn();
+        $activeReservations = $db->query("SELECT COUNT(*) FROM reservations WHERE status = 'ACTIVE'")->fetchColumn();
+
+        echo json_encode([
+            "success" => true,
+            "total" => (int)$totalSlots,
+            "occupied" => (int)$occupiedSlots,
+            "available" => (int)($totalSlots - $occupiedSlots),
+            "violations" => (int)$pendingViolations,
+            "active_reservations" => (int)$activeReservations
+        ]);
+    } catch (PDOException $e) {
+        echo json_encode(["error" => "Failed to fetch stats: " . $e->getMessage()]);
+    }
+    exit;
+}
+
+// --- ROUTE: Admin - List Ongoing Reservations ---
+if ($method === 'GET' && $action === 'admin_reservations') {
+    try {
+        $stmt = $db->query("
+            SELECT
+                r.reservation_id,
+                r.status,
+                r.token_id,
+                r.reservation_time,
+                r.expiry_time,
+                r.start_date,
+                r.end_date,
+                v.plate_number,
+                a.email,
+                a.is_vip,
+                s.slot_id,
+                s.zone,
+                s.slot_number
+            FROM reservations r
+            JOIN vehicles v ON r.vehicle_id = v.vehicle_id
+            LEFT JOIN accounts a ON a.plate_number = v.plate_number
+            JOIN parking_slots s ON r.slot_id = s.slot_id
+            WHERE r.status = 'ACTIVE'
+            ORDER BY r.start_date ASC
+        ");
+        $reservations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach ($reservations as &$r) {
+            $start = new DateTime($r['start_date']);
+            $end = new DateTime($r['end_date']);
+            $days = (int)$start->diff($end)->days + 1;
+            if ($days < 1) $days = 1;
+            $base_fee = 60.00 * $days;
+            $overnight_surcharge = ($days >= 2) ? 100.00 : 0.00;
+            $r['fee'] = $base_fee + $overnight_surcharge;
+            $r['is_vip'] = (bool)($r['is_vip'] ?? 0);
+        }
+        unset($r);
+
+        echo json_encode(["success" => true, "reservations" => $reservations]);
+    } catch (PDOException $e) {
+        echo json_encode(["error" => "Failed to fetch reservations: " . $e->getMessage()]);
+    }
+    exit;
+}
+
+// --- ROUTE: Admin - Override / Cancel a Reservation ---
+if ($method === 'POST' && $action === 'override_reservation') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $reservationId = $data['reservation_id'] ?? null;
+    $newStatus = $data['status'] ?? 'CANCELLED';
+    $releaseSlot = $data['release_slot'] ?? true;
+
+    if (!$reservationId) {
+        echo json_encode(["error" => "Reservation ID required."]);
+        exit;
+    }
+
+    if (!in_array($newStatus, ['CANCELLED', 'COMPLETED'])) {
+        echo json_encode(["error" => "Invalid override status."]);
+        exit;
+    }
+
+    try {
+        $db->beginTransaction();
+
+        $res = $db->prepare("SELECT slot_id, status FROM reservations WHERE reservation_id = ?");
+        $res->execute([$reservationId]);
+        $reservation = $res->fetch(PDO::FETCH_ASSOC);
+
+        if (!$reservation) {
+            $db->rollBack();
+            echo json_encode(["error" => "Reservation not found."]);
+            exit;
+        }
+
+        if ($reservation['status'] !== 'ACTIVE') {
+            $db->rollBack();
+            echo json_encode(["error" => "Reservation is not currently active."]);
+            exit;
+        }
+
+        $update = $db->prepare("UPDATE reservations SET status = ? WHERE reservation_id = ?");
+        $update->execute([$newStatus, $reservationId]);
+
+        if ($releaseSlot) {
+            $freeSlot = $db->prepare("UPDATE parking_slots SET is_occupied = 0 WHERE slot_id = ?");
+            $freeSlot->execute([$reservation['slot_id']]);
+        }
+
+        $db->commit();
+        echo json_encode(["success" => true, "message" => "Reservation overridden and slot released."]);
+    } catch (PDOException $e) {
+        $db->rollBack();
+        echo json_encode(["error" => "Failed to override reservation: " . $e->getMessage()]);
+    }
+    exit;
+}
+
+// --- ROUTE: Admin - List / Search Accounts ---
+if ($method === 'GET' && $action === 'admin_accounts') {
+    try {
+        $search = trim($_GET['search'] ?? '');
+
+        if ($search !== '') {
+            $like = "%$search%";
+            $stmt = $db->prepare("
+                SELECT account_id, email, plate_number, is_vip, is_admin
+                FROM accounts
+                WHERE email LIKE ? OR plate_number LIKE ?
+                ORDER BY email ASC
+            ");
+            $stmt->execute([$like, $like]);
+        } else {
+            $stmt = $db->query("
+                SELECT account_id, email, plate_number, is_vip, is_admin
+                FROM accounts
+                ORDER BY email ASC
+            ");
+        }
+
+        echo json_encode(["success" => true, "accounts" => $stmt->fetchAll(PDO::FETCH_ASSOC)]);
+    } catch (PDOException $e) {
+        echo json_encode(["error" => "Failed to fetch accounts: " . $e->getMessage()]);
+    }
+    exit;
+}
+
+// --- ROUTE: Admin - Set / Unset VIP Status ---
+if ($method === 'POST' && $action === 'set_vip') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $accountId = $data['account_id'] ?? null;
+    $isVip = array_key_exists('is_vip', $data) ? (int)!!$data['is_vip'] : null;
+
+    if (!$accountId || $isVip === null) {
+        echo json_encode(["error" => "Account ID and VIP status are required."]);
+        exit;
+    }
+
+    try {
+        $stmt = $db->prepare("UPDATE accounts SET is_vip = ? WHERE account_id = ?");
+        $stmt->execute([$isVip, $accountId]);
+
+        if ($stmt->rowCount() > 0) {
+            echo json_encode(["success" => true, "message" => $isVip ? "Account upgraded to VIP." : "VIP status removed."]);
+        } else {
+            echo json_encode(["error" => "Account not found or status unchanged."]);
+        }
+    } catch (PDOException $e) {
+        echo json_encode(["error" => "Failed to update VIP status: " . $e->getMessage()]);
+    }
+    exit;
+}
+
+// --- ROUTE: ALPR / Parking Session Logs ---
+if ($method === 'GET' && $action === 'alpr_logs') {
+    try {
+        $stmt = $db->query("
+            SELECT ps.entry_time AS timestamp, ve.plate_number, sl.slot_number, ps.payment_status AS status
+            FROM parking_sessions ps
+            JOIN vehicles ve ON ps.vehicle_id = ve.vehicle_id
+            LEFT JOIN parking_slots sl ON ps.slot_id = sl.slot_id
+            ORDER BY ps.entry_time DESC
+            LIMIT 10
+        ");
+        echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
+    } catch (PDOException $e) {
+        echo json_encode([]);
+    }
+    exit;
+}
+
+// --- ROUTE: Admin Manual Slot Toggle (Override) ---
+if ($method === 'POST' && $action === 'toggle_slot') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $slotId = $data['slot_id'] ?? null;
+    $isOccupied = $data['is_occupied'] ?? 0;
+
+    if (!$slotId) {
+        echo json_encode(["error" => "Slot ID required."]);
+        exit;
+    }
+
+    $stmt = $db->prepare("UPDATE parking_slots SET is_occupied = ? WHERE slot_id = ?");
+    if ($stmt->execute([$isOccupied, $slotId])) {
+        echo json_encode(["success" => true]);
+    } else {
+        echo json_encode(["error" => "Failed to update slot status."]);
     }
     exit;
 }

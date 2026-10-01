@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Admin - Parking Ltd.</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body data-page="admin">
+<header><h1>Parking Ltd. - Admin Portal</h1></header>
+<nav>
+    <a href="admin.html">System Overview</a>
+    <a href="dashboard.html">Live Map & Wallet</a>
+    <a href="reserve.html">Reserve Slot</a>
+    <a href="violations.html">Violations Tracker</a>
+    <a href="#" id="logoutBtn">Logout</a>
+</nav>
+
+<div class="container">
+    <!-- Analytics Overview Cards -->
+    <div class="card">
+        <h2>System Status & Overview</h2>
+        <div style="display: flex; gap: 15px; justify-content: space-between; flex-wrap: wrap; margin-top: 10px;">
+            <div>
+                <h3>Total Capacity</h3>
+                <p><strong id="statTotalCapacity">0</strong> Slots</p>
+            </div>
+            <div>
+                <h3>Occupied</h3>
+                <p><strong id="statOccupied" style="color: var(--alert);">0</strong> Slots</p>
+            </div>
+            <div>
+                <h3>Available</h3>
+                <p><strong id="statAvailable" style="color: var(--success);">0</strong> Slots</p>
+            </div>
+            <div>
+                <h3>Active Violations</h3>
+                <p><strong id="statViolations" style="color: #dd6b20;">0</strong> Cases</p>
+            </div>
+            <div>
+                <h3>Ongoing Reservations</h3>
+                <p><strong id="statReservations" style="color: var(--primary);">0</strong> Active</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Ongoing Reservations -->
+    <div class="card">
+        <h2>Ongoing Reservations</h2>
+        <p>All currently active reservations. Overriding cancels the reservation and frees the assigned slot.</p>
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th>Plate</th>
+                    <th>Account</th>
+                    <th>Zone / Slot</th>
+                    <th>Start</th>
+                    <th>End</th>
+                    <th>Fee</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="adminReservationsTable">
+                <tr><td colspan="7">Loading reservations...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- VIP / Account Management -->
+    <div class="card">
+        <h2>Account Management &amp; VIP Status</h2>
+        <p>Search by email or plate number and toggle VIP status (VIP accounts can reserve Zone E).</p>
+        <input type="text" id="accountSearchInput" placeholder="Search by email or plate number..." style="width: 100%; padding: 8px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 6px;">
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th>Email</th>
+                    <th>Plate</th>
+                    <th>VIP Status</th>
+                    <th>Role</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="adminAccountsTable">
+                <tr><td colspan="5">Loading accounts...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Live ALPR Logs -->
+    <div class="card">
+        <h2>Live ALPR Feed & Detection Logs</h2>
+        <p>Real-time vehicle detection via YOLOv8 & ALPR.</p>
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Plate Number</th>
+                    <th>Assigned Slot</th>
+                    <th>Confidence</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody id="alprLogsTable">
+                <tr><td colspan="5">Loading logs...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Interactive Slot Overrides -->
+    <div class="card">
+        <h2>Slot Management & Manual Overrides</h2>
+        <div id="adminMapControls" class="admin-grid">
+            Loading parking slots...
+        </div>
+    </div>
+</div>
+
+<script>
+    if (sessionStorage.getItem('isAdmin') !== 'true') {
+        window.location.href = 'login.html';
+    }
+</script>
+<script src="js/main.js"></script>
+</body>
+</html>
