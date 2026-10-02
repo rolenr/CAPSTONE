@@ -2,34 +2,59 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Register - Parking Ltd.</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Register Vehicle - Parking Ltd.</title>
     <link rel="stylesheet" href="css/style.css">
 </head>
-<body>
-<header><h1>Parking Ltd. - Customer Portal</h1></header>
-<div class="container">
-    <div class="card">
-        <h2>Create an Account</h2>
-        <form id="registerForm">
+<body data-page="register">
+
+<header class="app-header">
+    <div class="header-inner">
+        <a href="login.html" class="brand-wrap">
+            <div class="brand-icon">P</div>
+            <div class="brand-title">Parking Ltd.</div>
+            <span class="brand-badge">Driver Registration</span>
+        </a>
+        <div class="header-meta">
+            <a href="login.html" class="btn-signout">Back to Sign In</a>
+        </div>
+    </div>
+</header>
+
+<div class="auth-wrapper">
+    <div class="auth-card">
+        <div class="auth-header">
+            <div class="auth-header-icon">P</div>
+            <h2>Register Account</h2>
+            <p>Link your license plate to manage reservations and contactless entry</p>
+        </div>
+
+        <form id="registerForm" class="auth-form">
             <div class="form-group">
-                <label>Email Address</label>
-                <input type="email" id="regEmail" required>
+                <label for="regEmail">Email Address</label>
+                <input type="email" id="regEmail" placeholder="name@example.com" autocomplete="email" required autofocus>
             </div>
             <div class="form-group">
-                <label>Password</label>
-                <input type="password" id="regPassword" minlength="6" required>
+                <label for="regPassword">Password</label>
+                <input type="password" id="regPassword" placeholder="Minimum 6 characters" minlength="6" autocomplete="new-password" required>
             </div>
             <div class="form-group">
-                <label>Vehicle License Plate (One per account)</label>
-                <input type="text" id="regPlate" placeholder="e.g. ABC-1234" required>
+                <label for="regPlate">Vehicle License Plate</label>
+                <input type="text" id="regPlate" placeholder="e.g. ABC-1234" required style="text-transform: uppercase;">
             </div>
-            <button type="submit">Register Vehicle & Account</button>
+            <button type="submit" class="btn-primary-block">Register Vehicle & Account</button>
         </form>
-        <p style="text-align: center; margin-top: 15px;">
-            Already have an account? <a href="login.html">Login here</a>
-        </p>
+
+        <div class="auth-footer">
+            <p>Already have an account? <a href="login.html">Sign in here</a></p>
+        </div>
     </div>
 </div>
+
+<footer class="app-footer">
+    Parking Ltd. &bull; Automated Facility Management System &bull; Secure Gatehouse Operations
+</footer>
+
 <script src="js/main.js"></script>
 </body>
 </html>

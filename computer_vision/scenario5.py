@@ -8,8 +8,16 @@ import re
 from collections import Counter, defaultdict
 from ultralytics import YOLO
 
-# Absolute path pointing directly to the XAMPP directory
-DB_PATH = r"D:\xampp\htdocs\CAPSTONE\parking.db"
+import os
+
+# Dynamic path resolution (cross-platform compatible with fallback)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(SCRIPT_DIR)
+DB_PATH = os.path.join(BASE_DIR, "backend", "database", "parking.db")
+if not os.path.exists(DB_PATH):
+    DB_PATH = os.path.join(BASE_DIR, "parking.db")
+    if not os.path.exists(DB_PATH):
+        DB_PATH = r"D:\xampp\htdocs\CAPSTONE\parking.db"
 
 def init_db():
     conn = sqlite3.connect(DB_PATH, timeout=10)
@@ -189,11 +197,23 @@ def run_scenario_5_closed_loop():
     
     init_db()
     
-    entrance_weights = r"R:\Capstone\entrance-feed-best1.pt" 
-    exit_weights = r"R:\Capstone\best.pt"
+    # Dynamic resolution for model weights & video with fallback
+    entrance_weights = os.path.join(SCRIPT_DIR, "entrance-feed-best1.pt")
+    if not os.path.exists(entrance_weights):
+        entrance_weights = r"R:\Capstone\entrance-feed-best1.pt"
     
-    entrance_video = r"R:\Capstone\nightSC5.mp4" 
-    exit_video = r"R:\Capstone\nightSC5exit.mp4"
+    exit_weights = os.path.join(SCRIPT_DIR, "best.pt")
+    if not os.path.exists(exit_weights):
+        exit_weights = r"R:\Capstone\best.pt"
+    
+    video_dir = os.path.join(SCRIPT_DIR, "simulation_videos")
+    entrance_video = os.path.join(video_dir, "RegularCustomer - Reservation (Entry and Exit).mp4")
+    if not os.path.exists(entrance_video):
+        entrance_video = r"R:\Capstone\nightSC5.mp4"
+        
+    exit_video = os.path.join(video_dir, "nissanExit.mp4")
+    if not os.path.exists(exit_video):
+        exit_video = r"R:\Capstone\nightSC5exit.mp4"
     
     conn = sqlite3.connect(DB_PATH, timeout=10)
     cursor = conn.cursor()
@@ -257,9 +277,9 @@ def run_scenario_5_closed_loop():
     # Print Terminal QR / Slot Dispenser
     print("\n" + "="*40)
     if is_reserved:
-        print("      ✅ RESERVATION CONFIRMED ✅        ")
+        print("      [ RESERVATION CONFIRMED ]        ")
     else:
-        print("          🎫 TICKET DISPENSED 🎫         ")
+        print("          [ TICKET DISPENSED ]         ")
         
     print(f"      TICKET/SESSION ID : {session_id}")
     print(f"      SLOT              : {slot_number}")

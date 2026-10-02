@@ -7,8 +7,16 @@ import easyocr
 import re
 from collections import Counter, defaultdict
 from ultralytics import YOLO
+import os
 
-DB_PATH = r"D:\xampp\htdocs\CAPSTONE\parking.db"
+# Dynamic path resolution (cross-platform compatible with fallback)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(SCRIPT_DIR)
+DB_PATH = os.path.join(BASE_DIR, "backend", "database", "parking.db")
+if not os.path.exists(DB_PATH):
+    DB_PATH = os.path.join(BASE_DIR, "parking.db")
+    if not os.path.exists(DB_PATH):
+        DB_PATH = r"D:\xampp\htdocs\CAPSTONE\parking.db"
 
 def init_db():
     conn = sqlite3.connect(DB_PATH, timeout=10)
@@ -192,8 +200,16 @@ def run_scenario_3():
     print("=================================================================\n")
     
     init_db()
-    entrance_video = r"R:\Capstone\fortunerEntry.mp4" 
-    model_weights = r"R:\Capstone\entrance-feed-best1.pt"
+    
+    # Model weights & video with dynamic resolution and fallback
+    model_weights = os.path.join(SCRIPT_DIR, "entrance-feed-best1.pt")
+    if not os.path.exists(model_weights):
+        model_weights = r"R:\Capstone\entrance-feed-best1.pt"
+    
+    video_dir = os.path.join(SCRIPT_DIR, "simulation_videos")
+    entrance_video = os.path.join(video_dir, "Entry Fortuner - Day (walk-in).mp4")
+    if not os.path.exists(entrance_video):
+        entrance_video = r"R:\Capstone\fortunerEntry.mp4"
     
     entry_plate = process_video_feed(entrance_video, model_weights, 'Scenario 3: Entrance Feed', feed_type="entrance")
     
@@ -249,9 +265,9 @@ def run_scenario_3():
     # Print Terminal QR / Slot Dispenser
     print("\n" + "="*40)
     if is_reserved:
-        print("      ✅ RESERVATION CONFIRMED ✅        ")
+        print("      [ RESERVATION CONFIRMED ]        ")
     else:
-        print("          🎫 TICKET DISPENSED 🎫         ")
+        print("          [ TICKET DISPENSED ]         ")
         
     print(f"      QR TOKEN : {qr_token}")
     print(f"      SLOT     : {slot_number}")

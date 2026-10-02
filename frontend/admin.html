@@ -2,118 +2,354 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Admin - Parking Ltd.</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Operations & Analytics - Parking Ltd.</title>
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body data-page="admin">
-<header><h1>Parking Ltd. - Admin Portal</h1></header>
-<nav>
-    <a href="admin.html">System Overview</a>
-    <a href="dashboard.html">Live Map & Wallet</a>
-    <a href="reserve.html">Reserve Slot</a>
-    <a href="violations.html">Violations Tracker</a>
-    <a href="#" id="logoutBtn">Logout</a>
-</nav>
 
-<div class="container">
-    <!-- Analytics Overview Cards -->
-    <div class="card">
-        <h2>System Status & Overview</h2>
-        <div style="display: flex; gap: 15px; justify-content: space-between; flex-wrap: wrap; margin-top: 10px;">
-            <div>
-                <h3>Total Capacity</h3>
-                <p><strong id="statTotalCapacity">0</strong> Slots</p>
+<!-- Unified Top Navigation Bar -->
+<header class="app-header">
+    <div class="header-inner">
+        <a href="admin.html" class="brand-wrap">
+            <div class="brand-icon">P</div>
+            <div class="brand-title">Parking Ltd.</div>
+            <span class="brand-badge">Operations</span>
+        </a>
+
+        <nav class="main-nav">
+            <a href="admin.html" class="active">Administration</a>
+            <a href="cashier.html">Cashier POS</a>
+            <a href="dashboard.html">Live Map &amp; Wallet</a>
+            <a href="reserve.html">Reserve Slot</a>
+            <a href="violations.html">Violations Tracker</a>
+        </nav>
+
+        <div class="header-meta">
+            <div class="system-status-indicator">
+                <span class="status-indicator-dot"></span>
+                <span>System Online</span>
             </div>
-            <div>
-                <h3>Occupied</h3>
-                <p><strong id="statOccupied" style="color: var(--alert);">0</strong> Slots</p>
+            <div class="user-profile-chip">
+                <div class="user-avatar-initials">RC</div>
+                <span>Roro Cruz (Admin)</span>
             </div>
-            <div>
-                <h3>Available</h3>
-                <p><strong id="statAvailable" style="color: var(--success);">0</strong> Slots</p>
+            <a href="#" id="logoutBtn" class="btn-signout">Sign Out</a>
+        </div>
+    </div>
+</header>
+
+<div class="admin-container">
+
+    <!-- Page Title & Actions Banner -->
+    <div class="page-title-banner">
+        <div>
+            <h1 class="page-title-main">Operations &amp; Business Analytics</h1>
+            <p class="page-title-sub">Real-time facility telemetry, financial performance, and gatehouse controls</p>
+        </div>
+        <div class="page-title-actions">
+            <div class="auto-refresh-pill">
+                <span class="status-indicator-dot"></span>
+                <span>Auto-refresh active (30s)</span>
             </div>
-            <div>
-                <h3>Active Violations</h3>
-                <p><strong id="statViolations" style="color: #dd6b20;">0</strong> Cases</p>
-            </div>
-            <div>
-                <h3>Ongoing Reservations</h3>
-                <p><strong id="statReservations" style="color: var(--primary);">0</strong> Active</p>
-            </div>
+            <button type="button" id="refreshDashboardBtn" class="btn-sm btn-outline" onclick="window.location.reload()">Refresh Data</button>
         </div>
     </div>
 
-    <!-- Ongoing Reservations -->
-    <div class="card">
-        <h2>Ongoing Reservations</h2>
-        <p>All currently active reservations. Overriding cancels the reservation and frees the assigned slot.</p>
+    <!-- Quick Jump Section Tabs -->
+    <div class="admin-subnav">
+        <a href="#overview" class="active">Overview</a>
+        <a href="#analytics">Financials</a>
+        <a href="#heatmap">Zone Heatmap</a>
+        <a href="#peak-hours">Traffic Influx</a>
+        <a href="#alpr-feed">ALPR Feed</a>
+        <a href="#slot-controls">Slot Overrides</a>
+        <a href="#reservations">Reservations</a>
+        <a href="#violations">Violations</a>
+        <a href="#accounts">User Directory</a>
+        <a href="#audit-trail">Audit Trail</a>
+    </div>
+
+    <!-- 1. OVERVIEW KPI CARDS -->
+    <section id="overview" class="stat-cards-grid">
+        <div class="kpi-card">
+            <div class="kpi-title">Gross Revenue (Total)</div>
+            <div class="kpi-value">₱<span id="statGrossRevenue">0.00</span></div>
+            <div class="kpi-subtext">Today: <span id="statTodayRevenue" class="kpi-highlight">₱0.00</span></div>
+        </div>
+
+        <div class="kpi-card">
+            <div class="kpi-title">Total Capacity</div>
+            <div class="kpi-value"><span id="statTotalCapacity">0</span> <span class="kpi-unit">Slots</span></div>
+            <div class="kpi-subtext">Occupancy: <span id="statOccupancyRate" class="kpi-highlight">0%</span></div>
+        </div>
+
+        <div class="kpi-card">
+            <div class="kpi-title">Currently Occupied</div>
+            <div class="kpi-value"><span id="statOccupied">0</span> <span class="kpi-unit">Vehicles</span></div>
+            <div class="kpi-subtext">Available: <span id="statAvailable" class="kpi-highlight">0 Slots</span></div>
+        </div>
+
+        <div class="kpi-card">
+            <div class="kpi-title">Active Reservations</div>
+            <div class="kpi-value"><span id="statReservations">0</span> <span class="kpi-unit">Bookings</span></div>
+            <div class="kpi-subtext">Reserved across active zones</div>
+        </div>
+
+        <div class="kpi-card">
+            <div class="kpi-title">Pending Violations</div>
+            <div class="kpi-value"><span id="statViolations">0</span> <span class="kpi-unit">Cases</span></div>
+            <div class="kpi-subtext">Unsettled infractions on file</div>
+        </div>
+    </section>
+
+    <!-- 2. FINANCIAL ANALYTICS & REVENUE STREAMS -->
+    <section id="analytics" class="card">
+        <div class="section-title-wrap">
+            <h2>Financial Performance &amp; Revenue Breakdown</h2>
+            <span class="section-tag">Audited Ledger</span>
+        </div>
+
+        <!-- Timeline Metrics -->
+        <div class="metrics-row">
+            <div class="metric-box">
+                <div class="metric-label">Today</div>
+                <div class="metric-number">₱<span id="revToday">0.00</span></div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-label">Past 7 Days</div>
+                <div class="metric-number">₱<span id="revThisWeek">0.00</span></div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-label">Past 30 Days</div>
+                <div class="metric-number">₱<span id="revThisMonth">0.00</span></div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-label">Avg Rev / Vehicle (ARPV)</div>
+                <div class="metric-number">₱<span id="revArpv">0.00</span></div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-label">Avg Stay Duration</div>
+                <div class="metric-number"><span id="revAvgDuration">0</span> <span class="metric-unit">mins</span></div>
+            </div>
+        </div>
+
+        <!-- Revenue Streams Breakdown -->
+        <div class="subsection-header">Tariff Stream Distribution</div>
+        <div id="revenueStreamsGrid" class="streams-grid">
+            Loading revenue data...
+        </div>
+    </section>
+
+    <!-- 3. SECTIONAL CAPACITY HEATMAP -->
+    <section id="heatmap" class="card">
+        <div class="section-title-wrap">
+            <h2>Zone Occupancy &amp; Capacity Heatmap</h2>
+            <span class="section-tag">Overhead Vision Telemetry</span>
+        </div>
+
+        <div id="capacityHeatmapGrid" class="heatmap-grid">
+            Loading capacity heatmap...
+        </div>
+    </section>
+
+    <!-- 4. HOURLY INFLUX TRENDS -->
+    <section id="peak-hours" class="card">
+        <div class="section-title-wrap">
+            <h2>Hourly Vehicle Influx (24-Hour Distribution)</h2>
+            <span class="section-tag">Traffic Telemetry</span>
+        </div>
+
+        <div class="chart-container">
+            <div id="hourlyChartContainer" class="bar-chart-24h">
+                <!-- Rendered dynamically via JS -->
+            </div>
+            <div class="chart-legend">
+                <span><span class="legend-dot legend-standard"></span> Standard Influx</span>
+                <span><span class="legend-dot legend-peak"></span> High Demand Window (&ge; 70% Peak)</span>
+            </div>
+            <div class="operational-note">
+                <strong>Operational Advisory:</strong> Peak vehicle arrivals occur between <strong>08:00–10:00</strong> and <strong>17:00–19:00</strong>. Keep gatehouse attendants alerted to maintain lane clearance.
+            </div>
+        </div>
+    </section>
+
+    <!-- 5. PARKING ENFORCEMENT & VIOLATIONS -->
+    <section id="violations" class="card">
+        <div class="section-title-wrap">
+            <h2>Parking Enforcement &amp; Violations Log</h2>
+            <span class="section-tag">Enforcement</span>
+        </div>
+
+        <!-- Violation Summary Metrics -->
+        <div class="metrics-row" style="margin-bottom: 1rem;">
+            <div class="metric-box alert-box">
+                <div class="metric-label">Total Fines Imposed</div>
+                <div class="metric-number">₱<span id="violationTotalImposed">0.00</span></div>
+            </div>
+            <div class="metric-box success-box">
+                <div class="metric-label">Penalties Collected</div>
+                <div class="metric-number">₱<span id="violationTotalCollected">0.00</span></div>
+            </div>
+            <div class="metric-box warning-box">
+                <div class="metric-label">Outstanding Balance</div>
+                <div class="metric-number">₱<span id="violationOutstanding">0.00</span></div>
+            </div>
+            <div class="metric-box">
+                <div class="metric-label">Average Penalty Fine</div>
+                <div class="metric-number">₱<span id="violationAvgFine">0.00</span></div>
+            </div>
+        </div>
+
+        <!-- Violations Table -->
         <table class="admin-table">
             <thead>
                 <tr>
-                    <th>Plate</th>
-                    <th>Account</th>
-                    <th>Zone / Slot</th>
-                    <th>Start</th>
-                    <th>End</th>
-                    <th>Fee</th>
-                    <th>Actions</th>
+                    <th>Case ID</th>
+                    <th>Plate Number</th>
+                    <th>Zone &amp; Slot</th>
+                    <th>Infraction Type</th>
+                    <th>Penalty</th>
+                    <th>Status</th>
+                    <th>Logged At</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="adminViolationsTable">
+                <tr><td colspan="8">Loading enforcement records...</td></tr>
+            </tbody>
+        </table>
+    </section>
+
+    <!-- 6. LIVE ALPR DETECTION FEED -->
+    <section id="alpr-feed" class="card">
+        <div class="section-title-wrap">
+            <h2>Live ALPR Feed &amp; Gate Detections</h2>
+            <span class="section-tag">Camera Telemetry</span>
+        </div>
+
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Plate Number</th>
+                    <th>Allocated Slot</th>
+                    <th>OCR Confidence</th>
+                    <th>Access Gate</th>
+                    <th>Session Status</th>
+                </tr>
+            </thead>
+            <tbody id="alprLogsTable">
+                <tr><td colspan="6">Loading detections...</td></tr>
+            </tbody>
+        </table>
+    </section>
+
+    <!-- 7. SLOT MANAGEMENT & MANUAL OVERRIDES -->
+    <section id="slot-controls" class="card">
+        <div class="section-title-wrap">
+            <h2>Slot Status &amp; Manual Overrides</h2>
+            <span class="section-tag">Facility Controls</span>
+        </div>
+
+        <div class="toolbar-wrap">
+            <div class="zone-filter-buttons" id="zoneFilterButtons">
+                <button type="button" class="zone-filter-btn active" data-filter="ALL">All Zones</button>
+                <button type="button" class="zone-filter-btn" data-filter="A">Zone A</button>
+                <button type="button" class="zone-filter-btn" data-filter="B">Zone B</button>
+                <button type="button" class="zone-filter-btn" data-filter="C">Zone C</button>
+                <button type="button" class="zone-filter-btn" data-filter="D">Zone D</button>
+                <button type="button" class="zone-filter-btn" data-filter="E">Zone E</button>
+                <button type="button" class="zone-filter-btn" data-filter="F">Zone F (Overflow)</button>
+            </div>
+            <div>
+                <span id="filteredSlotsCount" class="counter-label">Showing 78 slots</span>
+            </div>
+        </div>
+
+        <div id="adminMapControls" class="admin-grid">
+            Loading parking slots...
+        </div>
+    </section>
+
+    <!-- 8. ONGOING PREPAID RESERVATIONS -->
+    <section id="reservations" class="card">
+        <div class="section-title-wrap">
+            <h2>Active Prepaid Reservations</h2>
+            <span class="section-tag">Slot Allocations</span>
+        </div>
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th>Plate Number</th>
+                    <th>Account Holder</th>
+                    <th>Zone &amp; Slot</th>
+                    <th>Start Date</th>
+                    <th>End Date</th>
+                    <th>Prepaid Fee</th>
+                    <th>Action</th>
                 </tr>
             </thead>
             <tbody id="adminReservationsTable">
                 <tr><td colspan="7">Loading reservations...</td></tr>
             </tbody>
         </table>
-    </div>
+    </section>
 
-    <!-- VIP / Account Management -->
-    <div class="card">
-        <h2>Account Management &amp; VIP Status</h2>
-        <p>Search by email or plate number and toggle VIP status (VIP accounts can reserve Zone E).</p>
-        <input type="text" id="accountSearchInput" placeholder="Search by email or plate number..." style="width: 100%; padding: 8px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 6px;">
+    <!-- 9. USER ACCOUNTS & PRIVILEGE MANAGEMENT -->
+    <section id="accounts" class="card">
+        <div class="section-title-wrap">
+            <h2>User Accounts &amp; Privilege Management</h2>
+            <span class="section-tag">Directory</span>
+        </div>
+        <div class="toolbar-wrap">
+            <div class="search-input-wrap">
+                <input type="text" id="accountSearchInput" placeholder="Search by email or license plate..." class="search-input">
+            </div>
+        </div>
         <table class="admin-table">
             <thead>
                 <tr>
-                    <th>Email</th>
-                    <th>Plate</th>
-                    <th>VIP Status</th>
-                    <th>Role</th>
-                    <th>Actions</th>
+                    <th>Email Address</th>
+                    <th>Registered Plate</th>
+                    <th>Privilege Category</th>
+                    <th>System Role</th>
+                    <th>Action</th>
                 </tr>
             </thead>
             <tbody id="adminAccountsTable">
                 <tr><td colspan="5">Loading accounts...</td></tr>
             </tbody>
         </table>
-    </div>
+    </section>
 
-    <!-- Live ALPR Logs -->
-    <div class="card">
-        <h2>Live ALPR Feed & Detection Logs</h2>
-        <p>Real-time vehicle detection via YOLOv8 & ALPR.</p>
-        <table class="admin-table">
+    <!-- 10. IMMUTABLE AUDIT TRAIL -->
+    <section id="audit-trail" class="card">
+        <div class="section-title-wrap">
+            <h2>System Audit Trail &amp; Operational Logs</h2>
+            <span class="section-tag">Compliance Trail</span>
+        </div>
+        <table class="admin-table audit-table">
             <thead>
                 <tr>
                     <th>Timestamp</th>
-                    <th>Plate Number</th>
-                    <th>Assigned Slot</th>
-                    <th>Confidence</th>
-                    <th>Status</th>
+                    <th>Operator</th>
+                    <th>Action</th>
+                    <th>Target Record</th>
+                    <th>Event Details</th>
                 </tr>
             </thead>
-            <tbody id="alprLogsTable">
-                <tr><td colspan="5">Loading logs...</td></tr>
+            <tbody id="adminAuditLogsTable">
+                <tr><td colspan="5">Loading audit trail records...</td></tr>
             </tbody>
         </table>
-    </div>
+    </section>
 
-    <!-- Interactive Slot Overrides -->
-    <div class="card">
-        <h2>Slot Management & Manual Overrides</h2>
-        <div id="adminMapControls" class="admin-grid">
-            Loading parking slots...
-        </div>
-    </div>
 </div>
+
+<footer class="app-footer">
+    Parking Ltd. Operations Console &bull; Centralized Facility Management &bull; Local Edge Node Active
+</footer>
 
 <script>
     if (sessionStorage.getItem('isAdmin') !== 'true') {

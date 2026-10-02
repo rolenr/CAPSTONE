@@ -5,8 +5,16 @@ import re
 from collections import Counter, defaultdict
 from ultralytics import YOLO
 
-# Updated with your exact XAMPP path
-DB_PATH = r"D:\xampp\htdocs\CAPSTONE\parking.db"
+import os
+
+# Dynamic path resolution (cross-platform compatible with fallback)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(SCRIPT_DIR)
+DB_PATH = os.path.join(BASE_DIR, "backend", "database", "parking.db")
+if not os.path.exists(DB_PATH):
+    DB_PATH = os.path.join(BASE_DIR, "parking.db")
+    if not os.path.exists(DB_PATH):
+        DB_PATH = r"D:\xampp\htdocs\CAPSTONE\parking.db"
 
 def process_video_feed(video_path, model_path, window_name, feed_type="exit"):
     print(f"[VISION PIPELINE]: Initializing YOLOv8 and EasyOCR on {video_path}...")
@@ -97,8 +105,15 @@ def run_scenario_4():
     print("      RUNNING SCENARIO 4: EXIT CAMERA & PAYMENT CLEARANCE        ")
     print("=================================================================\n")
     
-    exit_video = r"R:\Capstone\nissanExit.mp4"
-    model_weights = r"R:\Capstone\best.pt"
+    # Dynamic resolution for model weights & exit video
+    model_weights = os.path.join(SCRIPT_DIR, "best.pt")
+    if not os.path.exists(model_weights):
+        model_weights = r"R:\Capstone\best.pt"
+    
+    video_dir = os.path.join(SCRIPT_DIR, "simulation_videos")
+    exit_video = os.path.join(video_dir, "nissanExit.mp4")
+    if not os.path.exists(exit_video):
+        exit_video = r"R:\Capstone\nissanExit.mp4"
     
     conn = sqlite3.connect(DB_PATH, timeout=10)
     cursor = conn.cursor()
