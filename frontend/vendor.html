@@ -6,226 +6,231 @@
     <title>Commercial Tenant Validation - Parking Ltd.</title>
     <link rel="stylesheet" href="css/style.css">
 </head>
-<body>
-    <!-- Top Application Header -->
+<body data-page="vendor">
+
+    <!-- Top Navigation Bar -->
     <header class="app-header">
         <div class="header-inner">
-            <div class="brand-group">
-                <span class="brand-mark">P</span>
-                <span class="brand-name">PARKING LTD.</span>
-                <span class="portal-badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3);">TENANT VALIDATION</span>
-            </div>
+            <a href="vendor.html" class="brand-wrap">
+                <div class="brand-icon">P</div>
+                <div class="brand-title">Parking Ltd.</div>
+                <span class="brand-badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3);">Tenant Portal</span>
+            </a>
 
             <nav class="main-nav">
-                <a href="vendor.html" class="nav-link active">Tenant Validator</a>
-                <a href="cashier.html" class="nav-link">Cashier POS</a>
-                <a href="admin.html" class="nav-link">Admin Console</a>
-                <a href="dashboard.html" class="nav-link">Driver Map</a>
-                <a href="violations.html" class="nav-link">Violations</a>
+                <a href="vendor.html" class="active">Tenant Validator</a>
+                <a href="cashier.html">Cashier POS</a>
+                <a href="admin.html">Administration</a>
+                <a href="dashboard.html">Live Map</a>
+                <a href="violations.html">Violations Tracker</a>
             </nav>
 
             <div class="header-meta">
-                <div class="status-indicator">
-                    <span class="status-dot"></span>
-                    <span class="status-text" id="api-status">API Connected</span>
+                <div class="system-status-indicator">
+                    <span class="status-indicator-dot"></span>
+                    <span>Joey's Station Online</span>
                 </div>
-                <div class="live-clock" id="live-clock">--:--:--</div>
-                <div class="user-chip">
-                    <span class="user-role">MERCHANT</span>
-                    <span class="user-name">Joey's Restaurant</span>
+                <div class="user-profile-chip">
+                    <span>Merchant:</span>
+                    <strong style="color: var(--white); font-size: 0.72rem;">Joey's Restaurant</strong>
                 </div>
-                <a href="login.html" class="btn-logout" title="Sign Out">Sign Out</a>
+                <a href="login.html" class="btn-signout" id="logoutBtn">Sign Out</a>
             </div>
         </div>
     </header>
 
-    <!-- Main Container -->
-    <main class="page-container">
-        <!-- Breadcrumb & Page Title -->
-        <div class="page-header">
+    <div class="container" style="max-width: 1380px;">
+
+        <!-- Page Title & Actions Banner -->
+        <div class="page-title-banner">
             <div>
-                <div class="breadcrumb">Facility Operations &gt; Commercial Merchants &gt; Parking Fee Exemption</div>
-                <h1 class="page-title">Commercial Tenant Validation Station</h1>
+                <h1 class="page-title-main">Commercial Tenant Validation Station</h1>
+                <p class="page-title-sub">Dining customer parking fee waiver, 20-minute departure grace activation &amp; merchant ledger</p>
             </div>
-            <div class="page-actions">
-                <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-data">Refresh Activity</button>
+            <div class="page-title-actions">
+                <div class="auto-refresh-pill">
+                    <span class="status-indicator-dot"></span>
+                    <span>Auto-sync Active (15s)</span>
+                </div>
+                <button type="button" id="btn-refresh-data" class="btn btn-sm btn-outline">Refresh Activity</button>
             </div>
         </div>
 
         <!-- Tenant Hero Banner -->
         <div class="vendor-hero-banner">
             <div>
-                <div class="vendor-brand-badge">Authorized Commercial Partner</div>
-                <h2 style="font-size: 1.35rem; font-weight: 700; margin-top: 6px; color: #ffffff;">Joey's Restaurant — Dining Customer Parking Subsidy</h2>
-                <p style="font-size: 0.8125rem; color: var(--slate-400); margin-top: 4px;">
-                    Validate dining patron parking tickets or vehicle license plates to apply the <strong>20-Minute Departure Grace Window</strong> and waive the <strong>₱30.00 base parking fee</strong>.
+                <span class="vendor-brand-badge">Authorized Commercial Partner</span>
+                <h2 style="font-size: 1.25rem; font-weight: 700; margin-top: 6px; color: #ffffff; letter-spacing: -0.01em;">Joey's Restaurant — Customer Parking Subsidy</h2>
+                <p style="font-size: 0.8125rem; color: var(--slate-400); margin-top: 4px; line-height: 1.4;">
+                    Validate dining patrons to apply the <strong>20-Minute Departure Grace Window</strong> and waive the <strong>₱30.00 base parking fee</strong>.
                 </p>
             </div>
-            <div style="text-align: right;">
-                <span class="badge" style="background: rgba(5, 150, 105, 0.2); color: #34d399; border: 1px solid rgba(5, 150, 105, 0.4); font-size: 0.8rem; padding: 6px 12px;">CONTRACT ACTIVE: 100% BASE SUBSIDY</span>
-                <div style="font-size: 0.75rem; color: var(--slate-400); margin-top: 6px;">Station ID: VEND-JOEYS-01</div>
+            <div style="text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
+                <span class="badge badge-success" style="font-size: 0.75rem; padding: 4px 10px;">Contract Active: 100% Base Subsidy</span>
+                <span style="font-size: 0.72rem; color: var(--slate-400); font-family: var(--font-mono);">Station ID: VEND-JOEYS-01</span>
             </div>
         </div>
 
-        <!-- Metric KPI Cards -->
-        <div class="stat-cards-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom: 1.5rem;">
-            <div class="stat-card">
-                <div class="stat-label">Validations Issued Today</div>
-                <div class="stat-value" id="stat-total-validations">--</div>
-                <div class="stat-subtext" style="color: var(--text-muted);">Validated dining customers</div>
+        <!-- 4-Column KPI Cards -->
+        <div class="stat-cards-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom: 1.25rem;">
+            <div class="kpi-card">
+                <div class="kpi-title">Validations Issued Today</div>
+                <div class="kpi-value"><span id="stat-total-validations">0</span> <span class="kpi-unit">Patrons</span></div>
+                <div class="kpi-subtext">Dining customers validated</div>
             </div>
-            <div class="stat-card">
-                <div class="stat-label">Active Departure Windows</div>
-                <div class="stat-value" id="stat-active-grace" style="color: var(--primary);">--</div>
-                <div class="stat-subtext" style="color: var(--primary);">&le; 20 minutes remaining to exit</div>
+            <div class="kpi-card">
+                <div class="kpi-title">Active Departure Windows</div>
+                <div class="kpi-value" style="color: #2563eb;"><span id="stat-active-grace">0</span> <span class="kpi-unit">Active</span></div>
+                <div class="kpi-subtext">&le; 20 minutes remaining to exit</div>
             </div>
-            <div class="stat-card">
-                <div class="stat-label">Total Value Subsidized</div>
-                <div class="stat-value" id="stat-total-subsidy" style="color: var(--success-text);">₱0.00</div>
-                <div class="stat-subtext" style="color: var(--success-text);">Subsidized by merchant account</div>
+            <div class="kpi-card">
+                <div class="kpi-title">Total Value Subsidized</div>
+                <div class="kpi-value" style="color: #059669;"><span id="stat-total-subsidy">₱0.00</span></div>
+                <div class="kpi-subtext">Waived base parking tariffs</div>
             </div>
-            <div class="stat-card">
-                <div class="stat-label">Standard Grace Allowance</div>
-                <div class="stat-value">20m</div>
-                <div class="stat-subtext" style="color: var(--text-muted);">Exemption window per citation rule</div>
+            <div class="kpi-card">
+                <div class="kpi-title">Standard Grace Allowance</div>
+                <div class="kpi-value">20 <span class="kpi-unit">Minutes</span></div>
+                <div class="kpi-subtext">Exemption window per citation rule</div>
             </div>
         </div>
 
-        <!-- 2-Column Validation Layout -->
+        <!-- 2-Column Validation Grid -->
         <div class="vendor-layout-grid">
-            <!-- Left Column: Input Form & Quick Select -->
+
+            <!-- Left Column: Input Form & Quick Pick Toolbar -->
             <div class="card">
-                <div class="card-header">
-                    <div>
-                        <h2 class="card-title">Validate Customer Parking</h2>
-                        <p class="card-subtitle">Scan customer entry QR token or type license plate number</p>
-                    </div>
-                    <span class="badge badge-info">2D Scanner / Keyboard</span>
+                <div class="card-header-clean">
+                    <h2>1. Validate Customer Parking</h2>
+                    <span class="section-tag">2D Scanner / Keyboard</span>
                 </div>
-                <div class="card-body">
-                    <!-- Scanner Input Form -->
-                    <form id="vendor-validation-form" onsubmit="return false;">
-                        <div class="form-group" style="margin-bottom: 1.25rem;">
-                            <label for="vendor-query-input" class="form-label" style="font-weight: 600;">
-                                License Plate or Entry Token
-                            </label>
-                            <div style="display: flex; gap: 8px;">
-                                <input type="text" id="vendor-query-input" class="vendor-scan-input" 
-                                       placeholder="e.g. ABC-1234 or QR_ACT_02" autofocus autocomplete="off" style="flex: 1;">
-                                <button type="button" class="btn btn-secondary" id="btn-lookup-session" style="font-weight: 600; padding: 0 1.25rem;">
-                                    Lookup
-                                </button>
-                            </div>
-                            <span class="form-hint" style="margin-top: 6px; display: block;">
-                                Point USB barcode scanner or type manually and press Enter.
-                            </span>
-                        </div>
 
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 1.25rem;">
-                            <div class="form-group">
-                                <label for="vendor-receipt-input" class="form-label">Dining Receipt / Invoice #</label>
-                                <input type="text" id="vendor-receipt-input" class="form-control" 
-                                       placeholder="e.g. INV-2026-9021" value="INV-2026-8814">
-                            </div>
-                            <div class="form-group">
-                                <label for="vendor-staff-input" class="form-label">Merchant Counter Staff</label>
-                                <input type="text" id="vendor-staff-input" class="form-control" 
-                                       placeholder="e.g. Cashier 1" value="Counter Staff 1">
-                            </div>
-                        </div>
-
-                        <!-- Action Buttons -->
-                        <div style="display: flex; gap: 10px;">
-                            <button type="button" class="btn btn-primary btn-block" id="btn-submit-validation" style="font-weight: 700; padding: 0.75rem 1rem;">
-                                Apply 20-Min Exemption (Waive ₱30)
-                            </button>
-                            <button type="button" class="btn btn-secondary" id="btn-clear-form">
-                                Reset
+                <form id="vendor-validation-form" onsubmit="return false;">
+                    <div style="margin-bottom: 1rem;">
+                        <label for="vendor-query-input" style="font-weight: 600; margin-bottom: 6px;">
+                            License Plate or Entry Token (QR)
+                        </label>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <input type="text" id="vendor-query-input" 
+                                   placeholder="e.g. ABC-1234 or QR_ACT_02" 
+                                   style="flex: 1; height: 42px; font-family: var(--font-mono); font-size: 1.15rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; padding: 0.5rem 0.85rem;"
+                                   autofocus autocomplete="off">
+                            <button type="button" class="btn btn-secondary" id="btn-lookup-session" style="height: 42px; padding: 0 1.25rem;">
+                                Query Stay
                             </button>
                         </div>
-                    </form>
+                        <span style="font-size: 0.72rem; color: var(--text-muted); margin-top: 4px; display: block;">
+                            Scan handheld barcode scanner or type license plate and press Enter.
+                        </span>
+                    </div>
 
-                    <!-- Quick Pick Parked Vehicles -->
-                    <div style="margin-top: 1.75rem; border-top: 1px solid var(--border-color); padding-top: 1.25rem;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                            <span style="font-size: 0.8125rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary);">
-                                Active Facility Vehicles (Quick Select)
-                            </span>
-                            <span style="font-size: 0.75rem; color: var(--text-muted);" id="active-vehicles-count">-- parked</span>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 1rem;">
+                        <div>
+                            <label for="vendor-receipt-input">Dining Receipt / Invoice #</label>
+                            <input type="text" id="vendor-receipt-input" value="INV-2026-8814" style="height: 38px;">
                         </div>
-                        <div class="parked-chips-container" id="vendor-parked-chips">
-                            <span style="font-size: 0.75rem; color: var(--text-muted); padding: 6px 0;">Loading vehicles...</span>
+                        <div>
+                            <label for="vendor-staff-input">Merchant Staff ID</label>
+                            <input type="text" id="vendor-staff-input" value="Counter Staff 1" style="height: 38px;">
                         </div>
+                    </div>
+
+                    <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 0.5rem;">
+                        <button type="button" class="btn btn-primary" id="btn-submit-validation" style="flex: 1; height: 44px; font-size: 0.875rem;">
+                            Apply 20-Min Exemption (Waive ₱30)
+                        </button>
+                        <button type="button" class="btn btn-secondary" id="btn-clear-form" style="height: 44px; padding: 0 1.25rem;">
+                            Clear
+                        </button>
+                    </div>
+                </form>
+
+                <!-- Active Facility Vehicles Toolbar -->
+                <div style="border-top: 1px solid var(--border-subtle); padding-top: 1rem; margin-top: 1rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 0.72rem; text-transform: uppercase; font-weight: 600; color: var(--text-muted); letter-spacing: 0.05em;">
+                            Currently Parked in Lot (Quick Pick)
+                        </span>
+                        <span id="active-vehicles-count" style="font-size: 0.72rem; color: var(--text-muted);">-- parked</span>
+                    </div>
+                    <div class="parked-chips-container" id="vendor-parked-chips">
+                        Loading parked vehicles...
                     </div>
                 </div>
             </div>
 
             <!-- Right Column: Validation Status & Countdown Preview -->
             <div class="card">
-                <div class="card-header">
-                    <div>
-                        <h2 class="card-title">Session Validation Status</h2>
-                        <p class="card-subtitle">Real-time departure grace window and tariff subsidy</p>
-                    </div>
-                    <span class="badge" id="session-status-badge">Awaiting Input</span>
+                <div class="card-header-clean">
+                    <h2>2. Session Validation Status</h2>
+                    <span class="badge badge-secondary" id="session-status-badge">Awaiting Query</span>
                 </div>
-                <div class="card-body">
-                    <!-- Dynamic Countdown Display -->
-                    <div class="vendor-countdown-box" id="vendor-countdown-container">
-                        <div style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--slate-400);" id="countdown-title">
-                            Departure Grace Window
+
+                <!-- Dynamic Countdown Visualizer -->
+                <div class="vendor-countdown-box" id="vendor-countdown-container" style="padding: 1.25rem; border-radius: var(--radius-lg); margin-bottom: 1rem;">
+                    <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--slate-400); font-weight: 600;" id="countdown-title">
+                        Departure Grace Window
+                    </div>
+                    <div class="vendor-countdown-time" id="countdown-timer" style="font-size: 2.75rem; font-weight: 800; margin: 6px 0; color: #38bdf8;">
+                        --:--
+                    </div>
+                    <div style="font-size: 0.75rem; color: var(--slate-300);" id="countdown-subtext">
+                        No active vehicle selected
+                    </div>
+                </div>
+
+                <!-- Itemized Invoice & Subsidy Breakdown -->
+                <div class="invoice-summary-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <div>
+                            <span style="font-size: 0.7rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">License Plate</span>
+                            <div style="margin-top: 2px;"><code id="preview-plate" style="font-size: 1.2rem; font-weight: 700; color: var(--text-primary); letter-spacing: 0.06em;">—</code></div>
                         </div>
-                        <div class="vendor-countdown-time" id="countdown-timer">--:--</div>
-                        <div style="font-size: 0.75rem; color: var(--slate-300);" id="countdown-subtext">
-                            No active vehicle selected
+                        <div style="text-align: right;">
+                            <span style="font-size: 0.7rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Assigned Slot</span>
+                            <div id="preview-slot" style="font-weight: 700; color: var(--text-primary); font-size: 0.95rem;">—</div>
                         </div>
                     </div>
 
-                    <!-- Itemized Session Invoice & Subsidy Breakdown -->
-                    <div class="invoice-summary-card">
-                        <div class="invoice-row">
-                            <span>Vehicle License Plate</span>
-                            <strong id="preview-plate" style="font-family: var(--font-mono); font-size: 0.95rem;">--</strong>
-                        </div>
-                        <div class="invoice-row">
-                            <span>Assigned Slot &amp; Zone</span>
-                            <strong id="preview-slot">--</strong>
-                        </div>
-                        <div class="invoice-row">
-                            <span>Facility Entry Time</span>
-                            <strong id="preview-entry-time">--</strong>
-                        </div>
-                        <div class="invoice-row">
-                            <span>Duration In Facility</span>
-                            <strong id="preview-duration">--</strong>
-                        </div>
-                        <div class="invoice-row">
-                            <span>Commercial Dining Voucher</span>
-                            <span class="vendor-subsidy-tag" id="preview-subsidy-tag">-₱30.00 Base Waiver</span>
-                        </div>
-                        <div class="invoice-total-row">
-                            <span class="invoice-total-label">Net Base Parking Tariff</span>
-                            <strong id="preview-net-fee" style="font-size: 1.15rem; color: var(--success-text);">₱0.00</strong>
-                        </div>
+                    <div class="invoice-row">
+                        <span>Facility Entry Time</span>
+                        <strong id="preview-entry-time">—</strong>
                     </div>
+                    <div class="invoice-row">
+                        <span>Stay Duration So Far</span>
+                        <strong id="preview-duration">—</strong>
+                    </div>
+                    <div class="invoice-row">
+                        <span>Transient Base Tariff</span>
+                        <span>₱30.00</span>
+                    </div>
+                    <div class="invoice-row">
+                        <span>Commercial Dining Subsidy</span>
+                        <span class="badge badge-success" id="preview-subsidy-tag">-₱30.00 Base Waiver</span>
+                    </div>
+                    <div class="invoice-total-row">
+                        <span class="invoice-total-label">Net Base Parking Tariff</span>
+                        <strong id="preview-net-fee" style="font-size: 1.2rem; color: var(--success-text);">₱0.00</strong>
+                    </div>
+                </div>
 
-                    <!-- Notice Alert Box -->
-                    <div id="vendor-alert-box" class="alert alert-info" style="margin-top: 1rem; display: none;">
-                        <span id="vendor-alert-text">Validation information will appear here.</span>
-                    </div>
+                <!-- Alert Feedback Box -->
+                <div id="vendor-alert-box" class="alert alert-info" style="margin-top: 1rem; display: none;">
+                    <span id="vendor-alert-text">Validation information will appear here.</span>
                 </div>
             </div>
+
         </div>
 
-        <!-- Bottom Audit Log Table -->
-        <div class="card">
-            <div class="card-header">
+        <!-- 3. Bottom Activity Ledger Table -->
+        <div class="card" style="margin-top: 1.25rem;">
+            <div class="card-header-clean">
                 <div>
-                    <h2 class="card-title">Commercial Validation Activity Ledger</h2>
-                    <p class="card-subtitle">Log of dining parking fee waivers authorized today</p>
+                    <h2>3. Commercial Validation Activity Ledger</h2>
+                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">Log of dining parking fee waivers authorized today</p>
                 </div>
                 <div style="display: flex; gap: 8px; align-items: center;">
-                    <input type="text" id="ledger-search-input" class="form-control form-control-sm" placeholder="Filter plate or receipt..." style="width: 220px;">
+                    <input type="text" id="ledger-search-input" placeholder="Filter plate or receipt..." style="width: 220px; height: 32px; padding: 4px 8px; font-size: 0.75rem;">
                     <span class="badge badge-secondary" id="ledger-count-badge">0 records</span>
                 </div>
             </div>
@@ -233,14 +238,14 @@
                 <table class="data-table" id="validations-ledger-table">
                     <thead>
                         <tr>
-                            <th>Validation Timestamp</th>
+                            <th>Validation Time</th>
                             <th>License Plate</th>
-                            <th>Slot / Zone</th>
-                            <th>Store Receipt Ref</th>
+                            <th>Slot &amp; Zone</th>
+                            <th>Receipt Ref</th>
                             <th>Staff Operator</th>
                             <th>Departure Grace Window</th>
-                            <th>Tariff Subsidy</th>
-                            <th>Facility Status</th>
+                            <th>Subsidy Value</th>
+                            <th>Lot Status</th>
                         </tr>
                     </thead>
                     <tbody id="validations-ledger-tbody">
@@ -253,7 +258,8 @@
                 </table>
             </div>
         </div>
-    </main>
+
+    </div>
 
     <!-- Application Footer -->
     <footer class="app-footer">
@@ -274,17 +280,6 @@
             let validationsHistory = [];
             let countdownInterval = null;
 
-            // Live Clock
-            function updateClock() {
-                const el = document.getElementById('live-clock');
-                if (el) {
-                    const now = new Date();
-                    el.textContent = now.toTimeString().split(' ')[0];
-                }
-            }
-            setInterval(updateClock, 1000);
-            updateClock();
-
             // Alert Notification Helper
             function showAlert(message, type = 'info') {
                 const box = document.getElementById('vendor-alert-box');
@@ -292,7 +287,7 @@
                 if (!box || !text) return;
                 box.className = `alert alert-${type}`;
                 text.textContent = message;
-                box.style.display = 'block';
+                box.style.display = 'flex';
             }
 
             function hideAlert() {
@@ -411,7 +406,7 @@
                         clearInterval(countdownInterval);
                         if (timerEl) {
                             timerEl.textContent = '00:00';
-                            timerEl.style.color = '#f87171'; // red
+                            timerEl.style.color = '#ef4444'; // red
                         }
                         if (subtextEl) subtextEl.textContent = '20-min grace period has expired. Standard tariff applies.';
                         return;
@@ -423,7 +418,7 @@
                         timerEl.textContent = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
                         timerEl.style.color = '#38bdf8'; // blue
                     }
-                    if (subtextEl) subtextEl.textContent = 'Vehicle may exit barrier with base tariff waived.';
+                    if (subtextEl) subtextEl.textContent = 'Vehicle authorized to exit barrier with base tariff waived.';
                     remaining--;
                 }
 
@@ -451,15 +446,15 @@
 
             function resetPreview() {
                 currentSession = null;
-                document.getElementById('preview-plate').textContent = '--';
-                document.getElementById('preview-slot').textContent = '--';
-                document.getElementById('preview-entry-time').textContent = '--';
-                document.getElementById('preview-duration').textContent = '--';
+                document.getElementById('preview-plate').textContent = '—';
+                document.getElementById('preview-slot').textContent = '—';
+                document.getElementById('preview-entry-time').textContent = '—';
+                document.getElementById('preview-duration').textContent = '—';
                 document.getElementById('preview-net-fee').textContent = '₱0.00';
                 const statusBadge = document.getElementById('session-status-badge');
                 if (statusBadge) {
-                    statusBadge.className = 'badge';
-                    statusBadge.textContent = 'Awaiting Input';
+                    statusBadge.className = 'badge badge-secondary';
+                    statusBadge.textContent = 'Awaiting Query';
                 }
                 resetCountdownStatic('Empty');
             }
