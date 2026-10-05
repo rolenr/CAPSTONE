@@ -1,55 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
     <meta charset="UTF-8">
-    <title>Reserve - Parking Ltd.</title>
-    <link rel="stylesheet" href="css/style.css">
+    <meta http-equiv="refresh" content="0; url=frontend/reserve.html">
+    <title>Redirecting - Parking Ltd.</title>
+    <script>window.location.replace("frontend/reserve.html");</script>
 </head>
-<body data-page="reserve">
-<header><h1>Parking Ltd. - Customer Portal</h1></header>
-<nav>
-    <a href="dashboard.html">Live Map & Wallet</a>
-    <a href="reserve.html">Reserve Slot</a>
-    <a href="violations.html">Violations Tracker</a>
-    <a href="#" id="logoutBtn">Logout</a>
-</nav>
-<div class="container">
-    <div class="card">
-        <h2>Reserve a Parking Slot</h2>
-        <form id="reservationForm">
-            <!-- Zone Selection -->
-            <div class="form-group">
-                <label>Select Zone</label>
-                <select id="zoneSelect" required>
-                    <option value="B">Zone B (Standard)</option>
-                    <option value="C">Zone C (Standard)</option>
-                    <option value="D">Zone D (Standard)</option>
-                    <option value="E">Zone E (Standard)</option>
-                    <option value="A">Zone A (PWD/VIP Only)</option>
-                </select>
-            </div>
-            
-           <!-- Replace the Duration input in reserve.html with this -->
-           <div class="form-group">
-                <label>Start Date</label>
-                <input type="date" id="startDate" value="2026-07-15" min="2026-07-15" required>
-            </div>
-            <div class="form-group">
-                <label>End Date</label>
-                <input type="date" id="endDate" value="2026-07-15" min="2026-07-15" required>
-             </div>
-
-            <p><strong>Total Fee:</strong> ₱<span id="feeDisplay">60.00</span></p>
-            <button type="submit">Confirm Payment & Book</button>
-        </form>
-
-        <!-- QR Wallet Section (Hidden by default, shown after reservation) -->
-        <div id="qrWalletSection" style="display:none; margin-top: 20px; text-align: center;">
-            <h3>Your Digital Entry Token</h3>
-            <img id="qrCodeImage" alt="Reservation QR Code">
-        </div>
-    </div>
-</div>
-<script src="js/main.js"></script>
+<body style="font-family: sans-serif; background: #0f172a; color: #94a3b8; display: flex; align-items: center; justify-content: center; height: 100vh;">
+    <p>Redirecting to <a href="frontend/reserve.html" style="color: #38bdf8;">frontend/reserve.html</a>...</p>
 </body>
 </html>

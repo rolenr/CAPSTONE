@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reserve Slot - Parking Ltd.</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body data-page="reserve">
+
+<header class="app-header">
+    <div class="header-inner">
+        <a href="dashboard.html" class="brand-wrap">
+            <div class="brand-icon">P</div>
+            <div class="brand-title">Parking Ltd.</div>
+            <span class="brand-badge">Customer Portal</span>
+        </a>
+
+        <nav class="main-nav">
+            <a href="dashboard.html">Live Map &amp; Wallet</a>
+            <a href="reserve.html" class="active">Reserve Slot</a>
+            <a href="violations.html">Violations Tracker</a>
+        </nav>
+
+        <div class="header-meta">
+            <div class="user-profile-chip">
+                <span id="userPlateDisplay" style="font-family: var(--font-mono); font-weight: 600;">Driver</span>
+            </div>
+            <a href="#" id="logoutBtn" class="btn-signout">Sign Out</a>
+        </div>
+    </div>
+</header>
+
+<div class="container">
+
+    <div class="page-title-banner">
+        <div>
+            <h1 class="page-title-main">Prepaid Slot Reservation</h1>
+            <p class="page-title-sub">Guarantee an assigned parking bay with automated contactless entry</p>
+        </div>
+    </div>
+
+    <!-- Active Pass (Shown if user already has an active reservation) -->
+    <div id="qrWalletSection" class="pass-ticket-card" style="display: none;">
+        <div class="pass-ticket-header">
+            <div>
+                <strong style="letter-spacing: 0.05em; font-size: 0.85rem;">ACTIVE RESERVATION PASS</strong>
+                <div style="font-size: 0.72rem; color: var(--slate-300);">Gatehouse Verification Active</div>
+            </div>
+            <span class="badge badge-paid">CONFIRMED</span>
+        </div>
+
+        <div class="pass-ticket-body">
+            <div class="pass-qr-frame">
+                <img id="qrCodeImage" src="" alt="Reservation QR Token">
+            </div>
+
+            <div class="pass-details-grid">
+                <div class="pass-detail-item">
+                    <span>Allocated Zone</span>
+                    <strong>Zone <span id="qrZone">—</span></strong>
+                </div>
+                <div class="pass-detail-item">
+                    <span>Assigned Slot</span>
+                    <strong>Slot <span id="qrSlotNumber">—</span></strong>
+                </div>
+                <div class="pass-detail-item">
+                    <span>Validity Period</span>
+                    <strong id="qrDates">—</strong>
+                </div>
+                <div class="pass-detail-item">
+                    <span>Prepaid Fee</span>
+                    <strong>₱<span id="qrFee">0.00</span></strong>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reservation Form Card -->
+    <div id="reservationFormContainer" class="card">
+        <div class="card-header-clean">
+            <h2>Book a Guaranteed Slot</h2>
+            <span class="section-tag">Advance Booking</span>
+        </div>
+        <p class="section-description">Select your destination zone and stay duration. Slots are dynamically allocated based on capacity rules.</p>
+
+        <form id="reservationForm">
+            <div class="form-group">
+                <label for="zoneSelect">Destination Zone</label>
+                <select id="zoneSelect" required>
+                    <option value="A">Zone A (Standard Bay &bull; Fast Main Gate Access)</option>
+                    <option value="B">Zone B (Standard Bay &bull; Central Lane)</option>
+                    <option value="C">Zone C (Standard Bay &bull; East Perimeter)</option>
+                    <option value="D">Zone D (Standard Bay &bull; West Perimeter)</option>
+                    <option value="E">Zone E (VIP &amp; Priority Access Only)</option>
+                </select>
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;">
+                <div class="form-group">
+                    <label for="startDate">Start Date</label>
+                    <input type="date" id="startDate" required>
+                </div>
+                <div class="form-group">
+                    <label for="endDate">End Date</label>
+                    <input type="date" id="endDate" required>
+                </div>
+            </div>
+
+            <!-- Pricing Summary Card -->
+            <div style="background: var(--slate-50); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 12px 14px; margin: 1rem 0;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <span style="font-size: 0.75rem; text-transform: uppercase; font-weight: 600; color: var(--text-muted); letter-spacing: 0.04em;">Calculated Tariff</span>
+                        <div style="font-size: 0.78rem; color: var(--text-secondary); margin-top: 2px;">Standard: ₱60/day &bull; Overnight past 23:00 (+₱100)</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span style="font-size: 1.5rem; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums;">₱<span id="feeDisplay">60.00</span></span>
+                    </div>
+                </div>
+            </div>
+
+            <button type="submit" class="btn-primary-block">Confirm Reservation &amp; Generate Pass</button>
+        </form>
+    </div>
+
+</div>
+
+<footer class="app-footer">
+    Parking Ltd. &bull; Automated Facility Management System &bull; Secure Gatehouse Operations
+</footer>
+
+<script>
+    const userPlate = sessionStorage.getItem('licensePlate');
+    if (userPlate && document.getElementById('userPlateDisplay')) {
+        document.getElementById('userPlateDisplay').textContent = userPlate;
+    }
+</script>
+<script src="js/main.js"></script>
+</body>
+</html>

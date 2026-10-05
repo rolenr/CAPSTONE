@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customer Dashboard - Parking Ltd.</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body data-page="dashboard">
+
+<header class="app-header">
+    <div class="header-inner">
+        <a href="dashboard.html" class="brand-wrap">
+            <div class="brand-icon">P</div>
+            <div class="brand-title">Parking Ltd.</div>
+            <span class="brand-badge">Customer Portal</span>
+        </a>
+
+        <nav class="main-nav">
+            <a href="dashboard.html" class="active">Live Map &amp; Wallet</a>
+            <a href="reserve.html">Reserve Slot</a>
+            <a href="violations.html">Violations Tracker</a>
+        </nav>
+
+        <div class="header-meta">
+            <div class="user-profile-chip">
+                <span id="userPlateDisplay" style="font-family: var(--font-mono); font-weight: 600;">Driver</span>
+            </div>
+            <a href="#" id="logoutBtn" class="btn-signout">Sign Out</a>
+        </div>
+    </div>
+</header>
+
+<div class="container">
+
+    <div class="page-title-banner">
+        <div>
+            <h1 class="page-title-main">Facility Availability &amp; Digital Pass</h1>
+            <p class="page-title-sub">Real-time zone occupancy and active contactless entry credentials</p>
+        </div>
+    </div>
+
+    <!-- DIGITAL PASS / SMART TICKET WALLET (Shown when user has active booking) -->
+    <div id="qrWalletSection" class="pass-ticket-card" style="display: none;">
+        <div class="pass-ticket-header">
+            <div>
+                <strong style="letter-spacing: 0.05em; font-size: 0.85rem;">DIGITAL PARKING PASS</strong>
+                <div style="font-size: 0.72rem; color: var(--slate-300);">Contactless Gate Authorization</div>
+            </div>
+            <span class="badge badge-paid">PAID RESERVATION</span>
+        </div>
+
+        <div class="pass-ticket-body">
+            <div class="pass-qr-frame">
+                <img id="qrCodeImage" src="" alt="Digital QR Entry Pass">
+            </div>
+
+            <div class="pass-details-grid">
+                <div class="pass-detail-item">
+                    <span>Allocated Zone</span>
+                    <strong>Zone <span id="qrZone">—</span></strong>
+                </div>
+                <div class="pass-detail-item">
+                    <span>Slot Number</span>
+                    <strong>Slot <span id="qrSlotNumber">—</span></strong>
+                </div>
+                <div class="pass-detail-item">
+                    <span>Validity Period</span>
+                    <strong id="qrDates">—</strong>
+                </div>
+                <div class="pass-detail-item">
+                    <span>Prepaid Fee</span>
+                    <strong>₱<span id="qrFee">0.00</span></strong>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- LIVE PARKING MAP AVAILABILITY -->
+    <div class="card">
+        <div class="card-header-clean">
+            <h2>Live Zone Map Availability</h2>
+            <span class="section-tag">Interactive Map</span>
+        </div>
+        <p class="section-description">Select any zone on the facility layout to inspect individual slot status.</p>
+        
+        <div id="liveMap">Loading capacity data...</div>
+        <div class="zone-detail-panel" id="zoneDetailPanel" style="display: none;"></div>
+    </div>
+
+</div>
+
+<footer class="app-footer">
+    Parking Ltd. &bull; Automated Facility Management System &bull; Secure Gatehouse Operations
+</footer>
+
+<script>
+    const userPlate = sessionStorage.getItem('licensePlate');
+    if (userPlate && document.getElementById('userPlateDisplay')) {
+        document.getElementById('userPlateDisplay').textContent = userPlate;
+    }
+</script>
+<script src="js/main.js"></script>
+</body>
+</html>

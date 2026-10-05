@@ -1,31 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
     <meta charset="UTF-8">
-    <title>Dashboard - Parking Ltd.</title>
-    <link rel="stylesheet" href="css/style.css">
+    <meta http-equiv="refresh" content="0; url=frontend/dashboard.html">
+    <title>Redirecting - Parking Ltd.</title>
+    <script>window.location.replace("frontend/dashboard.html");</script>
 </head>
-<body data-page="dashboard">
-<header><h1>Parking Ltd. - Customer Portal</h1></header>
-<nav>
-    <a href="dashboard.html">Live Map & Wallet</a>
-    <a href="reserve.html">Reserve Slot</a>
-    <a href="violations.html">Violations Tracker</a>
-    <a href="#" id="logoutBtn">Logout</a>
-</nav>
-<div class="container">
-    <div class="card">
-        <h2>Live Parking Map Availability</h2>
-        <div class="map-grid" id="liveMap">Loading capacity data...</div>
-    </div>
-    
-    <div class="card qr-wallet" id="qrWalletSection" style="display: none;">
-        <h2>Your Digital Token Wallet</h2>
-        <p>Scan this at the entrance/exit terminals.</p>
-        <img id="qrCodeImage" src="" alt="Reserved QR Token">
-        <p><strong>Status:</strong> <span style="color: #38a169">PAID_RESERVATION</span></p>
-    </div>
-</div>
-<script src="js/app.js"></script>
+<body style="font-family: sans-serif; background: #0f172a; color: #94a3b8; display: flex; align-items: center; justify-content: center; height: 100vh;">
+    <p>Redirecting to <a href="frontend/dashboard.html" style="color: #38bdf8;">frontend/dashboard.html</a>...</p>
 </body>
 </html>
