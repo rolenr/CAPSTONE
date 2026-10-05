@@ -23,6 +23,7 @@ CAPSTONE/
 │
 ├── frontend/                   # Client-side presentation layer
 │   ├── cashier.html            # Attendant Cashier POS & Exit Gatehouse Portal (Priority ALPR + QR Fallback)
+│   ├── vendor.html             # Commercial Tenant Validation Portal (Dining patron fee waiver & 20m grace)
 │   ├── login.html              # Enterprise credential sign-in (Admin & Driver)
 │   ├── register.html           # Vehicle registration & account creation
 │   ├── admin.html              # Centralized administration & BI analytics console
@@ -132,7 +133,10 @@ CAPSTONE/
 | `set_vip` | `POST` | `COMPLETED` | Toggles VIP / PWD access privileges and writes audit record |
 | `alpr_logs` | `GET` | `COMPLETED` | Returns recent ALPR detection events from gate cameras |
 | `toggle_slot` | `POST` | `COMPLETED` | Force overrides slot state and synchronizes spatial allocation count |
-| `vendor_validate` | `POST` | `IN PROGRESS` | Commercial tenant discount exemption (20 mins free validation) |
+| `vendor_validate` | `POST` | `COMPLETED` | Commercial tenant discount exemption (20 mins free validation & ₱30 waiver) |
+| `vendor_lookup` | `GET/POST` | `COMPLETED` | Look up active parked vehicle session by license plate or QR token |
+| `vendor_recent_validations` | `GET` | `COMPLETED` | Ledger of today's commercial fee waivers with remaining grace countdowns |
+| `vendor_active_vehicles` | `GET` | `COMPLETED` | Quick-select feed of parked vehicles for rapid tenant cashier verification |
 
 ---
 
@@ -146,7 +150,7 @@ CAPSTONE/
 | `parking_sessions` | 84 | Stays, payment status, duration, staff ID, and exit method (`ALPR` / `QR_FALLBACK`) |
 | `violations` | 6 | Enforcement infractions (obstruction, slot mismatch, overdue stays) |
 | `reservations` | 7 | Prepaid advance slot reservations with date bounds and fees |
-| `audit_logs` | 13 | Immutable operational trail of administrator and cashier actions |
+| `audit_logs` | 15 | Immutable operational trail of administrator, cashier, and tenant actions |
 
 ---
 
@@ -164,6 +168,20 @@ CAPSTONE/
 
 ---
 
+### G. Commercial Tenant Validation Station (`frontend/vendor.html`)
+| Component / Feature | Description | Status | Alignment with Proposal |
+| :--- | :--- | :---: | :--- |
+| **Merchant Identity & Hero Banner** | Displays partner store status (Joey's Restaurant), contract subsidy rate, and station ID | `COMPLETED` | Chapter 5, Page 3 Commercial Partner Portal |
+| **Dual-Mode Session Lookup** | Query active session using either physical QR Token (`TKN-xxxx`) or License Plate Number | `COMPLETED` | Section 5.5.6 Tariff Subsidies |
+| **Active Facility Vehicles Bar** | Quick-pick clickable chips of active parked vehicles with live validation indicators | `COMPLETED` | Merchant counter operational efficiency |
+| **Real-Time 20-Min Countdown Clock** | Animated countdown timer showing minutes and seconds remaining in departure grace period | `COMPLETED` | Proposal Rule: 20-minute post-validation exit window |
+| **Tariff Subsidy Breakdown** | Visual invoice matrix displaying ₱30.00 base rate waiver credited to merchant account | `COMPLETED` | Section 5.5.6 Commercial Subsidy Structure |
+| **Dining Invoice & Staff Attribution** | Records restaurant receipt / bill reference number and counter staff ID into audit trail | `COMPLETED` | Section 5.4.2 System Auditability |
+| **Today's Validation Activity Ledger** | Live auto-refreshing table of today's customer discounts with grace countdown tags | `COMPLETED` | Commercial merchant reconciliation |
+| **Automatic Cashier Synchronization** | Exit gate POS immediately recognizes `PAID_VENDOR` status and deducts ₱30.00 from bill | `COMPLETED` | Seamless gatehouse clearance integration |
+
+---
+
 ## 3. Upcoming Milestones & Roadmap
 
 ```mermaid
@@ -177,7 +195,7 @@ gantt
     Modular Directory Housekeeping           :done, p4, 2026-10-02, 1d
     section Phase 2: Missing Portals
     Attendant Cashier POS (Priority ALPR+QR) :done, p5, 2026-10-02, 1d
-    Commercial Tenant Validator (Page 3)     :active, p6, 2026-10-05, 2d
+    Commercial Tenant Validator (Page 3)     :done, p6, 2026-10-05, 1d
     VIP Zone Alignment (Proposal Rule 2)     :p7, 2026-10-06, 1d
     section Phase 3: CV Model Training & Rules
     Overhead Slot Dataset Labeling & Augment :p8, 2026-10-07, 3d
@@ -190,31 +208,29 @@ gantt
 
 ### High Priority Next Steps
 
-1. **Commercial Tenant Validation Portal (`frontend/vendor.html`)**:
-   - Web interface for partner commercial tenants (e.g. Joey's Restaurant staff).
-   - Enter/scan customer entry token to grant 20-minute `PAID_VENDOR` exemption before leaving.
-   - Finalize backend `vendor_validate` endpoint.
-2. **Align Customer VIP Zone with Proposal Rule 2**:
+1. **Align Customer VIP Zone with Proposal Rule 2**:
    - Proposal Section 5.5.6 (p. 87) designates **Zone A** for PWD/VIP priority (closest to facility access).
    - Harmonize `frontend/reserve.html`, `frontend/dashboard.html`, and `backend/api/endpoints.php` so Zone A is the official VIP/PWD zone.
-3. **Train Custom YOLOv8 Sectional Occupancy Model**:
+2. **Train Custom YOLOv8 Sectional Occupancy Model**:
    - Annotate parking slot bounding boxes from overhead camera test footage.
    - Train custom YOLOv8 model to accurately predict vacant vs occupied status for all 78 physical slots across Zones A–F.
-4. **Implement Sectional Occupancy Rules & Automated Violation Enforcement**:
+3. **Implement Sectional Occupancy Rules & Automated Violation Enforcement**:
    - Implement Rule 1 (Transient fills Zones B–E first).
    - Implement Rule 2 (Zone A restricted to validated VIP/PWD drivers).
    - Implement Rule 3 (Zone F overflow activated only when primary zones reach capacity).
    - Automated enforcement logic: when vehicle parks in unauthorized zone or overstays, automatically write fine to `violations` table to be settled at cashier.
-5. **Optimize Computer Vision Accuracy for Entrance & Exit Cameras**:
+4. **Optimize Computer Vision Accuracy for Entrance & Exit Cameras**:
    - **Entrance Camera**: Dynamic exposure/lighting compensation (daylight glare vs night shadow), plate localization fine-tuning.
    - **Exit Camera**: Enhanced OCR post-processing, character ambiguity correction (0 vs O, 1 vs I, 8 vs B), Philippine plate regex validation (`[A-Z]{3}\s?[0-9]{3,4}`), and multi-frame vote aggregation.
-6. **End-to-End System Simulation & Defense Dry-Run**:
+5. **End-to-End System Simulation & Defense Dry-Run**:
    - Run `computer_vision/scenario5.py` against active SQLite database and web UI to demonstrate closed-loop real-time integration.
 
 ---
 
 ## 4. Revision History
+* **2026-10-05 (Update 5)**: Implemented Commercial Tenant Validation Portal (`frontend/vendor.html`) with dual-mode plate/token lookup, 20-minute departure grace countdown timer, ₱30.00 base rate waiver, active parked vehicle quick-selector, merchant receipt tracking, and live audit ledger. Expanded `backend/api/endpoints.php` with `vendor_lookup`, `vendor_validate`, `vendor_recent_validations`, and `vendor_active_vehicles`. Created root backwards-compatible redirect stub `vendor.html` and added navigation links across Admin, Cashier, and Driver portals.
 * **2026-10-05 (Update 4)**: Added Computer Vision & Model Training matrix (Section 2.F) tracking overhead sectional occupancy model training, Sectional Occupancy Rules & Enforcement logic, and Entrance/Exit ALPR accuracy improvement tracks. Updated roadmap and milestone Gantt chart.
 * **2026-10-02 (Update 3)**: Synchronized and pushed complete codebase to remote branch `TC-Fortune-patch-2` (Commit: `4ac33c3`). Working tree verified clean.
 * **2026-10-02 (Update 2)**: Implemented Attendant Cashier Portal (`frontend/cashier.html`). Built complete POS billing workflow, fee calculation, tender change calculator, Priority 1 Automated ALPR camera exit clearance, Priority 2 QR scanner fallback, visual barrier boom relay animation, and audit logging.
 * **2026-10-02 (Update 1)**: Initialized comprehensive project tracker. Completed Admin BI Analytics, Sectional Heatmap, Influx Distribution, Violations Management, and Audit Trail. Cleaned all emojis across UI and Python code. Restructured project into `frontend/`, `backend/`, `computer_vision/`, and `docs/`.
+

@@ -1797,3 +1797,101 @@ button[type="submit"]:hover {
         font-size: 0.55rem;
     }
 }
+
+/* ---------------- COMMERCIAL TENANT VALIDATION PORTAL ---------------- */
+.vendor-hero-banner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: linear-gradient(135deg, var(--slate-900) 0%, var(--slate-850) 100%);
+    border: 1px solid var(--slate-800);
+    border-radius: var(--radius-lg);
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 1.5rem;
+    color: var(--white);
+}
+
+.vendor-brand-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    padding: 4px 10px;
+    border-radius: var(--radius-md);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #38bdf8;
+}
+
+.vendor-layout-grid {
+    display: grid;
+    grid-template-columns: 1.1fr 0.9fr;
+    gap: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+
+@media (max-width: 992px) {
+    .vendor-layout-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.vendor-scan-input {
+    font-family: var(--font-mono);
+    font-size: 1.25rem;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+    text-transform: uppercase;
+    padding: 0.75rem 1rem;
+    background: var(--bg-surface);
+    border: 2px solid var(--slate-300);
+    border-radius: var(--radius-md);
+    color: var(--slate-900);
+    transition: all 0.15s ease;
+}
+
+.vendor-scan-input:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.15);
+    outline: none;
+}
+
+.vendor-countdown-box {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    padding: 1.5rem;
+    background: var(--slate-900);
+    border-radius: var(--radius-lg);
+    color: var(--white);
+    text-align: center;
+    margin-bottom: 1rem;
+    border: 1px solid var(--slate-800);
+}
+
+.vendor-countdown-time {
+    font-family: var(--font-mono);
+    font-size: 2.5rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    color: #38bdf8;
+    margin: 8px 0;
+    font-variant-numeric: tabular-nums;
+}
+
+.vendor-subsidy-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: var(--success-bg);
+    color: var(--success-text);
+    border: 1px solid var(--success-border);
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    font-weight: 600;
+}

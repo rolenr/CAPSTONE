@@ -250,26 +250,273 @@ if ($method === 'GET' && $action === 'active_reservation') {
     exit;
 }
 
-// --- ROUTE: Vendor Digital Validation ---
-if ($method === 'POST' && $action === 'vendor_validate') {
-    $data = json_decode(file_get_contents('php://input'), true);
-    $token = $data['qr_token'] ?? null;
+// --- ROUTE: Commercial Tenant Lookup (Plate or Token) ---
+if (($method === 'GET' || $method === 'POST') && $action === 'vendor_lookup') {
+    $inputVal = trim($_GET['query'] ?? '');
+    if (empty($inputVal) && $method === 'POST') {
+        $body = json_decode(file_get_contents('php://input'), true);
+        $inputVal = trim($body['query'] ?? $body['plate_number'] ?? $body['qr_token'] ?? '');
+    }
 
-    if (!$token) {
-        echo json_encode(["error" => "Customer QR Token is required."]);
+    if (empty($inputVal)) {
+        echo json_encode(["success" => false, "error" => "License plate or QR Token is required for lookup."]);
         exit;
     }
 
-    $stmt = $db->prepare("UPDATE parking_sessions SET payment_status = 'PAID_VENDOR', vendor_scan_time = CURRENT_TIMESTAMP WHERE entry_token = ? AND location_status = 'PARKED'");
-    $stmt->execute([$token]);
+    try {
+        $cleanPlate = strtoupper(str_replace([' ', '-'], '', $inputVal));
+        $stmt = $db->prepare("
+            SELECT ps.session_id, ps.entry_time, ps.payment_status, ps.location_status,
+                   ps.entry_token, ps.vendor_scan_time, ps.total_fee,
+                   ve.plate_number, ve.vehicle_type, ve.owner_name,
+                   sl.slot_number, sl.zone
+            FROM parking_sessions ps
+            JOIN vehicles ve ON ps.vehicle_id = ve.vehicle_id
+            LEFT JOIN parking_slots sl ON ps.slot_id = sl.slot_id
+            WHERE (ps.entry_token = ? OR UPPER(REPLACE(REPLACE(ve.plate_number, ' ', ''), '-', '')) = ?)
+              AND ps.location_status = 'PARKED'
+            ORDER BY ps.session_id DESC LIMIT 1
+        ");
+        $stmt->execute([$inputVal, $cleanPlate]);
+        $session = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    if ($stmt->rowCount() > 0) {
-        echo json_encode(["success" => true, "message" => "Vendor validation successful. Customer has 20 minutes to exit."]);
-    } else {
-        echo json_encode(["error" => "Invalid token or vehicle already exited."]);
+        if (!$session) {
+            echo json_encode([
+                "success" => false, 
+                "error" => "No active parked session found for '{$inputVal}'. The vehicle may have already exited or was not recorded."
+            ]);
+            exit;
+        }
+
+        $now = time();
+        $entryTs = strtotime($session['entry_time']);
+        $elapsedMins = max(0, (int)round(($now - $entryTs) / 60));
+
+        $isValidated = !empty($session['vendor_scan_time']);
+        $remainingGraceMins = 0;
+        if ($isValidated) {
+            $scanTs = strtotime($session['vendor_scan_time']);
+            $elapsedSinceScan = max(0, (int)round(($now - $scanTs) / 60));
+            $remainingGraceMins = max(0, 20 - $elapsedSinceScan);
+        }
+
+        echo json_encode([
+            "success" => true,
+            "session" => $session,
+            "duration" => [
+                "minutes" => $elapsedMins,
+                "human" => ($elapsedMins < 60) ? "{$elapsedMins} mins" : floor($elapsedMins / 60) . "h " . ($elapsedMins % 60) . "m"
+            ],
+            "validation" => [
+                "is_validated" => $isValidated,
+                "vendor_scan_time" => $session['vendor_scan_time'],
+                "remaining_grace_minutes" => $remainingGraceMins,
+                "is_grace_active" => ($remainingGraceMins > 0),
+                "subsidy_value" => 30.00
+            ]
+        ]);
+    } catch (PDOException $e) {
+        echo json_encode(["success" => false, "error" => "Database error: " . $e->getMessage()]);
     }
     exit;
 }
+
+// --- ROUTE: Vendor Digital Validation (Apply 20-min Exemption) ---
+if ($method === 'POST' && $action === 'vendor_validate') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $inputVal = trim($data['token_or_plate'] ?? $data['qr_token'] ?? $data['plate_number'] ?? '');
+    $tenantName = trim($data['tenant_name'] ?? "Joey's Restaurant");
+    $staffName = trim($data['staff_name'] ?? "Counter Staff");
+    $receiptNo = trim($data['receipt_number'] ?? "RCP-" . rand(10000, 99999));
+
+    if (empty($inputVal)) {
+        echo json_encode(["success" => false, "error" => "Customer QR Token or License Plate is required."]);
+        exit;
+    }
+
+    try {
+        $cleanPlate = strtoupper(str_replace([' ', '-'], '', $inputVal));
+        $stmt = $db->prepare("
+            SELECT ps.session_id, ps.entry_time, ps.payment_status, ps.location_status,
+                   ps.entry_token, ps.vendor_scan_time,
+                   ve.plate_number, sl.slot_number, sl.zone
+            FROM parking_sessions ps
+            JOIN vehicles ve ON ps.vehicle_id = ve.vehicle_id
+            LEFT JOIN parking_slots sl ON ps.slot_id = sl.slot_id
+            WHERE (ps.entry_token = ? OR UPPER(REPLACE(REPLACE(ve.plate_number, ' ', ''), '-', '')) = ?)
+              AND ps.location_status = 'PARKED'
+            ORDER BY ps.session_id DESC LIMIT 1
+        ");
+        $stmt->execute([$inputVal, $cleanPlate]);
+        $session = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$session) {
+            echo json_encode([
+                "success" => false, 
+                "error" => "No active vehicle session found for '{$inputVal}'. The vehicle may have already departed."
+            ]);
+            exit;
+        }
+
+        // Apply vendor validation timestamp and update status
+        $up = $db->prepare("
+            UPDATE parking_sessions 
+            SET payment_status = 'PAID_VENDOR', vendor_scan_time = CURRENT_TIMESTAMP 
+            WHERE session_id = ?
+        ");
+        $up->execute([$session['session_id']]);
+
+        // Write to audit trail
+        $audit = $db->prepare("
+            INSERT INTO audit_logs (admin_email, action_type, target_entity, target_id, details)
+            VALUES (?, 'VENDOR_VALIDATION', 'parking_session', ?, ?)
+        ");
+        $adminTag = "{$tenantName} ({$staffName})";
+        $auditDetails = "Commercial dining voucher validated for vehicle {$session['plate_number']} (Slot {$session['slot_number']}, Zone {$session['zone']}). Receipt Ref: {$receiptNo}. 20-min departure window active. Base tariff (₱30) subsidized.";
+        $audit->execute([$adminTag, $session['session_id'], $auditDetails]);
+
+        echo json_encode([
+            "success" => true,
+            "session_id" => $session['session_id'],
+            "plate_number" => $session['plate_number'],
+            "slot_number" => $session['slot_number'],
+            "zone" => $session['zone'],
+            "tenant_name" => $tenantName,
+            "staff_name" => $staffName,
+            "receipt_number" => $receiptNo,
+            "grace_minutes" => 20,
+            "subsidy_amount" => 30.00,
+            "timestamp" => date('Y-m-d H:i:s'),
+            "message" => "Validation approved! 20-minute departure window activated for vehicle {$session['plate_number']}. Base parking tariff (₱30.00) subsidized."
+        ]);
+    } catch (PDOException $e) {
+        echo json_encode(["success" => false, "error" => "Database error: " . $e->getMessage()]);
+    }
+    exit;
+}
+
+// --- ROUTE: Commercial Tenant Recent Validations & Stats ---
+if ($method === 'GET' && $action === 'vendor_recent_validations') {
+    try {
+        $stmt = $db->query("
+            SELECT ps.session_id, ps.entry_time, ps.vendor_scan_time, ps.exit_time,
+                   ps.payment_status, ps.location_status,
+                   ve.plate_number, sl.slot_number, sl.zone,
+                   (SELECT details FROM audit_logs WHERE target_id = ps.session_id AND action_type = 'VENDOR_VALIDATION' ORDER BY log_id DESC LIMIT 1) as audit_detail,
+                   (SELECT admin_email FROM audit_logs WHERE target_id = ps.session_id AND action_type = 'VENDOR_VALIDATION' ORDER BY log_id DESC LIMIT 1) as staff_info
+            FROM parking_sessions ps
+            JOIN vehicles ve ON ps.vehicle_id = ve.vehicle_id
+            LEFT JOIN parking_slots sl ON ps.slot_id = sl.slot_id
+            WHERE ps.vendor_scan_time IS NOT NULL
+            ORDER BY ps.vendor_scan_time DESC
+            LIMIT 25
+        ");
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $now = time();
+        $activeGraceCount = 0;
+        $formatted = [];
+
+        foreach ($rows as $r) {
+            $scanTs = strtotime($r['vendor_scan_time']);
+            $elapsedMins = max(0, (int)round(($now - $scanTs) / 60));
+            $remainingGrace = max(0, 20 - $elapsedMins);
+            $isGraceActive = ($remainingGrace > 0 && $r['location_status'] === 'PARKED');
+
+            if ($isGraceActive) {
+                $activeGraceCount++;
+            }
+
+            // Extract receipt number from audit detail if present
+            $receipt = "N/A";
+            if (!empty($r['audit_detail']) && preg_match('/Receipt Ref:\s*([A-Za-z0-9\-]+)/', $r['audit_detail'], $m)) {
+                $receipt = $m[1];
+            }
+
+            $formatted[] = [
+                "session_id" => $r['session_id'],
+                "plate_number" => $r['plate_number'],
+                "slot_number" => $r['slot_number'] ?? 'N/A',
+                "zone" => $r['zone'] ?? 'N/A',
+                "entry_time" => $r['entry_time'],
+                "vendor_scan_time" => $r['vendor_scan_time'],
+                "exit_time" => $r['exit_time'],
+                "location_status" => $r['location_status'],
+                "elapsed_since_scan_mins" => $elapsedMins,
+                "remaining_grace_mins" => $remainingGrace,
+                "is_grace_active" => $isGraceActive,
+                "receipt_number" => $receipt,
+                "staff_info" => $r['staff_info'] ?? "Joey's Restaurant",
+                "subsidy_amount" => 30.00
+            ];
+        }
+
+        $totalCount = count($formatted);
+        $totalSubsidy = $totalCount * 30.00;
+
+        echo json_encode([
+            "success" => true,
+            "stats" => [
+                "total_validated" => $totalCount,
+                "active_grace_windows" => $activeGraceCount,
+                "total_subsidy_php" => $totalSubsidy,
+                "standard_grace_minutes" => 20
+            ],
+            "validations" => $formatted
+        ]);
+    } catch (PDOException $e) {
+        echo json_encode(["success" => false, "error" => "Database error: " . $e->getMessage()]);
+    }
+    exit;
+}
+
+// --- ROUTE: Commercial Tenant Active Parked Vehicles (for easy selection) ---
+if ($method === 'GET' && $action === 'vendor_active_vehicles') {
+    try {
+        $stmt = $db->query("
+            SELECT ps.session_id, ps.entry_time, ps.vendor_scan_time, ps.payment_status,
+                   ps.entry_token, ve.plate_number, ve.vehicle_type, sl.slot_number, sl.zone
+            FROM parking_sessions ps
+            JOIN vehicles ve ON ps.vehicle_id = ve.vehicle_id
+            JOIN parking_slots sl ON ps.slot_id = sl.slot_id
+            WHERE ps.location_status = 'PARKED'
+            ORDER BY ps.entry_time DESC
+        ");
+        $vehicles = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $now = time();
+        $result = [];
+        foreach ($vehicles as $v) {
+            $entryTs = strtotime($v['entry_time']);
+            $stayMins = max(0, (int)round(($now - $entryTs) / 60));
+            $isValidated = !empty($v['vendor_scan_time']);
+            
+            $remainingGrace = 0;
+            if ($isValidated) {
+                $scanTs = strtotime($v['vendor_scan_time']);
+                $elapsedSinceScan = max(0, (int)round(($now - $scanTs) / 60));
+                $remainingGrace = max(0, 20 - $elapsedSinceScan);
+            }
+
+            $result[] = [
+                "session_id" => $v['session_id'],
+                "plate_number" => $v['plate_number'],
+                "slot_number" => $v['slot_number'],
+                "zone" => $v['zone'],
+                "entry_token" => $v['entry_token'],
+                "stay_minutes" => $stayMins,
+                "is_validated" => $isValidated,
+                "remaining_grace" => $remainingGrace
+            ];
+        }
+
+        echo json_encode(["success" => true, "vehicles" => $result]);
+    } catch (PDOException $e) {
+        echo json_encode(["success" => false, "error" => "Database error: " . $e->getMessage()]);
+    }
+    exit;
+}
+
 
 // --- ROUTE: Exit Billing & State Finalization ---
 if ($method === 'POST' && $action === 'checkout') {
