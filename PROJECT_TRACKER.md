@@ -150,6 +150,20 @@ CAPSTONE/
 
 ---
 
+### F. Computer Vision, Sectional Occupancy & Model Training (`computer_vision/`)
+| Component / Pipeline | Description | Status | Target Deliverable / Proposal Alignment |
+| :--- | :--- | :---: | :--- |
+| **Sectional Occupancy Detection Model** | Custom YOLOv8 model trained on overhead/angled lot video footage to detect parked vehicles in delimited slots | `PENDING MODEL TRAINING` | Section 5.5.6 Spatial Allocation & Overhead Telemetry |
+| **Sectional Occupancy Rules Engine** | Business logic enforcing Rule 1 (transient fill B–E), Rule 2 (Zone A VIP/PWD priority), and Rule 3 (Zone F overflow threshold) | `PENDING IMPLEMENTATION` | Page 87, Section 5.5.6 Spatial Allocations |
+| **Automated Infraction Enforcement** | Real-time optical verification detecting unauthorized parking, slot mismatches, and overstays; auto-logs fines into `violations` | `PENDING IMPLEMENTATION` | Section 5.4.1 Compliance & Enforcement Matrix |
+| **Entrance ALPR Accuracy Optimization** | Preprocessing, CLAHE contrast adjustment, multi-frame confidence aggregation, and glare reduction for entrance camera | `OPTIMIZATION REQUIRED` | Section 5.3 Gatehouse Optical Recognition |
+| **Exit ALPR Optical & OCR Tuning** | Fine-tuning plate localization, OCR character ambiguity resolution (0/O, 1/I, 8/B), regex validation, and angle perspective correction | `OPTIMIZATION REQUIRED` | Section 5.3 & Cashier Exit Gate Clearance |
+| **Scenario 3 Gate Entrance Simulation** | Script simulating vehicle approach, OCR capture, slot assignment, and barrier trigger | `COMPLETED (CROSS-PLATFORM)` | Core Demonstration Pipeline |
+| **Scenario 4 Exit Verification Simulation** | Script simulating exit plate detection, database clearance check, and barrier release | `COMPLETED (CROSS-PLATFORM)` | Core Demonstration Pipeline |
+| **Scenario 5 Closed-Loop Cycle Simulation**| Integrated end-to-end simulation covering entry, parking, cashier payment, and ALPR exit release | `READY FOR TESTING` | Core Demonstration Pipeline |
+
+---
+
 ## 3. Upcoming Milestones & Roadmap
 
 ```mermaid
@@ -157,28 +171,50 @@ gantt
     title Capstone Development Roadmap
     dateFormat  YYYY-MM-DD
     section Phase 1: Core Foundation
-    Database Schema & Migrations       :done, p1, 2026-10-01, 2d
-    Admin Business Analytics & Heatmap :done, p2, 2026-10-01, 2d
-    Purge Emojis & Enterprise Styling  :done, p3, 2026-10-02, 1d
-    Modular Directory Housekeeping     :done, p4, 2026-10-02, 1d
+    Database Schema & Migrations             :done, p1, 2026-10-01, 2d
+    Admin Business Analytics & Heatmap       :done, p2, 2026-10-01, 2d
+    Purge Emojis & Enterprise Styling        :done, p3, 2026-10-02, 1d
+    Modular Directory Housekeeping           :done, p4, 2026-10-02, 1d
     section Phase 2: Missing Portals
-    Attendant Cashier POS (Priority ALPR + QR) :done, p5, 2026-10-02, 1d
-    Commercial Tenant Validator (Page 3)   :active, p6, 2026-10-03, 2d
-    section Phase 3: Hardware & Verification
-    VIP Zone Alignment (Proposal Rule 2)   :p7, 2026-10-04, 1d
-    End-to-End Simulation & Defense Prep   :p8, 2026-10-05, 2d
+    Attendant Cashier POS (Priority ALPR+QR) :done, p5, 2026-10-02, 1d
+    Commercial Tenant Validator (Page 3)     :active, p6, 2026-10-05, 2d
+    VIP Zone Alignment (Proposal Rule 2)     :p7, 2026-10-06, 1d
+    section Phase 3: CV Model Training & Rules
+    Overhead Slot Dataset Labeling & Augment :p8, 2026-10-07, 3d
+    Train YOLOv8 Sectional Occupancy Model   :p9, 2026-10-09, 3d
+    Implement Sectional Rules & Enforcement  :p10, 2026-10-11, 2d
+    section Phase 4: ALPR Accuracy & Hardware
+    Entrance/Exit ALPR Accuracy Improvements :p11, 2026-10-12, 2d
+    End-to-End Simulation & Defense Prep     :p12, 2026-10-14, 2d
 ```
 
 ### High Priority Next Steps
-1. **Tenant Commercial Validation Portal (`frontend/vendor.html`)**:
-   - Clean scanner interface for partner tenant staff (e.g. Joey's Restaurant).
-   - Enter entry token to apply 20-minute `PAID_VENDOR` exemption before customer departs.
+
+1. **Commercial Tenant Validation Portal (`frontend/vendor.html`)**:
+   - Web interface for partner commercial tenants (e.g. Joey's Restaurant staff).
+   - Enter/scan customer entry token to grant 20-minute `PAID_VENDOR` exemption before leaving.
+   - Finalize backend `vendor_validate` endpoint.
 2. **Align Customer VIP Zone with Proposal Rule 2**:
-   - Proposal Section 5.5.6 p. 87 designates **Zone A** for PWD/VIP priority (Zones B–E for standard bookings). Update `reserve.html` options and validation rules accordingly upon user confirmation.
+   - Proposal Section 5.5.6 (p. 87) designates **Zone A** for PWD/VIP priority (closest to facility access).
+   - Harmonize `frontend/reserve.html`, `frontend/dashboard.html`, and `backend/api/endpoints.php` so Zone A is the official VIP/PWD zone.
+3. **Train Custom YOLOv8 Sectional Occupancy Model**:
+   - Annotate parking slot bounding boxes from overhead camera test footage.
+   - Train custom YOLOv8 model to accurately predict vacant vs occupied status for all 78 physical slots across Zones A–F.
+4. **Implement Sectional Occupancy Rules & Automated Violation Enforcement**:
+   - Implement Rule 1 (Transient fills Zones B–E first).
+   - Implement Rule 2 (Zone A restricted to validated VIP/PWD drivers).
+   - Implement Rule 3 (Zone F overflow activated only when primary zones reach capacity).
+   - Automated enforcement logic: when vehicle parks in unauthorized zone or overstays, automatically write fine to `violations` table to be settled at cashier.
+5. **Optimize Computer Vision Accuracy for Entrance & Exit Cameras**:
+   - **Entrance Camera**: Dynamic exposure/lighting compensation (daylight glare vs night shadow), plate localization fine-tuning.
+   - **Exit Camera**: Enhanced OCR post-processing, character ambiguity correction (0 vs O, 1 vs I, 8 vs B), Philippine plate regex validation (`[A-Z]{3}\s?[0-9]{3,4}`), and multi-frame vote aggregation.
+6. **End-to-End System Simulation & Defense Dry-Run**:
+   - Run `computer_vision/scenario5.py` against active SQLite database and web UI to demonstrate closed-loop real-time integration.
 
 ---
 
 ## 4. Revision History
+* **2026-10-05 (Update 4)**: Added Computer Vision & Model Training matrix (Section 2.F) tracking overhead sectional occupancy model training, Sectional Occupancy Rules & Enforcement logic, and Entrance/Exit ALPR accuracy improvement tracks. Updated roadmap and milestone Gantt chart.
 * **2026-10-02 (Update 3)**: Synchronized and pushed complete codebase to remote branch `TC-Fortune-patch-2` (Commit: `4ac33c3`). Working tree verified clean.
 * **2026-10-02 (Update 2)**: Implemented Attendant Cashier Portal (`frontend/cashier.html`). Built complete POS billing workflow, fee calculation, tender change calculator, Priority 1 Automated ALPR camera exit clearance, Priority 2 QR scanner fallback, visual barrier boom relay animation, and audit logging.
 * **2026-10-02 (Update 1)**: Initialized comprehensive project tracker. Completed Admin BI Analytics, Sectional Heatmap, Influx Distribution, Violations Management, and Audit Trail. Cleaned all emojis across UI and Python code. Restructured project into `frontend/`, `backend/`, `computer_vision/`, and `docs/`.
