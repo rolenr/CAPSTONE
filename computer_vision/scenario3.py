@@ -9,14 +9,34 @@ from collections import Counter, defaultdict
 from ultralytics import YOLO
 import os
 
+# =====================================================================
+# VIDEO SOURCE CONFIGURATION
+# =====================================================================
+# True  -> use a live camera (webcam / USB cam / IP cam)
+# False -> use the pre-recorded mp4 file (handy for testing)
+USE_LIVE_CAMERA = True
+
+# 0 = default webcam, 1 = second camera, 2 = third, etc.
+# For an IP / phone camera, use a stream URL string instead, e.g.:
+#   CAMERA_SOURCE = "http://192.168.1.50:8080/video"
+CAMERA_SOURCE = 0
+
+# Live feeds never end, so give up after this many seconds with no confirmed plate
+# and fall back to the manual override.
+LIVE_TIMEOUT_SEC = 60
+
+# Run OCR only on every Nth frame (reduces lag on live feeds, especially on CPU)
+OCR_EVERY_N_FRAMES = 3
+
+# Set to True if you have an NVIDIA GPU with CUDA set up
+USE_GPU = False
+
 # Dynamic path resolution (cross-platform compatible with fallback)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.dirname(SCRIPT_DIR)
 DB_PATH = os.path.join(BASE_DIR, "backend", "database", "parking.db")
 if not os.path.exists(DB_PATH):
-    DB_PATH = os.path.join(BASE_DIR, "parking.db")
-    if not os.path.exists(DB_PATH):
-        DB_PATH = r"D:\xampp\htdocs\CAPSTONE\parking.db"
+    DB_PATH = r"C:\xampp\htdocs\campstone\CAPSTONE\backend\database\parking.db"
 
 def init_db():
     conn = sqlite3.connect(DB_PATH, timeout=10)
@@ -80,20 +100,67 @@ def init_db():
     conn.commit()
     conn.close()
 
-def process_video_feed(video_path, model_path, window_name, feed_type="entrance"):
-    print(f"[VISION PIPELINE]: Initializing YOLOv8 and EasyOCR on {video_path}...")
+def open_capture(source):
+    """Opens a video file path, a camera index, or an IP camera URL."""
+    is_camera_index = isinstance(source, int)
+
+    # CAP_DSHOW avoids slow startup / black frames on Windows webcams
+    if is_camera_index and os.name == "nt":
+        cap = cv2.VideoCapture(source, cv2.CAP_DSHOW)
+    else:
+        cap = cv2.VideoCapture(source)
+
+    if is_camera_index and cap.isOpened():
+        # Request a resolution (the camera may ignore this)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        # Keep the buffer small so we always see the latest frame
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    return cap
+
+def process_video_feed(source, model_path, window_name, feed_type="entrance",
+                       is_live=False, timeout_sec=LIVE_TIMEOUT_SEC):
+    print(f"[VISION PIPELINE]: Initializing YOLOv8 and EasyOCR on source: {source}...")
     model = YOLO(model_path)
-    reader = easyocr.Reader(['en'])
-    cap = cv2.VideoCapture(video_path)
+    reader = easyocr.Reader(['en'], gpu=USE_GPU)
+    cap = open_capture(source)
+
+    if not cap.isOpened():
+        print(f"[ERROR]: Could not open video/camera source: {source}")
+        print("         Check the camera index, or whether another app is using the camera.")
+        return None
 
     previous_positions = {}
     approaching_vehicles = set()
     plate_history = defaultdict(list)
 
+    frame_count = 0
+    failed_reads = 0
+    MAX_FAILED_READS = 30  # tolerate brief camera hiccups on live feeds
+    start_time = time.time()
+
+    if is_live:
+        print(f"[VISION PIPELINE]: Live mode. Press 'q' to cancel. Timeout in {timeout_sec}s.")
+
     while cap.isOpened():
+        # Live feeds never end, so enforce a timeout to trigger the manual fallback
+        if is_live and (time.time() - start_time) > timeout_sec:
+            print("[VISION PIPELINE]: Timeout reached with no confirmed plate.")
+            break
+
         ret, frame = cap.read()
         if not ret:
-            break
+            if is_live:
+                failed_reads += 1
+                if failed_reads >= MAX_FAILED_READS:
+                    print("[ERROR]: Lost connection to camera.")
+                    break
+                time.sleep(0.05)
+                continue
+            break  # end of video file
+        failed_reads = 0
+        frame_count += 1
 
         height, width, _ = frame.shape
         
@@ -108,7 +175,10 @@ def process_video_feed(video_path, model_path, window_name, feed_type="entrance"
             
         cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
 
-        results = model.track(frame, persist=True, tracker='bytetrack.yaml', conf=0.35, verbose=False, device="cpu")
+        results = model.track(
+            frame, persist=True, tracker='bytetrack.yaml', conf=0.35,
+            verbose=False, device=0 if USE_GPU else "cpu"
+        )
 
         for r in results:
             boxes = r.boxes
@@ -128,6 +198,10 @@ def process_video_feed(video_path, model_path, window_name, feed_type="entrance"
                         approaching_vehicles.add(track_id)
 
                     previous_positions[track_id] = cy
+
+                    # Only run the (expensive) OCR on every Nth frame
+                    if frame_count % OCR_EVERY_N_FRAMES != 0:
+                        continue
 
                     if (xmin <= cx <= xmax and ymin <= cy <= ymax) and (track_id in approaching_vehicles):
                         plate_crop = frame[y1:y2, x1:x2]
@@ -157,7 +231,8 @@ def process_video_feed(video_path, model_path, window_name, feed_type="entrance"
                                             return confirmed_plate
 
         cv2.imshow(window_name, frame)
-        if cv2.waitKey(25) & 0xFF == ord('q'):
+        # Short wait for live feeds; 25ms paces file playback
+        if cv2.waitKey(1 if is_live else 25) & 0xFF == ord('q'):
             break
 
     cap.release()
@@ -201,17 +276,24 @@ def run_scenario_3():
     
     init_db()
     
-    # Model weights & video with dynamic resolution and fallback
+    # Model weights with dynamic resolution and fallback
     model_weights = os.path.join(SCRIPT_DIR, "entrance-feed-best1.pt")
     if not os.path.exists(model_weights):
-        model_weights = r"R:\Capstone\entrance-feed-best1.pt"
+        model_weights = r"C:\xampp\htdocs\campstone\CAPSTONE\computer_vision\entrance-feed-best1.pt"
     
-    video_dir = os.path.join(SCRIPT_DIR, "simulation_videos")
-    entrance_video = os.path.join(video_dir, "Entry Fortuner - Day (walk-in).mp4")
-    if not os.path.exists(entrance_video):
-        entrance_video = r"R:\Capstone\fortunerEntry.mp4"
+    # Choose live camera or pre-recorded video
+    if USE_LIVE_CAMERA:
+        source = CAMERA_SOURCE
+    else:
+        video_dir = os.path.join(SCRIPT_DIR, "simulation_videos")
+        source = os.path.join(video_dir, "Entry Fortuner - Day (walk-in).mp4")
+        if not os.path.exists(source):
+            source = r"R:\Capstone\fortunerEntry.mp4"
     
-    entry_plate = process_video_feed(entrance_video, model_weights, 'Scenario 3: Entrance Feed', feed_type="entrance")
+    entry_plate = process_video_feed(
+        source, model_weights, 'Scenario 3: Entrance Feed',
+        feed_type="entrance", is_live=USE_LIVE_CAMERA
+    )
     
     conn = sqlite3.connect(DB_PATH, timeout=10)
     cursor = conn.cursor()
