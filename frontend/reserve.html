@@ -5,31 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Reserve Slot - Parking Ltd.</title>
     <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/layout.css">
 </head>
 <body data-page="reserve">
 
-<header class="app-header">
-    <div class="header-inner">
-        <a href="dashboard.html" class="brand-wrap">
-            <div class="brand-icon">P</div>
-            <div class="brand-title">Parking Ltd.</div>
-            <span class="brand-badge">Customer Portal</span>
-        </a>
-
-        <nav class="main-nav">
-            <a href="dashboard.html">Live Map &amp; Wallet</a>
-            <a href="reserve.html" class="active">Reserve Slot</a>
-            <a href="violations.html">Violations Tracker</a>
-        </nav>
-
-        <div class="header-meta">
-            <div class="user-profile-chip">
-                <span id="userPlateDisplay" style="font-family: var(--font-mono); font-weight: 600;">Driver</span>
-            </div>
-            <a href="#" id="logoutBtn" class="btn-signout">Sign Out</a>
-        </div>
-    </div>
-</header>
+<header class="app-header" data-app-header></header>
 
 <div class="container">
 
@@ -85,6 +65,18 @@
         <p class="section-description">Select your destination zone and stay duration. Slots are dynamically allocated based on capacity rules.</p>
 
         <form id="reservationForm">
+            <div class="admin-booking-controls" data-role-only="ADMIN" hidden>
+                <div class="form-group">
+                    <label for="bookingPlate">Vehicle plate to reserve for</label>
+                    <input type="text" id="bookingPlate" maxlength="20" pattern="[A-Za-z0-9][A-Za-z0-9 -]{1,19}" placeholder="e.g. ABC-1234" aria-describedby="bookingPlateHelp">
+                    <small class="field-help" id="bookingPlateHelp">Book for your linked vehicle or enter another vehicle's plate.</small>
+                </div>
+                <label class="checkbox-label" for="replaceExistingReservation">
+                    <input type="checkbox" id="replaceExistingReservation">
+                    Replace this vehicle's active reservation
+                </label>
+                <small class="field-help">The existing booking is kept if the replacement cannot be completed. Replacements are recorded in the audit trail.</small>
+            </div>
             <div class="form-group">
                 <label for="zoneSelect">Destination Zone</label>
                 <select id="zoneSelect" required>
@@ -126,16 +118,9 @@
 
 </div>
 
-<footer class="app-footer">
-    Parking Ltd. &bull; Automated Facility Management System &bull; Secure Gatehouse Operations
-</footer>
+<footer class="app-footer" data-app-footer></footer>
 
-<script>
-    const userPlate = sessionStorage.getItem('licensePlate');
-    if (userPlate && document.getElementById('userPlateDisplay')) {
-        document.getElementById('userPlateDisplay').textContent = userPlate;
-    }
-</script>
+<script src="js/layout.js"></script>
 <script src="js/main.js"></script>
 </body>
 </html>

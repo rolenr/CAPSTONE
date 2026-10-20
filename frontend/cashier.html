@@ -5,43 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cashier POS &amp; Exit Gatehouse - Parking Ltd.</title>
     <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/layout.css">
 </head>
 <body data-page="cashier">
 
 <!-- Top Navigation Bar -->
-<header class="app-header">
-    <div class="header-inner">
-        <a href="cashier.html" class="brand-wrap">
-            <div class="brand-icon">P</div>
-            <div class="brand-title">Parking Ltd.</div>
-            <span class="brand-badge">Gatehouse POS</span>
-        </a>
-
-        <nav class="main-nav">
-            <a href="cashier.html" class="active">Cashier POS</a>
-            <a href="vendor.html">Tenant Validator</a>
-            <a href="admin.html">Administration</a>
-            <a href="dashboard.html">Live Map</a>
-            <a href="violations.html">Violations Tracker</a>
-        </nav>
-
-        <div class="header-meta">
-            <div class="system-status-indicator">
-                <span class="status-indicator-dot"></span>
-                <span>Gate 1 Exit Camera Active</span>
-            </div>
-            <div class="user-profile-chip">
-                <span>Staff ID:</span>
-                <select id="staffIdSelect" style="padding: 1px 4px; font-size: 0.72rem; width: auto; background: var(--slate-900); color: var(--white); border: 1px solid var(--slate-700);">
-                    <option value="ATT-01">ATT-01 (Lane 1)</option>
-                    <option value="ATT-02">ATT-02 (Lane 2)</option>
-                    <option value="ATT-04" selected>ATT-04 (Lead)</option>
-                </select>
-            </div>
-            <a href="login.html" class="btn-signout" id="logoutBtn">Sign Out</a>
-        </div>
-    </div>
-</header>
+<header class="app-header" data-app-header></header>
 
 <div class="container" style="max-width: 1380px;">
 
@@ -54,7 +23,7 @@
         <div class="page-title-actions">
             <div class="auto-refresh-pill">
                 <span class="status-indicator-dot"></span>
-                <span>Exit Lane 1 Online</span>
+                <span>Cashier workspace</span>
             </div>
         </div>
     </div>
@@ -83,9 +52,9 @@
             <!-- Lookup Form -->
             <form id="cashierLookupForm" style="margin-bottom: 1rem;">
                 <label for="lookupQuery">Scan Entry Token (QR) or License Plate</label>
-                <div style="display: flex; gap: 6px;">
+                <div class="form-row">
                     <input type="text" id="lookupQuery" placeholder="e.g. GAB1234 or QR_ACT_07" required style="font-family: var(--font-mono); font-weight: 600; text-transform: uppercase;">
-                    <button type="submit" class="btn-primary" style="width: auto; padding: 0.55rem 1.25rem; white-space: nowrap;">Query Stay</button>
+                    <button type="submit" class="btn btn-primary" style="width: auto; padding: 0.55rem 1.25rem; white-space: nowrap;">Query Stay</button>
                 </div>
             </form>
 
@@ -231,7 +200,7 @@
                     <div class="alpr-conf-meter">OCR Confidence: <strong id="alprConfScore" style="color: #60a5fa;">—</strong></div>
                 </div>
 
-                <button type="button" id="triggerAlprBtn" class="btn-primary" style="width: 100%; padding: 0.65rem; font-weight: 600;">
+                <button type="button" id="triggerAlprBtn" class="btn btn-primary" style="width: 100%; padding: 0.65rem; font-weight: 600;">
                     Scan Approaching Plate (ALPR Priority)
                 </button>
             </div>
@@ -246,9 +215,9 @@
                     Use strictly if camera fails to read the license plate due to weather, obstruction, or unreadable digits.
                 </p>
 
-                <div style="display: flex; gap: 6px;">
+                <div class="form-row">
                     <input type="text" id="qrFallbackInput" placeholder="Scan customer QR token or enter Session ID" style="font-family: var(--font-mono); font-size: 0.78rem;">
-                    <button type="button" id="triggerQrFallbackBtn" class="btn-outline" style="width: auto; padding: 0.5rem 1rem; white-space: nowrap; font-weight: 600;">
+                    <button type="button" id="triggerQrFallbackBtn" class="btn btn-outline" style="width: auto; padding: 0.5rem 1rem; white-space: nowrap; font-weight: 600;">
                         Validate QR
                     </button>
                 </div>
@@ -257,7 +226,7 @@
             <!-- Emergency Manual Barrier Toggle -->
             <div style="margin-top: 1rem; padding-top: 8px; border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
                 <span style="font-size: 0.72rem; color: var(--text-muted);">Emergency Bypass Relay:</span>
-                <button type="button" id="emergencyOverrideBtn" class="btn-sm btn-danger" style="font-size: 0.7rem;">
+                <button type="button" id="emergencyOverrideBtn" class="btn btn-sm btn-danger" style="font-size: 0.7rem;">
                     Manual Force Barrier
                 </button>
             </div>
@@ -273,7 +242,8 @@
         </div>
         <p class="section-description">Chronological record of vehicles cleared at Gate 1, highlighting the exit verification method used (ALPR Priority vs. QR Fallback).</p>
 
-        <table class="admin-table">
+        <div class="table-scroll" role="region" aria-label="Parking records" tabindex="0">
+<table class="admin-table">
             <thead>
                 <tr>
                     <th>Session ID</th>
@@ -290,14 +260,14 @@
                 <tr><td colspan="8">Loading recent exit records...</td></tr>
             </tbody>
         </table>
+</div>
     </div>
 
 </div>
 
-<footer class="app-footer">
-    Parking Ltd. Gatehouse POS &bull; Attendant Station ATT-04 &bull; Exit Lane 1 Relay Active
-</footer>
+<footer class="app-footer" data-app-footer></footer>
 
+<script src="js/layout.js"></script>
 <script src="js/main.js"></script>
 <script>
     // --- CASHIER INTERFACE CONTROLLER ---
@@ -451,7 +421,6 @@
             }
         }
 
-        const staffId = document.getElementById('staffIdSelect')?.value || 'ATT-04';
         const isLost = document.getElementById('lostTicketCheck')?.checked;
         const isSettleV = document.getElementById('settleViolationsCheck')?.checked;
 
@@ -462,7 +431,7 @@
                 body: JSON.stringify({
                     session_id: currentSession.session.session_id,
                     amount_paid: totalDue,
-                    staff_id: staffId,
+
                     lost_ticket: isLost,
                     settle_violations: isSettleV,
                     payment_method: 'CASH'
@@ -497,7 +466,6 @@
             return;
         }
 
-        const staffId = document.getElementById('staffIdSelect')?.value || 'ATT-04';
         document.getElementById('alprConfScore').textContent = 'Scanning...';
 
         try {
@@ -507,7 +475,7 @@
                 body: JSON.stringify({
                     method: 'ALPR',
                     plate_number: plate,
-                    staff_id: staffId
+
                 })
             });
             const data = await response.json();
@@ -535,7 +503,6 @@
             return;
         }
 
-        const staffId = document.getElementById('staffIdSelect')?.value || 'ATT-04';
 
         try {
             const response = await apiFetch(`${API_BASE}?action=exit_barrier_clearance`, {
@@ -544,7 +511,7 @@
                 body: JSON.stringify({
                     method: 'QR_FALLBACK',
                     token_or_session: token,
-                    staff_id: staffId
+
                 })
             });
             const data = await response.json();
