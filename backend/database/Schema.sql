@@ -13,6 +13,7 @@ CREATE TABLE accounts (
     plate_number TEXT UNIQUE NOT NULL,
     is_vip INTEGER DEFAULT 0, 
     is_admin INTEGER DEFAULT 0,
+    role TEXT NOT NULL DEFAULT 'DRIVER' CHECK (role IN ('ADMIN', 'DRIVER', 'CASHIER', 'VENDOR')),
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(plate_number) REFERENCES vehicles(plate_number)
 );

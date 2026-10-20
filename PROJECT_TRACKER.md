@@ -118,6 +118,8 @@ CAPSTONE/
 | `cashier_recent_transactions`| `GET` | `COMPLETED` | Returns recent gatehouse departures with clearance mode and amount collected |
 | `login` | `POST` | `COMPLETED` | Validates credentials against hashed passwords, returns role/plate |
 | `register` | `POST` | `COMPLETED` | Creates account with vehicle plate linkage |
+| `session` / `logout` | `GET` / `POST` | `IMPLEMENTED` | Restores the authenticated principal and CSRF token; invalidates the server session |
+| `set_account_role` | `POST` | `IMPLEMENTED` | ADMIN-only role assignment for ADMIN, DRIVER, CASHIER, and VENDOR |
 | `map` | `GET` | `COMPLETED` | Returns 78 slots with occupancy, zone, and license plate data |
 | `active_reservation` | `GET` | `COMPLETED` | Returns current active booking for a vehicle with QR payload |
 | `reserve` | `POST` | `COMPLETED` | Allocates slot, creates reservation, and marks slot occupied |
@@ -182,6 +184,19 @@ CAPSTONE/
 
 ---
 
+### H. Authentication & API Authorization
+| Component | Description | Status |
+| :--- | :--- | :---: |
+| **Server-Side Sessions** | PHP session cookie with HttpOnly, SameSite, session ID rotation at login, and idle/absolute expiration | `IMPLEMENTED` |
+| **Role-Based API Policy** | Default-deny allowlist enforcing DRIVER, CASHIER, VENDOR, and ADMIN roles for API actions | `IMPLEMENTED` |
+| **Account Ownership Checks** | Driver reservation and violation requests are bound to the account's registered plate; driver map omits plate numbers | `IMPLEMENTED` |
+| **CSRF Protection** | Authenticated POST requests require a per-session CSRF token supplied in a request header | `IMPLEMENTED` |
+| **Staff Attribution** | Admin, cashier, and vendor audit identities come from the authenticated server session | `IMPLEMENTED` |
+| **Role Administration** | Admin can assign account roles from the account directory; last-admin and self-demotion safeguards are enforced | `IMPLEMENTED` |
+| **Existing Database Upgrade** | First API request adds the role column and maps existing `is_admin` accounts to ADMIN/DRIVER without replacing records | `IMPLEMENTED` |
+
+---
+
 ## 3. Upcoming Milestones & Roadmap
 
 ```mermaid
@@ -228,6 +243,7 @@ gantt
 ---
 
 ## 4. Revision History
+* **2026-10-20 (Update 7)**: Added server-side PHP sessions, role-based authorization for API routes, CSRF validation for authenticated writes, driver plate ownership checks, server-derived audit identities, and admin role assignment. Existing databases are upgraded automatically from `is_admin` to ADMIN/DRIVER roles.
 * **2026-10-05 (Update 6)**: Overhauled frontend presentation in `frontend/vendor.html` and `frontend/css/style.css`. Harmonized layout structure with `cashier.html` and `admin.html`, eliminated badge and text overlapping, implemented unified enterprise button (`.btn`, `.btn-primary`, `.btn-secondary`), badge (`.badge`), and alert (`.alert`) systems, converted stat cards to `.kpi-card` standard, and pushed to `TC-Fortune-patch-2` (Commit: `3a45a1e`).
 * **2026-10-05 (Update 5)**: Implemented Commercial Tenant Validation Portal (`frontend/vendor.html`) with dual-mode plate/token lookup, 20-minute departure grace countdown timer, ₱30.00 base rate waiver, active parked vehicle quick-selector, merchant receipt tracking, and live audit ledger. Expanded `backend/api/endpoints.php` with `vendor_lookup`, `vendor_validate`, `vendor_recent_validations`, and `vendor_active_vehicles`. Created root backwards-compatible redirect stub `vendor.html` and added navigation links across Admin, Cashier, and Driver portals.
 * **2026-10-05 (Update 4)**: Added Computer Vision & Model Training matrix (Section 2.F) tracking overhead sectional occupancy model training, Sectional Occupancy Rules & Enforcement logic, and Entrance/Exit ALPR accuracy improvement tracks. Updated roadmap and milestone Gantt chart.

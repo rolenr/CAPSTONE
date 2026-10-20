@@ -268,6 +268,7 @@
     </footer>
 
     <!-- Tenant Portal Controller Script -->
+    <script src="js/main.js"></script>
     <script>
         (function() {
             // Adaptive API path detection (works seamlessly on direct root and /frontend/ subdir)
@@ -298,7 +299,7 @@
             // Fetch Active Parked Vehicles
             async function loadActiveVehicles() {
                 try {
-                    const res = await fetch(`${API_BASE}?action=vendor_active_vehicles`);
+                    const res = await apiFetch(`${API_BASE}?action=vendor_active_vehicles`);
                     const data = await res.json();
                     const container = document.getElementById('vendor-parked-chips');
                     const countEl = document.getElementById('active-vehicles-count');
@@ -349,7 +350,7 @@
 
                 hideAlert();
                 try {
-                    const res = await fetch(`${API_BASE}?action=vendor_lookup&query=${encodeURIComponent(query)}`);
+                    const res = await apiFetch(`${API_BASE}?action=vendor_lookup&query=${encodeURIComponent(query)}`);
                     const data = await res.json();
 
                     if (!data.success) {
@@ -471,7 +472,7 @@
                 }
 
                 try {
-                    const res = await fetch(`${API_BASE}?action=vendor_validate`, {
+                    const res = await apiFetch(`${API_BASE}?action=vendor_validate`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -511,7 +512,7 @@
             // Load Recent Validations & Stats
             async function loadRecentValidations() {
                 try {
-                    const res = await fetch(`${API_BASE}?action=vendor_recent_validations`);
+                    const res = await apiFetch(`${API_BASE}?action=vendor_recent_validations`);
                     const data = await res.json();
 
                     if (!data.success) return;

@@ -4,6 +4,18 @@ error_reporting(E_ALL);
 ini_set('display_errors', 0);
 header('Content-Type: application/json');
 
+// Authentication is backed by a server-side PHP session. The browser only holds
+// the opaque session cookie; role and ownership decisions never come from it.
+$isSecureRequest = !empty($_SERVER['HTTPS']) && strtolower((string)$_SERVER['HTTPS']) !== 'off';
+session_set_cookie_params([
+    'lifetime' => 0,
+    'path' => '/',
+    'secure' => $isSecureRequest,
+    'httponly' => true,
+    'samesite' => 'Lax'
+]);
+session_start();
+
 set_error_handler(function($errno, $errstr, $errfile, $errline) {
     echo json_encode(["error" => "PHP Error: $errstr on line $errline"]);
     exit;
@@ -23,6 +35,13 @@ try {
     }
     $db = new PDO('sqlite:' . $dbPath);
     $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+    // Upgrade older local databases on first API request without replacing data.
+    $accountColumns = array_column($db->query('PRAGMA table_info(accounts)')->fetchAll(PDO::FETCH_ASSOC), 'name');
+    if (!in_array('role', $accountColumns, true)) {
+        $db->exec("ALTER TABLE accounts ADD COLUMN role TEXT NOT NULL DEFAULT 'DRIVER'");
+        $db->exec("UPDATE accounts SET role = CASE WHEN COALESCE(is_admin, 0) = 1 THEN 'ADMIN' ELSE 'DRIVER' END");
+    }
 } catch (PDOException $e) {
     echo json_encode(["error" => "Database connection failed."]);
     exit;
@@ -31,6 +50,132 @@ try {
 // 3. Define method and action BEFORE running the IF statements
 $method = $_SERVER['REQUEST_METHOD'];
 $action = $_GET['action'] ?? '';
+
+// Default-deny API policy. Static pages are only a user interface; these checks
+// protect the data and operations even when callers bypass the browser.
+$publicActions = ['login', 'register'];
+$actionRoles = [
+    'session' => ['*'],
+    'logout' => ['*'],
+    'map' => ['DRIVER', 'ADMIN'],
+    'reserve' => ['DRIVER'],
+    'active_reservation' => ['DRIVER', 'ADMIN'],
+    'violations' => ['DRIVER', 'ADMIN'],
+    'vendor_lookup' => ['VENDOR', 'ADMIN'],
+    'vendor_validate' => ['VENDOR', 'ADMIN'],
+    'vendor_recent_validations' => ['VENDOR', 'ADMIN'],
+    'vendor_active_vehicles' => ['VENDOR', 'ADMIN'],
+    'checkout' => ['CASHIER', 'ADMIN'],
+    'admin_stats' => ['ADMIN'],
+    'admin_analytics' => ['ADMIN'],
+    'admin_reservations' => ['ADMIN'],
+    'override_reservation' => ['ADMIN'],
+    'admin_accounts' => ['ADMIN'],
+    'set_vip' => ['ADMIN'],
+    'set_account_role' => ['ADMIN'],
+    'alpr_logs' => ['ADMIN'],
+    'toggle_slot' => ['ADMIN'],
+    'admin_audit_logs' => ['ADMIN'],
+    'admin_violations_list' => ['ADMIN'],
+    'admin_resolve_violation' => ['ADMIN'],
+    'cashier_lookup' => ['CASHIER', 'ADMIN'],
+    'cashier_payment' => ['CASHIER', 'ADMIN'],
+    'exit_barrier_clearance' => ['CASHIER', 'ADMIN'],
+    'cashier_recent_transactions' => ['CASHIER', 'ADMIN']
+];
+
+if (!in_array($action, $publicActions, true)) {
+    if (!array_key_exists($action, $actionRoles)) {
+        http_response_code(404);
+        echo json_encode(['error' => 'Invalid API route requested.']);
+        exit;
+    }
+
+    $sessionUser = $_SESSION['auth_user'] ?? null;
+    if (!$sessionUser) {
+        http_response_code(401);
+        echo json_encode(['error' => 'Authentication required. Please sign in again.']);
+        exit;
+    }
+
+    $now = time();
+    if (($now - (int)($_SESSION['last_activity'] ?? 0)) > 1800 || ($now - (int)($_SESSION['authenticated_at'] ?? 0)) > 43200) {
+        $_SESSION = [];
+        session_destroy();
+        http_response_code(401);
+        echo json_encode(['error' => 'Your session expired. Please sign in again.']);
+        exit;
+    }
+
+    // Re-read the role so privilege changes take effect on the next request.
+    $identity = $db->prepare('SELECT account_id, email, plate_number, role, is_vip FROM accounts WHERE account_id = ?');
+    $identity->execute([(int)$sessionUser['account_id']]);
+    $currentIdentity = $identity->fetch(PDO::FETCH_ASSOC);
+    if (!$currentIdentity) {
+        $_SESSION = [];
+        session_destroy();
+        http_response_code(401);
+        echo json_encode(['error' => 'This account is no longer available.']);
+        exit;
+    }
+    $_SESSION['auth_user'] = [
+        'account_id' => (int)$currentIdentity['account_id'],
+        'email' => $currentIdentity['email'],
+        'plate_number' => $currentIdentity['plate_number'],
+        'role' => strtoupper($currentIdentity['role']),
+        'is_vip' => (bool)$currentIdentity['is_vip']
+    ];
+    $_SESSION['last_activity'] = $now;
+    $sessionUser = $_SESSION['auth_user'];
+
+    $requiredRoles = $actionRoles[$action];
+    if (!in_array('*', $requiredRoles, true) && !in_array($sessionUser['role'], $requiredRoles, true)) {
+        http_response_code(403);
+        echo json_encode(['error' => 'You do not have permission to perform this action.']);
+        exit;
+    }
+
+    if ($method === 'POST') {
+        $providedToken = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+        $expectedToken = $_SESSION['csrf_token'] ?? '';
+        if (!$providedToken || !$expectedToken || !hash_equals($expectedToken, $providedToken)) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Invalid or missing CSRF token. Refresh your session and try again.']);
+            exit;
+        }
+    }
+}
+
+// Values used in audit trails are taken from the authenticated session, never
+// from client-supplied admin_email or staff_id fields.
+$actorEmail = $_SESSION['auth_user']['email'] ?? '';
+
+if ($action === 'session' && $method === 'GET') {
+    echo json_encode([
+        'success' => true,
+        'user' => $_SESSION['auth_user'],
+        'csrf_token' => $_SESSION['csrf_token'] ?? ''
+    ]);
+    exit;
+}
+
+if ($action === 'logout' && $method === 'POST') {
+    $_SESSION = [];
+    if (ini_get('session.use_cookies')) {
+        $cookie = session_get_cookie_params();
+        setcookie(session_name(), '', [
+            'expires' => time() - 42000,
+            'path' => $cookie['path'],
+            'domain' => $cookie['domain'],
+            'secure' => $cookie['secure'],
+            'httponly' => $cookie['httponly'],
+            'samesite' => $cookie['samesite'] ?? 'Lax'
+        ]);
+    }
+    session_destroy();
+    echo json_encode(['success' => true]);
+    exit;
+}
 
 // --- ROUTE: Register Account ---
 if ($method === 'POST' && $action === 'register') {
@@ -51,7 +196,7 @@ if ($method === 'POST' && $action === 'register') {
         $stmt = $db->prepare("INSERT OR IGNORE INTO vehicles (plate_number) VALUES (?)");
         $stmt->execute([$plate]);
         
-        $stmt = $db->prepare("INSERT INTO accounts (email, password_hash, plate_number) VALUES (?, ?, ?)");
+        $stmt = $db->prepare("INSERT INTO accounts (email, password_hash, plate_number, role, is_admin) VALUES (?, ?, ?, 'DRIVER', 0)");
         $stmt->execute([$email, $password, $plate]);
         
         $db->commit();
@@ -76,12 +221,27 @@ if ($method === 'POST' && $action === 'login') {
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if ($user && password_verify($password, $user['password_hash'])) {
+            $role = strtoupper($user['role'] ?? ((int)($user['is_admin'] ?? 0) === 1 ? 'ADMIN' : 'DRIVER'));
+            if (!in_array($role, ['ADMIN', 'DRIVER', 'CASHIER', 'VENDOR'], true)) $role = 'DRIVER';
+            session_regenerate_id(true);
+            $_SESSION['auth_user'] = [
+                'account_id' => (int)$user['account_id'],
+                'email' => $user['email'],
+                'plate_number' => $user['plate_number'],
+                'role' => $role,
+                'is_vip' => (bool)($user['is_vip'] ?? 0)
+            ];
+            $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+            $_SESSION['authenticated_at'] = time();
+            $_SESSION['last_activity'] = time();
             echo json_encode([
                 "success" => true, 
                 "email" => $user['email'],
                 "license_plate" => $user['plate_number'],
                 "is_vip" => (bool)($user['is_vip'] ?? 0),
-                "is_admin" => (bool)($user['is_admin'] ?? 0)
+                "is_admin" => $role === 'ADMIN',
+                "role" => $role,
+                "csrf_token" => $_SESSION['csrf_token']
             ]);
         } else {
             http_response_code(401);
@@ -111,14 +271,24 @@ if ($method === 'GET' && $action === 'map') {
         ORDER BY s.zone, s.slot_number
     ");
 
-    echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
+    $slots = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    if (($_SESSION['auth_user']['role'] ?? '') !== 'ADMIN') {
+        foreach ($slots as &$slot) unset($slot['plate_number']);
+        unset($slot);
+    }
+    echo json_encode($slots);
     exit;
 }
 
 // --- ROUTE: Handle Reservation ---
 if ($method === 'POST' && $action === 'reserve') {
     $data = json_decode(file_get_contents("php://input"), true);
-    $plate = strtoupper(trim($data["plate"]));
+    $plate = strtoupper(trim($_SESSION['auth_user']['plate_number'] ?? ''));
+    if ($plate === '') {
+        http_response_code(403);
+        echo json_encode(["error" => "This driver account has no registered vehicle."]);
+        exit;
+    }
     $zone = $data["zone"];
     $days = (int)$data["days"];
     $startDate = $data["startDate"]; 
@@ -198,7 +368,9 @@ if ($method === 'POST' && $action === 'reserve') {
 
 // --- ROUTE: Check Active Reservation ---
 if ($method === 'GET' && $action === 'active_reservation') {
-    $plate = strtoupper(trim($_GET['plate'] ?? ''));
+    $plate = ($_SESSION['auth_user']['role'] ?? '') === 'ADMIN'
+        ? strtoupper(trim($_GET['plate'] ?? ''))
+        : strtoupper(trim($_SESSION['auth_user']['plate_number'] ?? ''));
 
     if (!$plate) {
         echo json_encode(["error" => "Plate is required."]);
@@ -325,8 +497,8 @@ if (($method === 'GET' || $method === 'POST') && $action === 'vendor_lookup') {
 if ($method === 'POST' && $action === 'vendor_validate') {
     $data = json_decode(file_get_contents('php://input'), true);
     $inputVal = trim($data['token_or_plate'] ?? $data['qr_token'] ?? $data['plate_number'] ?? '');
-    $tenantName = trim($data['tenant_name'] ?? "Joey's Restaurant");
-    $staffName = trim($data['staff_name'] ?? "Counter Staff");
+    $tenantName = $actorEmail;
+    $staffName = $actorEmail;
     $receiptNo = trim($data['receipt_number'] ?? "RCP-" . rand(10000, 99999));
 
     if (empty($inputVal)) {
@@ -371,7 +543,7 @@ if ($method === 'POST' && $action === 'vendor_validate') {
             INSERT INTO audit_logs (admin_email, action_type, target_entity, target_id, details)
             VALUES (?, 'VENDOR_VALIDATION', 'parking_session', ?, ?)
         ");
-        $adminTag = "{$tenantName} ({$staffName})";
+        $adminTag = $actorEmail;
         $auditDetails = "Commercial dining voucher validated for vehicle {$session['plate_number']} (Slot {$session['slot_number']}, Zone {$session['zone']}). Receipt Ref: {$receiptNo}. 20-min departure window active. Base tariff (₱30) subsidized.";
         $audit->execute([$adminTag, $session['session_id'], $auditDetails]);
 
@@ -923,7 +1095,7 @@ if ($method === 'POST' && $action === 'override_reservation') {
     $reservationId = $data['reservation_id'] ?? null;
     $newStatus = $data['status'] ?? 'CANCELLED';
     $releaseSlot = $data['release_slot'] ?? true;
-    $adminEmail = $data['admin_email'] ?? 'rorocruz@gmail.com';
+    $adminEmail = $actorEmail;
 
     if (!$reservationId) {
         echo json_encode(["error" => "Reservation ID required."]);
@@ -986,7 +1158,7 @@ if ($method === 'GET' && $action === 'admin_accounts') {
         if ($search !== '') {
             $like = "%$search%";
             $stmt = $db->prepare("
-                SELECT account_id, email, plate_number, is_vip, is_admin
+                SELECT account_id, email, plate_number, is_vip, is_admin, role
                 FROM accounts
                 WHERE email LIKE ? OR plate_number LIKE ?
                 ORDER BY email ASC
@@ -994,7 +1166,7 @@ if ($method === 'GET' && $action === 'admin_accounts') {
             $stmt->execute([$like, $like]);
         } else {
             $stmt = $db->query("
-                SELECT account_id, email, plate_number, is_vip, is_admin
+                SELECT account_id, email, plate_number, is_vip, is_admin, role
                 FROM accounts
                 ORDER BY email ASC
             ");
@@ -1007,12 +1179,68 @@ if ($method === 'GET' && $action === 'admin_accounts') {
     exit;
 }
 
+// --- ROUTE: Admin - Assign an account role ---
+if ($method === 'POST' && $action === 'set_account_role') {
+    $data = json_decode(file_get_contents('php://input'), true) ?? [];
+    $accountId = (int)($data['account_id'] ?? 0);
+    $newRole = strtoupper(trim($data['role'] ?? ''));
+    $validRoles = ['ADMIN', 'DRIVER', 'CASHIER', 'VENDOR'];
+
+    if ($accountId < 1 || !in_array($newRole, $validRoles, true)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'A valid account and role are required.']);
+        exit;
+    }
+
+    if ($accountId === (int)($_SESSION['auth_user']['account_id'] ?? 0) && $newRole !== 'ADMIN') {
+        http_response_code(409);
+        echo json_encode(['success' => false, 'error' => 'You cannot remove your own administrator role.']);
+        exit;
+    }
+
+    try {
+        $db->beginTransaction();
+        $lookup = $db->prepare('SELECT role FROM accounts WHERE account_id = ?');
+        $lookup->execute([$accountId]);
+        $existing = $lookup->fetch(PDO::FETCH_ASSOC);
+        if (!$existing) {
+            $db->rollBack();
+            http_response_code(404);
+            echo json_encode(['success' => false, 'error' => 'Account not found.']);
+            exit;
+        }
+
+        if ($existing['role'] === 'ADMIN' && $newRole !== 'ADMIN') {
+            $adminCount = (int)$db->query("SELECT COUNT(*) FROM accounts WHERE role = 'ADMIN'")->fetchColumn();
+            if ($adminCount <= 1) {
+                $db->rollBack();
+                http_response_code(409);
+                echo json_encode(['success' => false, 'error' => 'The last administrator account cannot be downgraded.']);
+                exit;
+            }
+        }
+
+        $update = $db->prepare('UPDATE accounts SET role = ?, is_admin = ? WHERE account_id = ?');
+        $update->execute([$newRole, $newRole === 'ADMIN' ? 1 : 0, $accountId]);
+        $audit = $db->prepare("INSERT INTO audit_logs (admin_email, action_type, target_entity, target_id, details) VALUES (?, 'ACCOUNT_ROLE_CHANGE', 'account', ?, ?)");
+        $audit->execute([$actorEmail, (string)$accountId, "Account role changed from {$existing['role']} to {$newRole} by {$actorEmail}"]);
+        $db->commit();
+
+        echo json_encode(['success' => true, 'role' => $newRole]);
+    } catch (PDOException $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => 'Failed to update account role.']);
+    }
+    exit;
+}
+
 // --- ROUTE: Admin - Set / Unset VIP Status ---
 if ($method === 'POST' && $action === 'set_vip') {
     $data = json_decode(file_get_contents('php://input'), true);
     $accountId = $data['account_id'] ?? null;
     $isVip = array_key_exists('is_vip', $data) ? (int)!!$data['is_vip'] : null;
-    $adminEmail = $data['admin_email'] ?? 'rorocruz@gmail.com';
+    $adminEmail = $actorEmail;
 
     if (!$accountId || $isVip === null) {
         echo json_encode(["error" => "Account ID and VIP status are required."]);
@@ -1064,7 +1292,7 @@ if ($method === 'POST' && $action === 'toggle_slot') {
     $data = json_decode(file_get_contents('php://input'), true);
     $slotId = $data['slot_id'] ?? null;
     $isOccupied = $data['is_occupied'] ?? 0;
-    $adminEmail = $data['admin_email'] ?? 'rorocruz@gmail.com';
+    $adminEmail = $actorEmail;
 
     if (!$slotId) {
         echo json_encode(["error" => "Slot ID required."]);
@@ -1156,7 +1384,7 @@ if ($method === 'POST' && $action === 'admin_resolve_violation') {
     $data = json_decode(file_get_contents('php://input'), true);
     $violationId = $data['violation_id'] ?? null;
     $newStatus = $data['status'] ?? 'PAID';
-    $adminEmail = $data['admin_email'] ?? 'rorocruz@gmail.com';
+    $adminEmail = $actorEmail;
 
     if (!$violationId) {
         echo json_encode(["error" => "Violation ID is required."]);
@@ -1182,7 +1410,9 @@ if ($method === 'POST' && $action === 'admin_resolve_violation') {
 
 // --- ROUTE: Violations Tracker (Customer Search) ---
 if ($method === 'GET' && $action === 'violations') {
-    $plate = strtoupper(trim($_GET['plate'] ?? ''));
+    $plate = ($_SESSION['auth_user']['role'] ?? '') === 'ADMIN'
+        ? strtoupper(trim($_GET['plate'] ?? ''))
+        : strtoupper(trim($_SESSION['auth_user']['plate_number'] ?? ''));
 
     $stmt = $db->prepare("
         SELECT v.violation_type, v.penalty_amount, v.status, v.issued_at
@@ -1320,7 +1550,7 @@ if ($method === 'POST' && $action === 'cashier_payment') {
     $data = json_decode(file_get_contents('php://input'), true);
     $sessionId = $data['session_id'] ?? null;
     $amountPaid = floatval($data['amount_paid'] ?? 0);
-    $staffId = trim($data['staff_id'] ?? 'ATT-01');
+    $staffId = $actorEmail;
     $lostTicket = !empty($data['lost_ticket']);
     $settleViolations = !empty($data['settle_violations']);
     $paymentMethod = $data['payment_method'] ?? 'CASH';
@@ -1388,7 +1618,7 @@ if ($method === 'POST' && $action === 'exit_barrier_clearance') {
     $clearanceMode = strtoupper(trim($data['method'] ?? 'ALPR')); // 'ALPR' (Priority) or 'QR_FALLBACK'
     $plate = strtoupper(trim($data['plate_number'] ?? ''));
     $tokenOrSession = trim($data['token_or_session'] ?? '');
-    $staffId = trim($data['staff_id'] ?? 'ATT-01');
+    $staffId = $actorEmail;
 
     try {
         $session = null;

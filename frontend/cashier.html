@@ -311,7 +311,7 @@
         if (!container) return;
 
         try {
-            const response = await fetch(`${API_BASE}?action=cashier_lookup`);
+            const response = await apiFetch(`${API_BASE}?action=cashier_lookup`);
             const data = await response.json();
 
             if (!data.success || !data.active_vehicles || data.active_vehicles.length === 0) {
@@ -351,7 +351,7 @@
         if (!query) return;
 
         try {
-            const response = await fetch(`${API_BASE}?action=cashier_lookup&query=${encodeURIComponent(query)}`);
+            const response = await apiFetch(`${API_BASE}?action=cashier_lookup&query=${encodeURIComponent(query)}`);
             const data = await response.json();
 
             if (!data.success || !data.session) {
@@ -456,7 +456,7 @@
         const isSettleV = document.getElementById('settleViolationsCheck')?.checked;
 
         try {
-            const response = await fetch(`${API_BASE}?action=cashier_payment`, {
+            const response = await apiFetch(`${API_BASE}?action=cashier_payment`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -501,7 +501,7 @@
         document.getElementById('alprConfScore').textContent = 'Scanning...';
 
         try {
-            const response = await fetch(`${API_BASE}?action=exit_barrier_clearance`, {
+            const response = await apiFetch(`${API_BASE}?action=exit_barrier_clearance`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -538,7 +538,7 @@
         const staffId = document.getElementById('staffIdSelect')?.value || 'ATT-04';
 
         try {
-            const response = await fetch(`${API_BASE}?action=exit_barrier_clearance`, {
+            const response = await apiFetch(`${API_BASE}?action=exit_barrier_clearance`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -623,7 +623,7 @@
         if (!table) return;
 
         try {
-            const response = await fetch(`${API_BASE}?action=cashier_recent_transactions`);
+            const response = await apiFetch(`${API_BASE}?action=cashier_recent_transactions`);
             const data = await response.json();
 
             if (!data.success || !data.transactions || data.transactions.length === 0) {
