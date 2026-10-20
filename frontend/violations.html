@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Violations Tracker - Parking Ltd.</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body data-page="violations">
+
+<header class="app-header">
+    <div class="header-inner">
+        <a href="dashboard.html" class="brand-wrap">
+            <div class="brand-icon">P</div>
+            <div class="brand-title">Parking Ltd.</div>
+            <span class="brand-badge">Customer Portal</span>
+        </a>
+
+        <nav class="main-nav">
+            <a href="dashboard.html">Live Map &amp; Wallet</a>
+            <a href="reserve.html">Reserve Slot</a>
+            <a href="violations.html" class="active">Violations Tracker</a>
+        </nav>
+
+        <div class="header-meta">
+            <div class="user-profile-chip">
+                <span id="userPlateDisplay" style="font-family: var(--font-mono); font-weight: 600;">Driver</span>
+            </div>
+            <a href="#" id="logoutBtn" class="btn-signout">Sign Out</a>
+        </div>
+    </div>
+</header>
+
+<div class="container">
+
+    <div class="page-title-banner">
+        <div>
+            <h1 class="page-title-main">Enforcement &amp; Infraction Tracker</h1>
+            <p class="page-title-sub">Search compliance records, obstruction citations, and penalty settlement status</p>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header-clean">
+            <h2>Vehicle Citation Lookup</h2>
+            <span class="section-tag">Compliance Search</span>
+        </div>
+        <p class="section-description">Enter your vehicle license plate to query citations recorded by optical detection sensors and gatehouse staff.</p>
+
+        <form id="violationForm">
+            <div class="form-group">
+                <label for="searchPlate">Vehicle License Plate</label>
+                <div style="display: flex; gap: 8px;">
+                    <input type="text" id="searchPlate" placeholder="e.g. ABC-1234" required style="text-transform: uppercase; font-family: var(--font-mono); font-weight: 600;">
+                    <button type="submit" class="btn-primary" style="width: auto; padding: 0.55rem 1.25rem; white-space: nowrap;">Search Records</button>
+                </div>
+            </div>
+        </form>
+
+        <div id="violationResults" style="margin-top: 1.25rem;"></div>
+    </div>
+
+</div>
+
+<footer class="app-footer">
+    Parking Ltd. &bull; Automated Facility Management System &bull; Secure Gatehouse Operations
+</footer>
+
+<script>
+    const userPlate = sessionStorage.getItem('licensePlate');
+    if (userPlate) {
+        if (document.getElementById('userPlateDisplay')) {
+            document.getElementById('userPlateDisplay').textContent = userPlate;
+        }
+        if (document.getElementById('searchPlate') && !document.getElementById('searchPlate').value) {
+            document.getElementById('searchPlate').value = userPlate;
+        }
+    }
+</script>
+<script src="js/main.js"></script>
+</body>
+</html>

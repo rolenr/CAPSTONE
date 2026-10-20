@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Commercial Tenant Validation - Parking Ltd.</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body data-page="vendor">
+
+    <!-- Top Navigation Bar -->
+    <header class="app-header">
+        <div class="header-inner">
+            <a href="vendor.html" class="brand-wrap">
+                <div class="brand-icon">P</div>
+                <div class="brand-title">Parking Ltd.</div>
+                <span class="brand-badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3);">Tenant Portal</span>
+            </a>
+
+            <nav class="main-nav">
+                <a href="vendor.html" class="active">Tenant Validator</a>
+                <a href="cashier.html">Cashier POS</a>
+                <a href="admin.html">Administration</a>
+                <a href="dashboard.html">Live Map</a>
+                <a href="violations.html">Violations Tracker</a>
+            </nav>
+
+            <div class="header-meta">
+                <div class="system-status-indicator">
+                    <span class="status-indicator-dot"></span>
+                    <span>Joey's Station Online</span>
+                </div>
+                <div class="user-profile-chip">
+                    <span>Merchant:</span>
+                    <strong style="color: var(--white); font-size: 0.72rem;">Joey's Restaurant</strong>
+                </div>
+                <a href="login.html" class="btn-signout" id="logoutBtn">Sign Out</a>
+            </div>
+        </div>
+    </header>
+
+    <div class="container" style="max-width: 1380px;">
+
+        <!-- Page Title & Actions Banner -->
+        <div class="page-title-banner">
+            <div>
+                <h1 class="page-title-main">Commercial Tenant Validation Station</h1>
+                <p class="page-title-sub">Dining customer parking fee waiver, 20-minute departure grace activation &amp; merchant ledger</p>
+            </div>
+            <div class="page-title-actions">
+                <div class="auto-refresh-pill">
+                    <span class="status-indicator-dot"></span>
+                    <span>Auto-sync Active (15s)</span>
+                </div>
+                <button type="button" id="btn-refresh-data" class="btn btn-sm btn-outline">Refresh Activity</button>
+            </div>
+        </div>
+
+        <!-- Tenant Hero Banner -->
+        <div class="vendor-hero-banner">
+            <div>
+                <span class="vendor-brand-badge">Authorized Commercial Partner</span>
+                <h2 style="font-size: 1.25rem; font-weight: 700; margin-top: 6px; color: #ffffff; letter-spacing: -0.01em;">Joey's Restaurant — Customer Parking Subsidy</h2>
+                <p style="font-size: 0.8125rem; color: var(--slate-400); margin-top: 4px; line-height: 1.4;">
+                    Validate dining patrons to apply the <strong>20-Minute Departure Grace Window</strong> and waive the <strong>₱30.00 base parking fee</strong>.
+                </p>
+            </div>
+            <div style="text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
+                <span class="badge badge-success" style="font-size: 0.75rem; padding: 4px 10px;">Contract Active: 100% Base Subsidy</span>
+                <span style="font-size: 0.72rem; color: var(--slate-400); font-family: var(--font-mono);">Station ID: VEND-JOEYS-01</span>
+            </div>
+        </div>
+
+        <!-- 4-Column KPI Cards -->
+        <div class="stat-cards-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom: 1.25rem;">
+            <div class="kpi-card">
+                <div class="kpi-title">Validations Issued Today</div>
+                <div class="kpi-value"><span id="stat-total-validations">0</span> <span class="kpi-unit">Patrons</span></div>
+                <div class="kpi-subtext">Dining customers validated</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-title">Active Departure Windows</div>
+                <div class="kpi-value" style="color: #2563eb;"><span id="stat-active-grace">0</span> <span class="kpi-unit">Active</span></div>
+                <div class="kpi-subtext">&le; 20 minutes remaining to exit</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-title">Total Value Subsidized</div>
+                <div class="kpi-value" style="color: #059669;"><span id="stat-total-subsidy">₱0.00</span></div>
+                <div class="kpi-subtext">Waived base parking tariffs</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-title">Standard Grace Allowance</div>
+                <div class="kpi-value">20 <span class="kpi-unit">Minutes</span></div>
+                <div class="kpi-subtext">Exemption window per citation rule</div>
+            </div>
+        </div>
+
+        <!-- 2-Column Validation Grid -->
+        <div class="vendor-layout-grid">
+
+            <!-- Left Column: Input Form & Quick Pick Toolbar -->
+            <div class="card">
+                <div class="card-header-clean">
+                    <h2>1. Validate Customer Parking</h2>
+                    <span class="section-tag">2D Scanner / Keyboard</span>
+                </div>
+
+                <form id="vendor-validation-form" onsubmit="return false;">
+                    <div style="margin-bottom: 1rem;">
+                        <label for="vendor-query-input" style="font-weight: 600; margin-bottom: 6px;">
+                            License Plate or Entry Token (QR)
+                        </label>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <input type="text" id="vendor-query-input" 
+                                   placeholder="e.g. ABC-1234 or QR_ACT_02" 
+                                   style="flex: 1; height: 42px; font-family: var(--font-mono); font-size: 1.15rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; padding: 0.5rem 0.85rem;"
+                                   autofocus autocomplete="off">
+                            <button type="button" class="btn btn-secondary" id="btn-lookup-session" style="height: 42px; padding: 0 1.25rem;">
+                                Query Stay
+                            </button>
+                        </div>
+                        <span style="font-size: 0.72rem; color: var(--text-muted); margin-top: 4px; display: block;">
+                            Scan handheld barcode scanner or type license plate and press Enter.
+                        </span>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 1rem;">
+                        <div>
+                            <label for="vendor-receipt-input">Dining Receipt / Invoice #</label>
+                            <input type="text" id="vendor-receipt-input" value="INV-2026-8814" style="height: 38px;">
+                        </div>
+                        <div>
+                            <label for="vendor-staff-input">Merchant Staff ID</label>
+                            <input type="text" id="vendor-staff-input" value="Counter Staff 1" style="height: 38px;">
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 0.5rem;">
+                        <button type="button" class="btn btn-primary" id="btn-submit-validation" style="flex: 1; height: 44px; font-size: 0.875rem;">
+                            Apply 20-Min Exemption (Waive ₱30)
+                        </button>
+                        <button type="button" class="btn btn-secondary" id="btn-clear-form" style="height: 44px; padding: 0 1.25rem;">
+                            Clear
+                        </button>
+                    </div>
+                </form>
+
+                <!-- Active Facility Vehicles Toolbar -->
+                <div style="border-top: 1px solid var(--border-subtle); padding-top: 1rem; margin-top: 1rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 0.72rem; text-transform: uppercase; font-weight: 600; color: var(--text-muted); letter-spacing: 0.05em;">
+                            Currently Parked in Lot (Quick Pick)
+                        </span>
+                        <span id="active-vehicles-count" style="font-size: 0.72rem; color: var(--text-muted);">-- parked</span>
+                    </div>
+                    <div class="parked-chips-container" id="vendor-parked-chips">
+                        Loading parked vehicles...
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Validation Status & Countdown Preview -->
+            <div class="card">
+                <div class="card-header-clean">
+                    <h2>2. Session Validation Status</h2>
+                    <span class="badge badge-secondary" id="session-status-badge">Awaiting Query</span>
+                </div>
+
+                <!-- Dynamic Countdown Visualizer -->
+                <div class="vendor-countdown-box" id="vendor-countdown-container" style="padding: 1.25rem; border-radius: var(--radius-lg); margin-bottom: 1rem;">
+                    <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--slate-400); font-weight: 600;" id="countdown-title">
+                        Departure Grace Window
+                    </div>
+                    <div class="vendor-countdown-time" id="countdown-timer" style="font-size: 2.75rem; font-weight: 800; margin: 6px 0; color: #38bdf8;">
+                        --:--
+                    </div>
+                    <div style="font-size: 0.75rem; color: var(--slate-300);" id="countdown-subtext">
+                        No active vehicle selected
+                    </div>
+                </div>
+
+                <!-- Itemized Invoice & Subsidy Breakdown -->
+                <div class="invoice-summary-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <div>
+                            <span style="font-size: 0.7rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">License Plate</span>
+                            <div style="margin-top: 2px;"><code id="preview-plate" style="font-size: 1.2rem; font-weight: 700; color: var(--text-primary); letter-spacing: 0.06em;">—</code></div>
+                        </div>
+                        <div style="text-align: right;">
+                            <span style="font-size: 0.7rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Assigned Slot</span>
+                            <div id="preview-slot" style="font-weight: 700; color: var(--text-primary); font-size: 0.95rem;">—</div>
+                        </div>
+                    </div>
+
+                    <div class="invoice-row">
+                        <span>Facility Entry Time</span>
+                        <strong id="preview-entry-time">—</strong>
+                    </div>
+                    <div class="invoice-row">
+                        <span>Stay Duration So Far</span>
+                        <strong id="preview-duration">—</strong>
+                    </div>
+                    <div class="invoice-row">
+                        <span>Transient Base Tariff</span>
+                        <span>₱30.00</span>
+                    </div>
+                    <div class="invoice-row">
+                        <span>Commercial Dining Subsidy</span>
+                        <span class="badge badge-success" id="preview-subsidy-tag">-₱30.00 Base Waiver</span>
+                    </div>
+                    <div class="invoice-total-row">
+                        <span class="invoice-total-label">Net Base Parking Tariff</span>
+                        <strong id="preview-net-fee" style="font-size: 1.2rem; color: var(--success-text);">₱0.00</strong>
+                    </div>
+                </div>
+
+                <!-- Alert Feedback Box -->
+                <div id="vendor-alert-box" class="alert alert-info" style="margin-top: 1rem; display: none;">
+                    <span id="vendor-alert-text">Validation information will appear here.</span>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- 3. Bottom Activity Ledger Table -->
+        <div class="card" style="margin-top: 1.25rem;">
+            <div class="card-header-clean">
+                <div>
+                    <h2>3. Commercial Validation Activity Ledger</h2>
+                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">Log of dining parking fee waivers authorized today</p>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <input type="text" id="ledger-search-input" placeholder="Filter plate or receipt..." style="width: 220px; height: 32px; padding: 4px 8px; font-size: 0.75rem;">
+                    <span class="badge badge-secondary" id="ledger-count-badge">0 records</span>
+                </div>
+            </div>
+            <div class="table-container">
+                <table class="data-table" id="validations-ledger-table">
+                    <thead>
+                        <tr>
+                            <th>Validation Time</th>
+                            <th>License Plate</th>
+                            <th>Slot &amp; Zone</th>
+                            <th>Receipt Ref</th>
+                            <th>Staff Operator</th>
+                            <th>Departure Grace Window</th>
+                            <th>Subsidy Value</th>
+                            <th>Lot Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="validations-ledger-tbody">
+                        <tr>
+                            <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 2rem;">
+                                Loading commercial validation history...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Application Footer -->
+    <footer class="app-footer">
+        <div><strong>Parking Ltd. Enterprise Operations</strong> — Automated Parking Management &amp; Transaction Ledger System</div>
+        <div style="margin-top: 4px; color: var(--text-muted);">Commercial Tenant Module &bull; Capstone Project CAP-2520-IT</div>
+    </footer>
+
+    <!-- Tenant Portal Controller Script -->
+    <script>
+        (function() {
+            // Adaptive API path detection (works seamlessly on direct root and /frontend/ subdir)
+            const API_BASE = window.location.pathname.includes('/frontend/') 
+                ? '../backend/api/endpoints.php' 
+                : 'backend/api/endpoints.php';
+
+            let currentSession = null;
+            let activeVehiclesList = [];
+            let validationsHistory = [];
+            let countdownInterval = null;
+
+            // Alert Notification Helper
+            function showAlert(message, type = 'info') {
+                const box = document.getElementById('vendor-alert-box');
+                const text = document.getElementById('vendor-alert-text');
+                if (!box || !text) return;
+                box.className = `alert alert-${type}`;
+                text.textContent = message;
+                box.style.display = 'flex';
+            }
+
+            function hideAlert() {
+                const box = document.getElementById('vendor-alert-box');
+                if (box) box.style.display = 'none';
+            }
+
+            // Fetch Active Parked Vehicles
+            async function loadActiveVehicles() {
+                try {
+                    const res = await fetch(`${API_BASE}?action=vendor_active_vehicles`);
+                    const data = await res.json();
+                    const container = document.getElementById('vendor-parked-chips');
+                    const countEl = document.getElementById('active-vehicles-count');
+
+                    if (!data.success || !data.vehicles || data.vehicles.length === 0) {
+                        if (container) container.innerHTML = '<span style="font-size: 0.75rem; color: var(--text-muted);">No parked vehicles currently in lot.</span>';
+                        if (countEl) countEl.textContent = '0 parked';
+                        activeVehiclesList = [];
+                        return;
+                    }
+
+                    activeVehiclesList = data.vehicles;
+                    if (countEl) countEl.textContent = `${activeVehiclesList.length} parked`;
+
+                    if (container) {
+                        container.innerHTML = activeVehiclesList.map(v => {
+                            const validatedClass = v.is_validated ? 'style="border-color: #059669; color: #059669;"' : '';
+                            const tagText = v.is_validated ? '[Validated]' : `Slot ${v.slot_number}`;
+                            return `
+                                <button type="button" class="parked-chip-btn" data-plate="${v.plate_number}" ${validatedClass}>
+                                    <code>${v.plate_number}</code>
+                                    <span style="font-size: 0.7rem; color: var(--text-muted);">${tagText}</span>
+                                </button>
+                            `;
+                        }).join('');
+
+                        // Attach click listeners to chips
+                        container.querySelectorAll('.parked-chip-btn').forEach(btn => {
+                            btn.addEventListener('click', () => {
+                                const plate = btn.getAttribute('data-plate');
+                                document.getElementById('vendor-query-input').value = plate;
+                                lookupSession(plate);
+                            });
+                        });
+                    }
+                } catch (err) {
+                    console.error('Failed to load active vehicles:', err);
+                }
+            }
+
+            // Lookup Vehicle Session
+            async function lookupSession(queryValue) {
+                const query = queryValue || document.getElementById('vendor-query-input').value.trim();
+                if (!query) {
+                    showAlert('Please enter a license plate number or scan an entry QR token.', 'warning');
+                    return;
+                }
+
+                hideAlert();
+                try {
+                    const res = await fetch(`${API_BASE}?action=vendor_lookup&query=${encodeURIComponent(query)}`);
+                    const data = await res.json();
+
+                    if (!data.success) {
+                        showAlert(data.error || 'Vehicle not found or already departed.', 'danger');
+                        resetPreview();
+                        return;
+                    }
+
+                    renderPreview(data);
+                } catch (err) {
+                    console.error('Lookup error:', err);
+                    showAlert('Network error while looking up session.', 'danger');
+                }
+            }
+
+            // Render Preview Card
+            function renderPreview(data) {
+                currentSession = data.session;
+                const v = data.validation;
+
+                document.getElementById('preview-plate').textContent = currentSession.plate_number;
+                document.getElementById('preview-slot').textContent = `${currentSession.slot_number} (Zone ${currentSession.zone})`;
+                document.getElementById('preview-entry-time').textContent = currentSession.entry_time;
+                document.getElementById('preview-duration').textContent = data.duration.human;
+                document.getElementById('preview-net-fee').textContent = '₱0.00';
+
+                const statusBadge = document.getElementById('session-status-badge');
+                if (v.is_validated) {
+                    statusBadge.className = 'badge badge-success';
+                    statusBadge.textContent = 'Validation Active';
+                    startCountdown(v.remaining_grace_minutes * 60);
+                    showAlert(`Vehicle ${currentSession.plate_number} was already validated at ${v.vendor_scan_time}. Exemption is active.`, 'success');
+                } else {
+                    statusBadge.className = 'badge badge-warning';
+                    statusBadge.textContent = 'Eligible for 20m Grace';
+                    resetCountdownStatic('Ready');
+                    showAlert(`Vehicle ${currentSession.plate_number} found in Slot ${currentSession.slot_number}. Click "Apply 20-Min Exemption" to authorize.`, 'info');
+                }
+            }
+
+            // Countdown Timer Handlers
+            function startCountdown(totalSeconds) {
+                if (countdownInterval) clearInterval(countdownInterval);
+
+                const timerEl = document.getElementById('countdown-timer');
+                const subtextEl = document.getElementById('countdown-subtext');
+                const titleEl = document.getElementById('countdown-title');
+                if (titleEl) titleEl.textContent = 'Remaining Departure Window';
+
+                let remaining = totalSeconds;
+
+                function tick() {
+                    if (remaining <= 0) {
+                        clearInterval(countdownInterval);
+                        if (timerEl) {
+                            timerEl.textContent = '00:00';
+                            timerEl.style.color = '#ef4444'; // red
+                        }
+                        if (subtextEl) subtextEl.textContent = '20-min grace period has expired. Standard tariff applies.';
+                        return;
+                    }
+
+                    const m = Math.floor(remaining / 60);
+                    const s = remaining % 60;
+                    if (timerEl) {
+                        timerEl.textContent = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+                        timerEl.style.color = '#38bdf8'; // blue
+                    }
+                    if (subtextEl) subtextEl.textContent = 'Vehicle authorized to exit barrier with base tariff waived.';
+                    remaining--;
+                }
+
+                tick();
+                countdownInterval = setInterval(tick, 1000);
+            }
+
+            function resetCountdownStatic(state = 'Ready') {
+                if (countdownInterval) clearInterval(countdownInterval);
+                const timerEl = document.getElementById('countdown-timer');
+                const subtextEl = document.getElementById('countdown-subtext');
+                const titleEl = document.getElementById('countdown-title');
+
+                if (titleEl) titleEl.textContent = 'Departure Grace Window';
+                if (timerEl) {
+                    timerEl.textContent = (state === 'Ready') ? '20:00' : '--:--';
+                    timerEl.style.color = (state === 'Ready') ? '#34d399' : '#38bdf8';
+                }
+                if (subtextEl) {
+                    subtextEl.textContent = (state === 'Ready') 
+                        ? '20 minutes will begin upon confirmation.' 
+                        : 'No active vehicle selected';
+                }
+            }
+
+            function resetPreview() {
+                currentSession = null;
+                document.getElementById('preview-plate').textContent = '—';
+                document.getElementById('preview-slot').textContent = '—';
+                document.getElementById('preview-entry-time').textContent = '—';
+                document.getElementById('preview-duration').textContent = '—';
+                document.getElementById('preview-net-fee').textContent = '₱0.00';
+                const statusBadge = document.getElementById('session-status-badge');
+                if (statusBadge) {
+                    statusBadge.className = 'badge badge-secondary';
+                    statusBadge.textContent = 'Awaiting Query';
+                }
+                resetCountdownStatic('Empty');
+            }
+
+            // Submit Commercial Validation
+            async function submitValidation() {
+                const query = document.getElementById('vendor-query-input').value.trim();
+                const receipt = document.getElementById('vendor-receipt-input').value.trim() || 'RCP-STORE';
+                const staff = document.getElementById('vendor-staff-input').value.trim() || 'Counter Staff 1';
+
+                if (!query) {
+                    showAlert('Please enter a license plate number or scan a QR token.', 'warning');
+                    return;
+                }
+
+                try {
+                    const res = await fetch(`${API_BASE}?action=vendor_validate`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            token_or_plate: query,
+                            tenant_name: "Joey's Restaurant",
+                            staff_name: staff,
+                            receipt_number: receipt
+                        })
+                    });
+
+                    const data = await res.json();
+                    if (!data.success) {
+                        showAlert(data.error || 'Failed to apply vendor validation.', 'danger');
+                        return;
+                    }
+
+                    showAlert(`Validation approved! 20-minute departure window activated for vehicle ${data.plate_number}. Base parking tariff (₱30.00) subsidized.`, 'success');
+                    
+                    // Start live countdown
+                    startCountdown(20 * 60);
+
+                    const statusBadge = document.getElementById('session-status-badge');
+                    if (statusBadge) {
+                        statusBadge.className = 'badge badge-success';
+                        statusBadge.textContent = 'Validation Active';
+                    }
+
+                    // Reload ledger & active vehicle chips
+                    loadRecentValidations();
+                    loadActiveVehicles();
+                } catch (err) {
+                    console.error('Validation submission error:', err);
+                    showAlert('Network error while processing validation.', 'danger');
+                }
+            }
+
+            // Load Recent Validations & Stats
+            async function loadRecentValidations() {
+                try {
+                    const res = await fetch(`${API_BASE}?action=vendor_recent_validations`);
+                    const data = await res.json();
+
+                    if (!data.success) return;
+
+                    // Update Top Stats
+                    document.getElementById('stat-total-validations').textContent = data.stats.total_validated || 0;
+                    document.getElementById('stat-active-grace').textContent = data.stats.active_grace_windows || 0;
+                    document.getElementById('stat-total-subsidy').textContent = `₱${parseFloat(data.stats.total_subsidy_php || 0).toFixed(2)}`;
+
+                    validationsHistory = data.validations || [];
+                    renderLedgerTable(validationsHistory);
+                } catch (err) {
+                    console.error('Failed to load recent validations:', err);
+                }
+            }
+
+            // Render Ledger Table
+            function renderLedgerTable(list) {
+                const tbody = document.getElementById('validations-ledger-tbody');
+                const badge = document.getElementById('ledger-count-badge');
+                if (!tbody) return;
+
+                if (badge) badge.textContent = `${list.length} records`;
+
+                if (list.length === 0) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 2rem;">
+                                No commercial validations recorded today.
+                            </td>
+                        </tr>
+                    `;
+                    return;
+                }
+
+                tbody.innerHTML = list.map(item => {
+                    let graceCell = '';
+                    if (item.location_status === 'EXITED') {
+                        graceCell = '<span class="badge badge-secondary">Vehicle Departed</span>';
+                    } else if (item.is_grace_active) {
+                        graceCell = `<span class="badge badge-success">${item.remaining_grace_mins}m left</span>`;
+                    } else {
+                        graceCell = '<span class="badge badge-danger">Expired (&gt;20m)</span>';
+                    }
+
+                    const facilityStatus = item.location_status === 'PARKED'
+                        ? '<span class="badge badge-info">Parked</span>'
+                        : '<span class="badge badge-secondary">Exited</span>';
+
+                    return `
+                        <tr>
+                            <td style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-secondary);">${item.vendor_scan_time || item.entry_time}</td>
+                            <td><strong style="font-family: var(--font-mono); font-size: 0.875rem;">${item.plate_number}</strong></td>
+                            <td>${item.slot_number} <span style="color: var(--text-muted); font-size: 0.75rem;">(Zone ${item.zone})</span></td>
+                            <td><code style="font-size: 0.75rem;">${item.receipt_number}</code></td>
+                            <td style="font-size: 0.8rem; color: var(--text-secondary);">${item.staff_info}</td>
+                            <td>${graceCell}</td>
+                            <td><strong style="color: var(--success-text);">₱${parseFloat(item.subsidy_amount).toFixed(2)}</strong></td>
+                            <td>${facilityStatus}</td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+
+            // Filter Table
+            document.getElementById('ledger-search-input')?.addEventListener('input', function(e) {
+                const term = e.target.value.toLowerCase().trim();
+                if (!term) {
+                    renderLedgerTable(validationsHistory);
+                    return;
+                }
+                const filtered = validationsHistory.filter(item => 
+                    (item.plate_number && item.plate_number.toLowerCase().includes(term)) ||
+                    (item.receipt_number && item.receipt_number.toLowerCase().includes(term)) ||
+                    (item.slot_number && item.slot_number.toLowerCase().includes(term))
+                );
+                renderLedgerTable(filtered);
+            });
+
+            // Form Handlers
+            document.getElementById('btn-lookup-session')?.addEventListener('click', () => lookupSession());
+            document.getElementById('btn-submit-validation')?.addEventListener('click', submitValidation);
+            document.getElementById('vendor-query-input')?.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    lookupSession();
+                }
+            });
+
+            document.getElementById('btn-clear-form')?.addEventListener('click', () => {
+                document.getElementById('vendor-query-input').value = '';
+                hideAlert();
+                resetPreview();
+            });
+
+            document.getElementById('btn-refresh-data')?.addEventListener('click', () => {
+                loadActiveVehicles();
+                loadRecentValidations();
+            });
+
+            // Initial Load
+            loadActiveVehicles();
+            loadRecentValidations();
+
+            // Periodic Refresh every 15s
+            setInterval(() => {
+                loadRecentValidations();
+            }, 15000);
+        })();
+    </script>
+</body>
+</html>

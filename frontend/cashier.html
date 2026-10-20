@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cashier POS &amp; Exit Gatehouse - Parking Ltd.</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body data-page="cashier">
+
+<!-- Top Navigation Bar -->
+<header class="app-header">
+    <div class="header-inner">
+        <a href="cashier.html" class="brand-wrap">
+            <div class="brand-icon">P</div>
+            <div class="brand-title">Parking Ltd.</div>
+            <span class="brand-badge">Gatehouse POS</span>
+        </a>
+
+        <nav class="main-nav">
+            <a href="cashier.html" class="active">Cashier POS</a>
+            <a href="vendor.html">Tenant Validator</a>
+            <a href="admin.html">Administration</a>
+            <a href="dashboard.html">Live Map</a>
+            <a href="violations.html">Violations Tracker</a>
+        </nav>
+
+        <div class="header-meta">
+            <div class="system-status-indicator">
+                <span class="status-indicator-dot"></span>
+                <span>Gate 1 Exit Camera Active</span>
+            </div>
+            <div class="user-profile-chip">
+                <span>Staff ID:</span>
+                <select id="staffIdSelect" style="padding: 1px 4px; font-size: 0.72rem; width: auto; background: var(--slate-900); color: var(--white); border: 1px solid var(--slate-700);">
+                    <option value="ATT-01">ATT-01 (Lane 1)</option>
+                    <option value="ATT-02">ATT-02 (Lane 2)</option>
+                    <option value="ATT-04" selected>ATT-04 (Lead)</option>
+                </select>
+            </div>
+            <a href="login.html" class="btn-signout" id="logoutBtn">Sign Out</a>
+        </div>
+    </div>
+</header>
+
+<div class="container" style="max-width: 1380px;">
+
+    <!-- Page Banner -->
+    <div class="page-title-banner">
+        <div>
+            <h1 class="page-title-main">Exit Gatehouse &amp; Cashier Operations</h1>
+            <p class="page-title-sub">Tariff settlement, automated ALPR exit clearance, and QR fallback verification</p>
+        </div>
+        <div class="page-title-actions">
+            <div class="auto-refresh-pill">
+                <span class="status-indicator-dot"></span>
+                <span>Exit Lane 1 Online</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Active Parked Vehicles Quick Select Toolbar -->
+    <div class="card" style="padding: 1rem 1.25rem; margin-bottom: 1.25rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <span style="font-size: 0.75rem; text-transform: uppercase; font-weight: 600; color: var(--text-muted); letter-spacing: 0.05em;">Currently Parked Vehicles (Click for Instant Billing)</span>
+            <span id="activeCountLabel" style="font-size: 0.72rem; color: var(--text-muted);">Loading active lot...</span>
+        </div>
+        <div id="parkedChipsContainer" class="parked-chips-container">
+            Loading parked vehicles...
+        </div>
+    </div>
+
+    <!-- 2-Column Operations Layout: Left = Settlement / Right = Barrier Clearance -->
+    <div class="cashier-layout-grid">
+
+        <!-- 1. LEFT COLUMN: PAYMENT SETTLEMENT & POS STATION -->
+        <div class="card">
+            <div class="card-header-clean">
+                <h2>1. Stay Settlement &amp; POS Station</h2>
+                <span class="section-tag">Cashier Tender</span>
+            </div>
+
+            <!-- Lookup Form -->
+            <form id="cashierLookupForm" style="margin-bottom: 1rem;">
+                <label for="lookupQuery">Scan Entry Token (QR) or License Plate</label>
+                <div style="display: flex; gap: 6px;">
+                    <input type="text" id="lookupQuery" placeholder="e.g. GAB1234 or QR_ACT_07" required style="font-family: var(--font-mono); font-weight: 600; text-transform: uppercase;">
+                    <button type="submit" class="btn-primary" style="width: auto; padding: 0.55rem 1.25rem; white-space: nowrap;">Query Stay</button>
+                </div>
+            </form>
+
+            <!-- Invoice Details Card (Populated after query) -->
+            <div id="invoiceDetailsCard" style="display: none;">
+                <div class="invoice-summary-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <div>
+                            <span style="font-size: 0.7rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">License Plate</span>
+                            <div style="margin-top: 2px;"><code id="invPlate" style="font-size: 1.2rem; font-weight: 700; color: var(--text-primary); letter-spacing: 0.06em;">—</code></div>
+                        </div>
+                        <div style="text-align: right;">
+                            <span style="font-size: 0.7rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Assigned Slot</span>
+                            <div id="invSlot" style="font-weight: 700; color: var(--text-primary); font-size: 0.95rem;">—</div>
+                        </div>
+                    </div>
+
+                    <div class="invoice-row">
+                        <span>Entry Timestamp</span>
+                        <strong id="invEntryTime">—</strong>
+                    </div>
+                    <div class="invoice-row">
+                        <span>Elapsed Stay Duration</span>
+                        <strong id="invDuration">—</strong>
+                    </div>
+                    <div class="invoice-row">
+                        <span>Transient Base Tariff (₱30 Flat)</span>
+                        <strong id="invBaseFee">₱30.00</strong>
+                    </div>
+                    <div class="invoice-row" id="invOvernightRow" style="display: none;">
+                        <span>Overnight Surcharge (Past 23:00)</span>
+                        <strong style="color: var(--warning-text);">+₱100.00</strong>
+                    </div>
+                    <div class="invoice-row" id="invGraceRow" style="display: none;">
+                        <span>Grace Period Bypass (&lt;15 mins)</span>
+                        <strong style="color: var(--success);">-₱30.00 (Free Turnaround)</strong>
+                    </div>
+                    <div class="invoice-row" id="invVendorRow" style="display: none;">
+                        <span>Commercial Tenant Credit (Joey's Restaurant)</span>
+                        <strong style="color: var(--success);">-₱30.00 (Validated)</strong>
+                    </div>
+                    <div class="invoice-row" id="invPrepaidRow" style="display: none;">
+                        <span>Advance Reservation Credit</span>
+                        <strong style="color: var(--success);">Prepaid Online (₱0.00 Due)</strong>
+                    </div>
+                    <div class="invoice-row" id="invViolationsRow" style="display: none;">
+                        <span>Outstanding Enforcement Citations</span>
+                        <strong id="invViolationsAmount" style="color: var(--danger-text);">₱0.00</strong>
+                    </div>
+
+                    <!-- Lost Ticket Penalty Toggle -->
+                    <div style="margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--slate-200); display: flex; align-items: center; justify-content: space-between;">
+                        <label for="lostTicketCheck" style="margin: 0; font-size: 0.78rem; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                            <input type="checkbox" id="lostTicketCheck" style="width: auto;">
+                            <span>Customer Lost Physical Entry Ticket (+₱100.00 Penalty)</span>
+                        </label>
+                        <span id="lostTicketFeeLabel" style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted);">+₱0.00</span>
+                    </div>
+
+                    <!-- Settle Violations Checkbox (If any exist) -->
+                    <div id="settleViolationsBox" style="display: none; margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--slate-200); align-items: center; justify-content: space-between;">
+                        <label for="settleViolationsCheck" style="margin: 0; font-size: 0.78rem; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                            <input type="checkbox" id="settleViolationsCheck" checked style="width: auto;">
+                            <span>Settle Outstanding Fines at Cashier Booth</span>
+                        </label>
+                    </div>
+
+                    <!-- Total Amount Due -->
+                    <div class="invoice-total-row">
+                        <span class="invoice-total-label">Total Amount Due</span>
+                        <div class="invoice-total-amount">₱<span id="invTotalDue">0.00</span></div>
+                    </div>
+                </div>
+
+                <!-- Cash Tender & Change Calculator -->
+                <div class="tender-calc-box">
+                    <div>
+                        <label for="cashTendered" style="font-size: 0.72rem; text-transform: uppercase;">Cash Received (₱)</label>
+                        <input type="number" id="cashTendered" placeholder="0.00" min="0" step="10" style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums;">
+                    </div>
+                    <div>
+                        <label style="font-size: 0.72rem; text-transform: uppercase;">Change Due (₱)</label>
+                        <div id="changeDueDisplay" style="font-size: 1.1rem; font-weight: 700; color: var(--success); padding: 0.55rem 0.75rem; background: var(--slate-50); border: 1px solid var(--border-color); border-radius: var(--radius-md); font-variant-numeric: tabular-nums;">
+                            ₱0.00
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Submit Payment -->
+                <button type="button" id="processPaymentBtn" class="btn-primary-block" style="padding: 0.75rem 1rem;">
+                    Accept Payment &amp; Authorize Clearance
+                </button>
+            </div>
+
+            <!-- Empty State Prompt -->
+            <div id="posEmptyState" style="text-align: center; padding: 2.5rem 1rem; color: var(--text-muted);">
+                <p style="font-size: 0.85rem;">Select an active parked vehicle above or query a license plate to generate an invoice.</p>
+            </div>
+        </div>
+
+        <!-- 2. RIGHT COLUMN: EXIT BARRIER & VERIFICATION (ALPR PRIORITY + QR FALLBACK) -->
+        <div class="card">
+            <div class="card-header-clean">
+                <h2>2. Exit Gate Barrier Station</h2>
+                <span class="section-tag">Dual Verification Gate</span>
+            </div>
+
+            <!-- Physical Barrier State Visualizer -->
+            <div class="barrier-station-box">
+                <div class="barrier-header-row">
+                    <div>
+                        <strong style="letter-spacing: 0.04em; font-size: 0.85rem;">EXIT BARRIER RELAY 01</strong>
+                        <div style="font-size: 0.7rem; color: var(--slate-400);">Hardware Actuator #RELAY-EXIT-L1</div>
+                    </div>
+                    <span id="barrierStatusPill" class="barrier-state-pill barrier-state-closed">
+                        <span style="width: 6px; height: 6px; border-radius: 50%; background: #ef4444;"></span>
+                        BARRIER CLOSED
+                    </span>
+                </div>
+
+                <!-- Animated Barrier Boom -->
+                <div class="barrier-anim-container">
+                    <div class="barrier-post"></div>
+                    <div id="barrierArm" class="barrier-arm"></div>
+                </div>
+
+                <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; color: var(--slate-300);">
+                    <span id="barrierFeedbackMsg">Vehicle must be financially cleared prior to barrier lift.</span>
+                    <span id="barrierCountdown" style="font-weight: 600; color: #86efac; display: none;">Closing in 5s...</span>
+                </div>
+            </div>
+
+            <!-- PRIORITY 1: AUTOMATED ALPR CAMERA SCAN -->
+            <div class="alpr-scan-zone">
+                <div class="alpr-scan-title">Priority 1: Automated ALPR Camera Detection</div>
+                <p style="font-size: 0.75rem; color: #cbd5e1; margin-bottom: 8px;">
+                    Standard exit flow: Overhead optical camera scans approaching vehicle plate to verify cleared payment.
+                </p>
+
+                <div style="margin: 8px 0;">
+                    <span style="font-size: 0.7rem; text-transform: uppercase; color: #94a3b8; letter-spacing: 0.05em;">Scanned Plate</span>
+                    <div><span id="alprLivePlate" class="alpr-live-plate">READY</span></div>
+                    <div class="alpr-conf-meter">OCR Confidence: <strong id="alprConfScore" style="color: #60a5fa;">—</strong></div>
+                </div>
+
+                <button type="button" id="triggerAlprBtn" class="btn-primary" style="width: 100%; padding: 0.65rem; font-weight: 600;">
+                    Scan Approaching Plate (ALPR Priority)
+                </button>
+            </div>
+
+            <!-- PRIORITY 2 / FALLBACK: QR CODE SCANNER (OPTICAL EXCEPTION) -->
+            <div class="fallback-box">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <strong style="font-size: 0.8125rem; color: var(--text-primary);">Priority 2: QR Scanner Fallback</strong>
+                    <span class="fallback-badge">Optical Exception</span>
+                </div>
+                <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 10px;">
+                    Use strictly if camera fails to read the license plate due to weather, obstruction, or unreadable digits.
+                </p>
+
+                <div style="display: flex; gap: 6px;">
+                    <input type="text" id="qrFallbackInput" placeholder="Scan customer QR token or enter Session ID" style="font-family: var(--font-mono); font-size: 0.78rem;">
+                    <button type="button" id="triggerQrFallbackBtn" class="btn-outline" style="width: auto; padding: 0.5rem 1rem; white-space: nowrap; font-weight: 600;">
+                        Validate QR
+                    </button>
+                </div>
+            </div>
+
+            <!-- Emergency Manual Barrier Toggle -->
+            <div style="margin-top: 1rem; padding-top: 8px; border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 0.72rem; color: var(--text-muted);">Emergency Bypass Relay:</span>
+                <button type="button" id="emergencyOverrideBtn" class="btn-sm btn-danger" style="font-size: 0.7rem;">
+                    Manual Force Barrier
+                </button>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- 3. RECENT GATEHOUSE SETTLEMENTS & AUDIT TABLE -->
+    <div class="card">
+        <div class="card-header-clean">
+            <h2>Recent Gatehouse Settlements &amp; Exit Clearances</h2>
+            <span class="section-tag">Exit Log</span>
+        </div>
+        <p class="section-description">Chronological record of vehicles cleared at Gate 1, highlighting the exit verification method used (ALPR Priority vs. QR Fallback).</p>
+
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th>Session ID</th>
+                    <th>Plate Number</th>
+                    <th>Allocated Slot</th>
+                    <th>Total Tariff</th>
+                    <th>Payment Status</th>
+                    <th>Verification Mode</th>
+                    <th>Staff Attendant</th>
+                    <th>Cleared At</th>
+                </tr>
+            </thead>
+            <tbody id="recentExitsTable">
+                <tr><td colspan="8">Loading recent exit records...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+</div>
+
+<footer class="app-footer">
+    Parking Ltd. Gatehouse POS &bull; Attendant Station ATT-04 &bull; Exit Lane 1 Relay Active
+</footer>
+
+<script src="js/main.js"></script>
+<script>
+    // --- CASHIER INTERFACE CONTROLLER ---
+    let currentSession = null;
+    let autoCloseTimer = null;
+
+    // Load active parked vehicles for quick selection chips
+    async function loadActiveParkedChips() {
+        const container = document.getElementById('parkedChipsContainer');
+        const countLabel = document.getElementById('activeCountLabel');
+        if (!container) return;
+
+        try {
+            const response = await fetch(`${API_BASE}?action=cashier_lookup`);
+            const data = await response.json();
+
+            if (!data.success || !data.active_vehicles || data.active_vehicles.length === 0) {
+                container.innerHTML = '<span style="font-size: 0.78rem; color: var(--text-muted); padding: 4px;">No vehicles currently parked in lot.</span>';
+                if (countLabel) countLabel.textContent = '0 active parked';
+                return;
+            }
+
+            const vehicles = data.active_vehicles;
+            if (countLabel) countLabel.textContent = `${vehicles.length} vehicles currently parked`;
+
+            container.innerHTML = vehicles.map(v => {
+                const isPaid = v.payment_status === 'PAID' || v.payment_status === 'PAID_RESERVATION';
+                const statusDot = isPaid ? 'var(--success)' : 'var(--warning)';
+                return `
+                    <button type="button" class="parked-chip-btn" onclick="selectParkedVehicle('${v.plate_number}')">
+                        <span style="width: 6px; height: 6px; border-radius: 50%; background: ${statusDot};"></span>
+                        <code>${v.plate_number}</code>
+                        <span style="color: var(--text-muted); font-size: 0.68rem;">Zone ${v.zone}-${v.slot_number}</span>
+                    </button>
+                `;
+            }).join('');
+        } catch (err) {
+            console.error('Error loading parked chips:', err);
+        }
+    }
+
+    function selectParkedVehicle(plate) {
+        document.getElementById('lookupQuery').value = plate;
+        document.getElementById('cashierLookupForm').dispatchEvent(new Event('submit'));
+    }
+
+    // Query stay and compute invoice
+    document.getElementById('cashierLookupForm')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const query = document.getElementById('lookupQuery').value.trim();
+        if (!query) return;
+
+        try {
+            const response = await fetch(`${API_BASE}?action=cashier_lookup&query=${encodeURIComponent(query)}`);
+            const data = await response.json();
+
+            if (!data.success || !data.session) {
+                alert(data.error || 'No active session found for query.');
+                return;
+            }
+
+            currentSession = data;
+            renderInvoice(data);
+        } catch (err) {
+            console.error(err);
+            alert('Server error querying stay.');
+        }
+    });
+
+    function renderInvoice(data) {
+        const s = data.session;
+        const d = data.duration;
+        const t = data.tariff;
+
+        document.getElementById('posEmptyState').style.display = 'none';
+        document.getElementById('invoiceDetailsCard').style.display = 'block';
+
+        document.getElementById('invPlate').textContent = s.plate_number;
+        document.getElementById('invSlot').textContent = `Zone ${s.zone} &bull; Slot ${s.slot_number}`;
+        document.getElementById('invEntryTime').textContent = s.entry_time;
+        document.getElementById('invDuration').textContent = `${d.human} (${d.minutes} mins)`;
+
+        document.getElementById('invBaseFee').textContent = `₱${Number(t.base_fee).toFixed(2)}`;
+
+        // Conditional breakdown rows
+        document.getElementById('invOvernightRow').style.display = t.is_overnight ? 'flex' : 'none';
+        document.getElementById('invGraceRow').style.display = t.is_grace ? 'flex' : 'none';
+        document.getElementById('invVendorRow').style.display = t.has_vendor_credit ? 'flex' : 'none';
+        document.getElementById('invPrepaidRow').style.display = t.is_prepaid ? 'flex' : 'none';
+
+        // Violations
+        const hasViolations = t.violations && t.violations.length > 0;
+        document.getElementById('invViolationsRow').style.display = hasViolations ? 'flex' : 'none';
+        document.getElementById('settleViolationsBox').style.display = hasViolations ? 'flex' : 'none';
+        if (hasViolations) {
+            document.getElementById('invViolationsAmount').textContent = `+₱${Number(t.violations_total).toFixed(2)} (${t.violations.length} citations)`;
+        }
+
+        // Reset lost ticket check
+        document.getElementById('lostTicketCheck').checked = false;
+        document.getElementById('lostTicketFeeLabel').textContent = '+₱0.00';
+
+        updateTotalDue();
+
+        // Also pre-stage the ALPR exit box for this vehicle
+        document.getElementById('alprLivePlate').textContent = s.plate_number;
+        document.getElementById('qrFallbackInput').value = s.entry_token || s.session_id;
+    }
+
+    function updateTotalDue() {
+        if (!currentSession) return;
+        const t = currentSession.tariff;
+        let total = t.parking_fee;
+
+        const isLostTicket = document.getElementById('lostTicketCheck')?.checked;
+        if (isLostTicket) total += 100.00;
+
+        const isSettleViolations = document.getElementById('settleViolationsCheck')?.checked;
+        if (isSettleViolations && t.violations_total) total += t.violations_total;
+
+        document.getElementById('invTotalDue').textContent = Number(total).toFixed(2);
+        calculateChange();
+    }
+
+    document.getElementById('lostTicketCheck')?.addEventListener('change', (e) => {
+        document.getElementById('lostTicketFeeLabel').textContent = e.target.checked ? '+₱100.00' : '+₱0.00';
+        updateTotalDue();
+    });
+
+    document.getElementById('settleViolationsCheck')?.addEventListener('change', updateTotalDue);
+
+    // Cash tender & change calculation
+    function calculateChange() {
+        const total = parseFloat(document.getElementById('invTotalDue').textContent) || 0;
+        const tendered = parseFloat(document.getElementById('cashTendered').value) || 0;
+        const change = Math.max(0, tendered - total);
+        document.getElementById('changeDueDisplay').textContent = `₱${change.toFixed(2)}`;
+    }
+
+    document.getElementById('cashTendered')?.addEventListener('input', calculateChange);
+
+    // Process payment
+    document.getElementById('processPaymentBtn')?.addEventListener('click', async () => {
+        if (!currentSession) return;
+        const totalDue = parseFloat(document.getElementById('invTotalDue').textContent) || 0;
+        const tendered = parseFloat(document.getElementById('cashTendered').value) || 0;
+
+        if (totalDue > 0 && tendered < totalDue) {
+            if (!confirm(`Cash tendered (₱${tendered.toFixed(2)}) is less than total due (₱${totalDue.toFixed(2)}). Complete transaction anyway?`)) {
+                return;
+            }
+        }
+
+        const staffId = document.getElementById('staffIdSelect')?.value || 'ATT-04';
+        const isLost = document.getElementById('lostTicketCheck')?.checked;
+        const isSettleV = document.getElementById('settleViolationsCheck')?.checked;
+
+        try {
+            const response = await fetch(`${API_BASE}?action=cashier_payment`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session_id: currentSession.session.session_id,
+                    amount_paid: totalDue,
+                    staff_id: staffId,
+                    lost_ticket: isLost,
+                    settle_violations: isSettleV,
+                    payment_method: 'CASH'
+                })
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                alert(`Payment CLEARED for ${data.plate_number}. Direct vehicle to Exit Barrier.`);
+                loadActiveParkedChips();
+                loadRecentExits();
+
+                // Stage Exit Barrier for priority ALPR scan
+                document.getElementById('alprLivePlate').textContent = data.plate_number;
+                document.getElementById('alprConfScore').textContent = '99.4% (Camera Armed)';
+                document.getElementById('barrierFeedbackMsg').textContent = `Vehicle ${data.plate_number} financially cleared. Ready for exit camera scan.`;
+            } else {
+                alert(data.error || 'Payment failed.');
+            }
+        } catch (err) {
+            alert('Server communication error.');
+        }
+    });
+
+    // --- EXIT BARRIER OPERATIONS (PRIORITY 1: ALPR, FALLBACK: QR) ---
+
+    // PRIORITY 1: Automated ALPR Camera Detection
+    document.getElementById('triggerAlprBtn')?.addEventListener('click', async () => {
+        const plate = document.getElementById('alprLivePlate').textContent.trim();
+        if (!plate || plate === 'READY') {
+            alert('No vehicle staged at Exit Lane. Please select or query a vehicle first.');
+            return;
+        }
+
+        const staffId = document.getElementById('staffIdSelect')?.value || 'ATT-04';
+        document.getElementById('alprConfScore').textContent = 'Scanning...';
+
+        try {
+            const response = await fetch(`${API_BASE}?action=exit_barrier_clearance`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    method: 'ALPR',
+                    plate_number: plate,
+                    staff_id: staffId
+                })
+            });
+            const data = await response.json();
+
+            if (data.success && data.barrier_actuated) {
+                document.getElementById('alprConfScore').textContent = '99.5% Confirmed';
+                actuateBarrierOpen(`ALPR MATCH CONFIRMED (${data.plate_number})`);
+                loadActiveParkedChips();
+                loadRecentExits();
+            } else {
+                document.getElementById('alprConfScore').textContent = 'UNPAID / REJECTED';
+                alert(data.error || 'Exit Denied.');
+                document.getElementById('barrierFeedbackMsg').textContent = data.error || 'Barrier Denied.';
+            }
+        } catch (err) {
+            alert('Communication error with gate hardware.');
+        }
+    });
+
+    // FALLBACK PRIORITY 2: QR Scanner / Token Fallback
+    document.getElementById('triggerQrFallbackBtn')?.addEventListener('click', async () => {
+        const token = document.getElementById('qrFallbackInput').value.trim();
+        if (!token) {
+            alert('Please scan customer QR code or enter Session ID.');
+            return;
+        }
+
+        const staffId = document.getElementById('staffIdSelect')?.value || 'ATT-04';
+
+        try {
+            const response = await fetch(`${API_BASE}?action=exit_barrier_clearance`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    method: 'QR_FALLBACK',
+                    token_or_session: token,
+                    staff_id: staffId
+                })
+            });
+            const data = await response.json();
+
+            if (data.success && data.barrier_actuated) {
+                actuateBarrierOpen(`QR FALLBACK CONFIRMED (${data.plate_number})`);
+                loadActiveParkedChips();
+                loadRecentExits();
+            } else {
+                alert(data.error || 'Invalid QR or unpaid stay.');
+            }
+        } catch (err) {
+            alert('Server error.');
+        }
+    });
+
+    // Actuate Barrier Open (Animation & Auto-close)
+    function actuateBarrierOpen(reason) {
+        const arm = document.getElementById('barrierArm');
+        const pill = document.getElementById('barrierStatusPill');
+        const msg = document.getElementById('barrierFeedbackMsg');
+        const count = document.getElementById('barrierCountdown');
+
+        if (arm) arm.classList.add('arm-open');
+        if (pill) {
+            pill.className = 'barrier-state-pill barrier-state-open';
+            pill.innerHTML = '<span style="width: 6px; height: 6px; border-radius: 50%; background: #22c55e;"></span> BARRIER OPEN';
+        }
+        if (msg) msg.textContent = `Barrier raised: ${reason}. Vehicle exiting...`;
+
+        // Start countdown to auto-close barrier
+        clearTimeout(autoCloseTimer);
+        let secondsLeft = 5;
+        if (count) {
+            count.style.display = 'inline';
+            count.textContent = `Closing in ${secondsLeft}s...`;
+        }
+
+        const interval = setInterval(() => {
+            secondsLeft--;
+            if (count) count.textContent = `Closing in ${secondsLeft}s...`;
+            if (secondsLeft <= 0) {
+                clearInterval(interval);
+                actuateBarrierClosed();
+            }
+        }, 1000);
+    }
+
+    function actuateBarrierClosed() {
+        const arm = document.getElementById('barrierArm');
+        const pill = document.getElementById('barrierStatusPill');
+        const msg = document.getElementById('barrierFeedbackMsg');
+        const count = document.getElementById('barrierCountdown');
+
+        if (arm) arm.classList.remove('arm-open');
+        if (pill) {
+            pill.className = 'barrier-state-pill barrier-state-closed';
+            pill.innerHTML = '<span style="width: 6px; height: 6px; border-radius: 50%; background: #ef4444;"></span> BARRIER CLOSED';
+        }
+        if (msg) msg.textContent = 'Vehicle departed. Barrier safely lowered.';
+        if (count) count.style.display = 'none';
+        document.getElementById('alprLivePlate').textContent = 'READY';
+        document.getElementById('alprConfScore').textContent = '—';
+    }
+
+    // Emergency Override
+    document.getElementById('emergencyOverrideBtn')?.addEventListener('click', () => {
+        if (confirm('EMERGENCY: Force open exit barrier? This emergency bypass will be logged in the immutable audit trail.')) {
+            actuateBarrierOpen('EMERGENCY MANUAL BYPASS');
+        }
+    });
+
+    // Load recent gatehouse transactions
+    async function loadRecentExits() {
+        const table = document.getElementById('recentExitsTable');
+        if (!table) return;
+
+        try {
+            const response = await fetch(`${API_BASE}?action=cashier_recent_transactions`);
+            const data = await response.json();
+
+            if (!data.success || !data.transactions || data.transactions.length === 0) {
+                table.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 15px;">No exit transactions logged yet.</td></tr>';
+                return;
+            }
+
+            table.innerHTML = data.transactions.map(t => {
+                const isAlpr = t.exit_method === 'ALPR';
+                const methodBadge = isAlpr 
+                    ? '<span class="badge badge-paid">ALPR CAMERA (PRIORITY)</span>'
+                    : '<span class="badge badge-overnight">QR TOKEN (FALLBACK)</span>';
+
+                return `
+                    <tr>
+                        <td><strong>#S-${t.session_id}</strong></td>
+                        <td><code>${t.plate_number}</code></td>
+                        <td>Zone ${t.zone} &bull; Slot ${t.slot_number}</td>
+                        <td><strong>₱${Number(t.total_fee).toFixed(2)}</strong></td>
+                        <td><span class="badge badge-paid">${t.payment_status}</span></td>
+                        <td>${methodBadge}</td>
+                        <td><span style="font-size: 0.75rem; color: var(--text-secondary);">${t.staff_id || 'ATT-01'}</span></td>
+                        <td style="font-size: 0.78rem; color: var(--text-muted); white-space: nowrap;">${t.exit_time}</td>
+                    </tr>
+                `;
+            }).join('');
+        } catch (err) {
+            console.error(err);
+        }
+    }
+
+    // Bootstrap
+    loadActiveParkedChips();
+    loadRecentExits();
+</script>
+</body>
+</html>
