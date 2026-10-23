@@ -1,0 +1,103 @@
+/* Shared layout and component rules for every portal, including authentication. */
+[hidden] { display: none !important; }
+
+.app-header .header-inner {
+    height: auto;
+    min-height: 64px;
+    max-width: 1440px;
+    flex-wrap: wrap;
+    gap: 10px 20px;
+    padding: 12px 24px;
+}
+.app-header .main-nav { min-width: 0; gap: 4px; }
+.app-header .header-meta { min-width: 0; margin-left: auto; }
+.admin-main-wrapper .app-header .main-nav { order: 3; flex: 0 0 100%; }
+.app-header .user-profile-chip {
+    display: block;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.app-header .btn-signout { background: transparent; cursor: pointer; font-family: inherit; }
+.sidebar-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    min-height: 34px;
+    padding: 6px 10px;
+    border: 1px solid var(--slate-700);
+    border-radius: var(--radius-md);
+    background: var(--slate-800);
+    color: var(--slate-100);
+    font: 500 .75rem var(--font-sans);
+    cursor: pointer;
+}
+.sidebar-toggle:hover { background: var(--slate-700); }
+.container, .main-content-body { min-width: 0; }
+.vendor-layout-grid, .cashier-layout-grid { min-width: 0; }
+.vendor-layout-grid > *, .cashier-layout-grid > * { min-width: 0; }
+.container { max-width: 1380px; padding: 0 24px; margin: 24px auto; }
+.page-title-main { font-size: clamp(1.25rem, 2vw, 1.5rem); }
+.card, .kpi-card { border-radius: var(--radius-lg); }
+.btn, .btn-primary-block, .btn-signout { min-height: 34px; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
+    outline: 3px solid var(--primary-border);
+    outline-offset: 3px;
+}
+.table-scroll { max-width: 100%; overflow-x: auto; }
+.table-scroll table { min-width: 640px; }
+.form-row { display: flex; align-items: flex-start; gap: 8px; }
+.form-row input { min-width: 0; }
+.admin-booking-controls {
+    padding: 16px;
+    margin-bottom: 16px;
+    border: 1px solid var(--primary-border);
+    border-radius: var(--radius-lg);
+    background: var(--primary-subtle);
+}
+.checkbox-label { display: flex; align-items: center; gap: 8px; }
+.checkbox-label input { width: auto; flex-shrink: 0; }
+.field-help { display: block; font-size: .78rem; color: var(--text-secondary); margin-top: 4px; }
+.admin-session-notice {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    padding: 12px 16px;
+    margin-bottom: 20px;
+    border: 1px solid var(--primary-border);
+    border-radius: var(--radius-lg);
+    background: var(--primary-subtle);
+    color: var(--info-text);
+    font-size: .8125rem;
+    overflow-wrap: anywhere;
+}
+.admin-session-notice a { color: var(--primary); font-weight: 600; }
+.app-footer { margin-top: auto; }
+
+@media (max-width: 1200px) {
+    .app-header .main-nav { order: 3; flex: 0 0 100%; padding-bottom: 2px; }
+}
+@media (max-width: 768px) {
+    .app-header .header-inner { flex-direction: row; align-items: center; padding: 12px 16px; }
+    .app-header .brand-wrap { gap: 6px; flex-wrap: wrap; }
+    .app-header .header-meta { gap: 8px; }
+    .app-header .user-profile-chip { max-width: 180px; }
+    .container { padding: 0 16px; margin: 20px auto; }
+    .stat-cards-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+    .kpi-value { font-size: 1.5rem; overflow-wrap: anywhere; }
+    .vendor-hero-banner { align-items: flex-start; flex-direction: column; gap: 16px; }
+    .page-title-actions { flex-wrap: wrap; }
+    .vendor-layout-grid, .cashier-layout-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 480px) {
+    .app-header .header-meta { width: 100%; justify-content: space-between; }
+    .app-header .user-profile-chip { max-width: calc(100vw - 130px); }
+    .form-row { flex-wrap: wrap; }
+    .form-row input { flex: 1 1 100%; }
+    .stat-cards-grid { grid-template-columns: 1fr !important; }
+    .pass-ticket-body { flex-direction: column; }
+}

@@ -5,101 +5,62 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Customer Dashboard - Parking Ltd.</title>
     <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/layout.css">
+    <link rel="stylesheet" href="css/customer.css">
 </head>
 <body data-page="dashboard">
+<header class="app-header" data-app-header></header>
 
-<header class="app-header">
-    <div class="header-inner">
-        <a href="dashboard.html" class="brand-wrap">
-            <div class="brand-icon">P</div>
-            <div class="brand-title">Parking Ltd.</div>
-            <span class="brand-badge">Customer Portal</span>
-        </a>
-
-        <nav class="main-nav">
-            <a href="dashboard.html" class="active">Live Map &amp; Wallet</a>
-            <a href="reserve.html">Reserve Slot</a>
-            <a href="violations.html">Violations Tracker</a>
-        </nav>
-
-        <div class="header-meta">
-            <div class="user-profile-chip">
-                <span id="userPlateDisplay" style="font-family: var(--font-mono); font-weight: 600;">Driver</span>
-            </div>
-            <a href="#" id="logoutBtn" class="btn-signout">Sign Out</a>
+<section class="customer-dashboard-hero" aria-labelledby="customerWelcomeTitle">
+    <div class="customer-hero-content">
+        <p class="customer-eyebrow">A better place to park</p>
+        <h1 id="customerWelcomeTitle">Parking Ltd.</h1>
+        <p class="customer-hero-description">Your space. Your schedule. Parking made simple.</p>
+        <div class="customer-hero-actions">
+            <a href="reserve.html" class="btn btn-primary">Reserve a slot <span aria-hidden="true">&rarr;</span></a>
+            <a href="live-map.html" class="btn customer-hero-secondary">View live map</a>
         </div>
     </div>
-</header>
-
-<div class="container">
-
-    <div class="page-title-banner">
+</section>
+<main class="container customer-dashboard-content">
+    <div class="customer-section-intro">
         <div>
-            <h1 class="page-title-main">Facility Availability &amp; Digital Pass</h1>
-            <p class="page-title-sub">Real-time zone occupancy and active contactless entry credentials</p>
+            <p class="customer-eyebrow">Customer dashboard</p>
+            <h2>Make your next move.</h2>
+            <p>Plan your visit, find your space, and keep your parking details together.</p>
         </div>
+        <div class="customer-vehicle"><span>Your vehicle</span><strong data-session-plate>Checking session…</strong></div>
     </div>
-
-    <!-- DIGITAL PASS / SMART TICKET WALLET (Shown when user has active booking) -->
-    <div id="qrWalletSection" class="pass-ticket-card" style="display: none;">
-        <div class="pass-ticket-header">
-            <div>
-                <strong style="letter-spacing: 0.05em; font-size: 0.85rem;">DIGITAL PARKING PASS</strong>
-                <div style="font-size: 0.72rem; color: var(--slate-300);">Contactless Gate Authorization</div>
-            </div>
-            <span class="badge badge-paid">PAID RESERVATION</span>
-        </div>
-
-        <div class="pass-ticket-body">
-            <div class="pass-qr-frame">
-                <img id="qrCodeImage" src="" alt="Digital QR Entry Pass">
-            </div>
-
-            <div class="pass-details-grid">
-                <div class="pass-detail-item">
-                    <span>Allocated Zone</span>
-                    <strong>Zone <span id="qrZone">—</span></strong>
-                </div>
-                <div class="pass-detail-item">
-                    <span>Slot Number</span>
-                    <strong>Slot <span id="qrSlotNumber">—</span></strong>
-                </div>
-                <div class="pass-detail-item">
-                    <span>Validity Period</span>
-                    <strong id="qrDates">—</strong>
-                </div>
-                <div class="pass-detail-item">
-                    <span>Prepaid Fee</span>
-                    <strong>₱<span id="qrFee">0.00</span></strong>
-                </div>
-            </div>
-        </div>
+    <div class="customer-actions">
+        <a href="live-map.html" class="customer-action-card">
+            <span class="customer-action-icon" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6Z"/><path d="M9 3v15M15 6v15"/></svg></span>
+            <h3>Live map</h3>
+            <p>Check current slot occupancy and explore the parking layout.</p>
+            <span class="customer-action-link">Explore the map<span aria-hidden="true">&rarr;</span></span>
+        </a>
+        <a href="reserve.html" class="customer-action-card">
+            <span class="customer-action-icon" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18m-12 5 2 2 4-4"/></svg></span>
+            <h3>Reserve a slot</h3>
+            <p>Choose your parking zone and dates before your visit.</p>
+            <span class="customer-action-link">Make a reservation<span aria-hidden="true">&rarr;</span></span>
+        </a>
+        <a href="wallet.html" class="customer-action-card">
+            <span class="customer-action-icon" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 9h18m-5 4h5v4h-5zM7 5V3h10v2"/></svg></span>
+            <h3>Digital wallet</h3>
+            <p>Keep your active reservation and digital parking pass within reach.</p>
+            <span class="customer-action-link">Open your wallet<span aria-hidden="true">&rarr;</span></span>
+        </a>
+        <a href="violations.html" class="customer-action-card">
+            <span class="customer-action-icon" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 6v5c0 5 8 10 8 10s8-5 8-10V6l-8-3Z"/><path d="m8 12 3 3 5-6"/></svg></span>
+            <h3>Violations tracker</h3>
+            <p>Review citations and outstanding penalties for your vehicle.</p>
+            <span class="customer-action-link">Check your record<span aria-hidden="true">&rarr;</span></span>
+        </a>
     </div>
+</main>
 
-    <!-- LIVE PARKING MAP AVAILABILITY -->
-    <div class="card">
-        <div class="card-header-clean">
-            <h2>Live Zone Map Availability</h2>
-            <span class="section-tag">Interactive Map</span>
-        </div>
-        <p class="section-description">Select any zone on the facility layout to inspect individual slot status.</p>
-        
-        <div id="liveMap">Loading capacity data...</div>
-        <div class="zone-detail-panel" id="zoneDetailPanel" style="display: none;"></div>
-    </div>
-
-</div>
-
-<footer class="app-footer">
-    Parking Ltd. &bull; Automated Facility Management System &bull; Secure Gatehouse Operations
-</footer>
-
-<script>
-    const userPlate = sessionStorage.getItem('licensePlate');
-    if (userPlate && document.getElementById('userPlateDisplay')) {
-        document.getElementById('userPlateDisplay').textContent = userPlate;
-    }
-</script>
+<footer class="app-footer" data-app-footer></footer>
+<script src="js/layout.js"></script>
 <script src="js/main.js"></script>
 </body>
 </html>

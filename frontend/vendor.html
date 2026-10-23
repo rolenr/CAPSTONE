@@ -5,39 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Commercial Tenant Validation - Parking Ltd.</title>
     <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/layout.css">
 </head>
 <body data-page="vendor">
 
     <!-- Top Navigation Bar -->
-    <header class="app-header">
-        <div class="header-inner">
-            <a href="vendor.html" class="brand-wrap">
-                <div class="brand-icon">P</div>
-                <div class="brand-title">Parking Ltd.</div>
-                <span class="brand-badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3);">Tenant Portal</span>
-            </a>
-
-            <nav class="main-nav">
-                <a href="vendor.html" class="active">Tenant Validator</a>
-                <a href="cashier.html">Cashier POS</a>
-                <a href="admin.html">Administration</a>
-                <a href="dashboard.html">Live Map</a>
-                <a href="violations.html">Violations Tracker</a>
-            </nav>
-
-            <div class="header-meta">
-                <div class="system-status-indicator">
-                    <span class="status-indicator-dot"></span>
-                    <span>Joey's Station Online</span>
-                </div>
-                <div class="user-profile-chip">
-                    <span>Merchant:</span>
-                    <strong style="color: var(--white); font-size: 0.72rem;">Joey's Restaurant</strong>
-                </div>
-                <a href="login.html" class="btn-signout" id="logoutBtn">Sign Out</a>
-            </div>
-        </div>
-    </header>
+    <header class="app-header" data-app-header></header>
 
     <div class="container" style="max-width: 1380px;">
 
@@ -130,8 +103,8 @@
                             <input type="text" id="vendor-receipt-input" value="INV-2026-8814" style="height: 38px;">
                         </div>
                         <div>
-                            <label for="vendor-staff-input">Merchant Staff ID</label>
-                            <input type="text" id="vendor-staff-input" value="Counter Staff 1" style="height: 38px;">
+                            <label for="vendor-staff-input">Signed-in Staff</label>
+                            <input type="text" id="vendor-staff-input" readonly style="height: 38px;">
                         </div>
                     </div>
 
@@ -235,7 +208,8 @@
                 </div>
             </div>
             <div class="table-container">
-                <table class="data-table" id="validations-ledger-table">
+                <div class="table-scroll" role="region" aria-label="Parking records" tabindex="0">
+<table class="data-table" id="validations-ledger-table">
                     <thead>
                         <tr>
                             <th>Validation Time</th>
@@ -256,18 +230,18 @@
                         </tr>
                     </tbody>
                 </table>
+</div>
             </div>
         </div>
 
     </div>
 
     <!-- Application Footer -->
-    <footer class="app-footer">
-        <div><strong>Parking Ltd. Enterprise Operations</strong> — Automated Parking Management &amp; Transaction Ledger System</div>
-        <div style="margin-top: 4px; color: var(--text-muted);">Commercial Tenant Module &bull; Capstone Project CAP-2520-IT</div>
-    </footer>
+    <footer class="app-footer" data-app-footer></footer>
 
     <!-- Tenant Portal Controller Script -->
+    <script src="js/layout.js"></script>
+<script src="js/main.js"></script>
     <script>
         (function() {
             // Adaptive API path detection (works seamlessly on direct root and /frontend/ subdir)
@@ -298,7 +272,7 @@
             // Fetch Active Parked Vehicles
             async function loadActiveVehicles() {
                 try {
-                    const res = await fetch(`${API_BASE}?action=vendor_active_vehicles`);
+                    const res = await apiFetch(`${API_BASE}?action=vendor_active_vehicles`);
                     const data = await res.json();
                     const container = document.getElementById('vendor-parked-chips');
                     const countEl = document.getElementById('active-vehicles-count');
@@ -349,7 +323,7 @@
 
                 hideAlert();
                 try {
-                    const res = await fetch(`${API_BASE}?action=vendor_lookup&query=${encodeURIComponent(query)}`);
+                    const res = await apiFetch(`${API_BASE}?action=vendor_lookup&query=${encodeURIComponent(query)}`);
                     const data = await res.json();
 
                     if (!data.success) {
@@ -463,7 +437,7 @@
             async function submitValidation() {
                 const query = document.getElementById('vendor-query-input').value.trim();
                 const receipt = document.getElementById('vendor-receipt-input').value.trim() || 'RCP-STORE';
-                const staff = document.getElementById('vendor-staff-input').value.trim() || 'Counter Staff 1';
+
 
                 if (!query) {
                     showAlert('Please enter a license plate number or scan a QR token.', 'warning');
@@ -471,13 +445,13 @@
                 }
 
                 try {
-                    const res = await fetch(`${API_BASE}?action=vendor_validate`, {
+                    const res = await apiFetch(`${API_BASE}?action=vendor_validate`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             token_or_plate: query,
-                            tenant_name: "Joey's Restaurant",
-                            staff_name: staff,
+
+
                             receipt_number: receipt
                         })
                     });
@@ -511,7 +485,7 @@
             // Load Recent Validations & Stats
             async function loadRecentValidations() {
                 try {
-                    const res = await fetch(`${API_BASE}?action=vendor_recent_validations`);
+                    const res = await apiFetch(`${API_BASE}?action=vendor_recent_validations`);
                     const data = await res.json();
 
                     if (!data.success) return;

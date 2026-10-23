@@ -6,6 +6,106 @@ const API_BASE = (function() {
     return 'backend/api/endpoints.php';
 })();
 
+let csrfToken = sessionStorage.getItem('csrfToken') || '';
+
+// Centralize same-origin credentials and CSRF handling for all API requests.
+async function apiFetch(url, options = {}) {
+    const requestUrl = new URL(url, window.location.href);
+    const action = requestUrl.searchParams.get('action');
+    const method = (options.method || 'GET').toUpperCase();
+    const headers = new Headers(options.headers || {});
+
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && !['login', 'register'].includes(action)) {
+        if (!csrfToken) {
+            try {
+                const sessionResponse = await fetch(`${API_BASE}?action=session`, { credentials: 'same-origin' });
+                if (sessionResponse.ok) {
+                    const sessionData = await sessionResponse.json();
+                    csrfToken = sessionData.csrf_token || '';
+                    if (csrfToken) sessionStorage.setItem('csrfToken', csrfToken);
+                }
+            } catch (error) {
+                console.error('Unable to restore the authenticated session.', error);
+            }
+        }
+        if (csrfToken) headers.set('X-CSRF-Token', csrfToken);
+    }
+
+    return fetch(url, { ...options, headers, credentials: 'same-origin' });
+}
+
+async function enforcePageRole() {
+    const page = document.body.dataset.page || '';
+    const allowedRoles = {
+        dashboard: ['DRIVER', 'ADMIN'],
+        'live-map': ['DRIVER', 'ADMIN'],
+        wallet: ['DRIVER', 'ADMIN'],
+        reserve: ['DRIVER', 'ADMIN'],
+        violations: ['DRIVER', 'ADMIN'],
+        admin: ['ADMIN'],
+        cashier: ['CASHIER', 'ADMIN'],
+        vendor: ['VENDOR', 'ADMIN']
+    }[page];
+    if (!allowedRoles) return;
+
+    try {
+        const response = await fetch(`${API_BASE}?action=session`, { credentials: 'same-origin' });
+        if (!response.ok) {
+            sessionStorage.clear();
+            window.location.replace('login.html');
+            return;
+        }
+
+        const sessionData = await response.json();
+        const user = sessionData.user || {};
+        csrfToken = sessionData.csrf_token || '';
+        currentUser.licensePlate = user.plate_number || '';
+        currentUser.isVIP = Boolean(user.is_vip);
+        currentUser.role = user.role || '';
+        sessionStorage.setItem('csrfToken', csrfToken);
+        sessionStorage.setItem('role', user.role || '');
+        sessionStorage.setItem('licensePlate', user.plate_number || '');
+        sessionStorage.setItem('isVIP', String(Boolean(user.is_vip)));
+        sessionStorage.setItem('isAdmin', String(user.role === 'ADMIN'));
+        sessionStorage.setItem('adminEmail', user.email || '');
+
+        if (!allowedRoles.includes(user.role)) {
+            const destination = {
+                DRIVER: 'dashboard.html',
+                ADMIN: 'admin.html',
+                CASHIER: 'cashier.html',
+                VENDOR: 'vendor.html'
+            }[user.role] || 'login.html';
+            window.location.replace(destination);
+            return;
+        }
+
+        // Dynamically maintain Administrator authority across customer & operational views
+        AppLayout.updateIdentity(user);
+        adaptAdminPersona(user, page);
+        await checkActiveReservation();
+        return user;
+    } catch (error) {
+        console.error('Unable to verify the current session.', error);
+    }
+}
+
+function adaptAdminPersona(user, page) {
+    if (user.role !== 'ADMIN' || !['dashboard', 'live-map', 'wallet', 'reserve', 'violations'].includes(page)) return;
+    const container = document.querySelector('.container');
+    if (!container || document.getElementById('adminPersonaBanner')) return;
+    const banner = document.createElement('div');
+    banner.id = 'adminPersonaBanner';
+    banner.className = 'admin-session-notice';
+    const identity = document.createElement('span');
+    identity.textContent = `Administrator session · ${user.email}`;
+    const link = document.createElement('a');
+    link.href = 'admin.html';
+    link.textContent = 'Return to Administration';
+    banner.append(identity, link);
+    container.prepend(banner);
+}
+
 // --- DOM Elements ---
 const authForm = document.getElementById('authForm');
 const registerForm = document.getElementById('registerForm');
@@ -22,12 +122,12 @@ const qrDates = document.getElementById('qrDates');
 const qrFee = document.getElementById('qrFee');
 const violationForm = document.getElementById('violationForm');
 const violationResults = document.getElementById('violationResults');
-const logoutBtn = document.getElementById('logoutBtn');
 
 // --- Global State ---
 let currentUser = {
     isVIP: sessionStorage.getItem('isVIP') === 'true',
-    licensePlate: sessionStorage.getItem('licensePlate') || ''
+    licensePlate: sessionStorage.getItem('licensePlate') || '',
+    role: sessionStorage.getItem('role') || ''
 };
 
 // ---------------- AUTH (LOGIN) ----------------
@@ -38,10 +138,10 @@ if (authForm) {
         const password = document.getElementById('password').value;
 
         try {
-            const response = await fetch(`${API_BASE}?action=login`, { 
-                method: 'POST', 
+            const response = await apiFetch(`${API_BASE}?action=login`, {
+                method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password }) 
+                body: JSON.stringify({ email, password })
             });
             const data = await response.json();
 
@@ -50,12 +150,17 @@ if (authForm) {
                 sessionStorage.setItem('isVIP', data.is_vip);
                 sessionStorage.setItem('isAdmin', data.is_admin);
                 sessionStorage.setItem('adminEmail', data.email || '');
+                sessionStorage.setItem('role', data.role || 'DRIVER');
+                csrfToken = data.csrf_token || '';
+                sessionStorage.setItem('csrfToken', csrfToken);
 
-                if (data.is_admin) {
-                    window.location.href = 'admin.html';
-                } else {
-                    window.location.href = 'dashboard.html';
-                }
+                const destination = {
+                    ADMIN: 'admin.html',
+                    DRIVER: 'dashboard.html',
+                    CASHIER: 'cashier.html',
+                    VENDOR: 'vendor.html'
+                }[data.role] || 'dashboard.html';
+                window.location.href = destination;
             } else {
                 alert(data.error || 'Invalid credentials');
             }
@@ -75,10 +180,10 @@ if (registerForm) {
         const plate = document.getElementById('regPlate').value;
 
         try {
-            const response = await fetch(`${API_BASE}?action=register`, { 
-                method: 'POST', 
+            const response = await apiFetch(`${API_BASE}?action=register`, {
+                method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password, plate }) 
+                body: JSON.stringify({ email, password, plate })
             });
             const data = await response.json();
 
@@ -96,13 +201,25 @@ if (registerForm) {
 }
 
 // ---------------- LOGOUT ----------------
-if (logoutBtn) {
-    logoutBtn.addEventListener('click', (e) => {
-        e.preventDefault();
+async function signOut(event) {
+    event.preventDefault();
+    try {
+        const response = await apiFetch(`${API_BASE}?action=logout`, { method: 'POST' });
+        // An expired session is already signed out. Other failures must remain visible.
+        if (response.status !== 401) {
+            if (!response.ok) throw new Error('Logout was rejected.');
+            const data = await response.json();
+            if (!data.success) throw new Error('Logout was not confirmed.');
+        }
         sessionStorage.clear();
+        csrfToken = '';
         window.location.href = 'login.html';
-    });
+    } catch (error) {
+        alert('Unable to end your session. Refresh the page and try again.');
+    }
 }
+
+document.querySelectorAll('[data-signout]').forEach(button => button.addEventListener('click', signOut));
 
 // ---------------- MAP ----------------
 const zonePositions = {
@@ -147,7 +264,7 @@ async function fetchLiveMap() {
     if (!liveMap) return;
 
     try {
-        const response = await fetch(`${API_BASE}?action=map`);
+        const response = await apiFetch(`${API_BASE}?action=map`);
         const data = await response.json();
 
         const zones = {};
@@ -269,7 +386,7 @@ function calculateDays() {
     if (!startDate || !endDate) return 1;
     const start = new Date(startDate.value);
     const end = new Date(endDate.value);
-    
+
     let diffTime = end - start;
     let days = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
 
@@ -283,7 +400,7 @@ function calculateDays() {
     const base_fee = 60.00 * days;
     const surcharge = (days >= 2) ? 100.00 : 0.00;
     if (feeDisplay) feeDisplay.textContent = (base_fee + surcharge).toFixed(2);
-    
+
     return days;
 }
 
@@ -314,33 +431,71 @@ function renderReservationDetails(data, plate) {
     if (qrFee) qrFee.textContent = Number(data.fee).toFixed(2);
 
     qrWalletSection.style.display = 'block';
-    if (reservationFormContainer) reservationFormContainer.style.display = 'none';
+    ['walletLoading', 'walletEmpty', 'walletError'].forEach(id => {
+        const element = document.getElementById(id);
+        if (element) element.hidden = true;
+    });
+    if (reservationFormContainer) reservationFormContainer.style.display = currentUser.role === 'ADMIN' ? 'block' : 'none';
+}
+
+function reservationPlate() {
+    const target = document.getElementById('bookingPlate');
+    return currentUser.role === 'ADMIN' && target
+        ? target.value.trim().toUpperCase()
+        : currentUser.licensePlate;
 }
 
 async function checkActiveReservation() {
     const walletOrForm = document.getElementById('qrWalletSection') || document.getElementById('reservationForm');
-    if (!walletOrForm || !currentUser.licensePlate) return;
+    const plate = reservationPlate();
+    if (!walletOrForm) return;
+    const loading = document.getElementById('walletLoading');
+    const empty = document.getElementById('walletEmpty');
+    const error = document.getElementById('walletError');
+    if (!plate) {
+        if (loading) loading.hidden = true;
+        if (error) error.hidden = false;
+        return;
+    }
+    if (loading) loading.hidden = false;
+    if (empty) empty.hidden = true;
+    if (error) error.hidden = true;
 
     try {
-        const response = await fetch(`${API_BASE}?action=active_reservation&plate=${encodeURIComponent(currentUser.licensePlate)}`);
+        const response = await apiFetch(`${API_BASE}?action=active_reservation&plate=${encodeURIComponent(plate)}`);
         const data = await response.json();
+        if (!response.ok || !data.success) throw new Error(data.error || 'Unable to load the reservation.');
+        if (loading) loading.hidden = true;
 
         if (data.success && data.active) {
-            renderReservationDetails(data, currentUser.licensePlate);
+            renderReservationDetails(data, plate);
+        } else if (data.success) {
+            if (empty) empty.hidden = false;
+            if (qrWalletSection) qrWalletSection.style.display = 'none';
+            if (reservationFormContainer) reservationFormContainer.style.display = 'block';
         }
     } catch (error) {
         console.error('Failed to check active reservation:', error);
+        if (loading) loading.hidden = true;
+        const walletError = document.getElementById('walletError');
+        if (walletError) {
+            walletError.hidden = false;
+            if (qrWalletSection) qrWalletSection.style.display = 'none';
+        }
     }
 }
 
-checkActiveReservation();
+document.getElementById('bookingPlate')?.addEventListener('change', checkActiveReservation);
+document.getElementById('retryWallet')?.addEventListener('click', checkActiveReservation);
 
 // ---------------- RESERVATION ----------------
 if (reservationForm) {
     reservationForm.addEventListener('submit', async (e) => {
         e.preventDefault();
-        
-        if (!currentUser.licensePlate) {
+
+        if (!await pageSessionReady) return;
+        const plate = reservationPlate();
+        if (!plate) {
             alert("Session expired. Please log in again.");
             window.location.href = 'login.html';
             return;
@@ -348,33 +503,36 @@ if (reservationForm) {
 
         const zone = document.getElementById('zoneSelect').value;
 
-        // STRICT VIP VALIDATION CHECK - Intercepts non-VIP users instantly
-        if (zone === 'E' && !currentUser.isVIP) {
+        // STRICT VIP VALIDATION CHECK - Intercepts non-VIP users instantly (Admins possess universal VIP clearance)
+        if (zone === 'E' && !currentUser.isVIP && currentUser.role !== 'ADMIN') {
             alert("Error: Zone E reservations are restricted to VIP accounts only.");
             return; // Stops the form from proceeding to the backend
         }
 
-        const days = calculateDays(); 
+        const days = calculateDays();
         const sDate = document.getElementById('startDate').value;
         const eDate = document.getElementById('endDate').value;
+        const replaceExisting = currentUser.role === 'ADMIN' && Boolean(document.getElementById('replaceExistingReservation')?.checked);
+        if (replaceExisting && !confirm(`Replace the active reservation for ${plate}? The existing booking is cancelled only if the new booking succeeds.`)) return;
 
         try {
-            const response = await fetch(`${API_BASE}?action=reserve`, {
+            const response = await apiFetch(`${API_BASE}?action=reserve`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    plate: currentUser.licensePlate, 
-                    zone: zone, 
+                body: JSON.stringify({
+                    plate: plate,
+                    zone: zone,
                     days: days,
                     startDate: sDate,
-                    endDate: eDate
+                    endDate: eDate,
+                    replace_existing: replaceExisting
                 })
             });
             const data = await response.json();
 
             if (data.success) {
-                alert(`Payment of ₱${data.fee.toFixed(2)} processed successfully!`);
-                renderReservationDetails(data, currentUser.licensePlate);
+                alert(`Reservation saved. Tariff: ₱${data.fee.toFixed(2)}.`);
+                renderReservationDetails(data, plate);
             } else {
                 alert(data.error || 'Reservation failed.');
             }
@@ -391,10 +549,11 @@ if (violationForm) {
         const plate = document.getElementById("searchPlate").value.trim().toUpperCase();
 
         try {
-            const response = await fetch(`${API_BASE}?action=violations&plate=${encodeURIComponent(plate)}`);
+            const response = await apiFetch(`${API_BASE}?action=violations&plate=${encodeURIComponent(plate)}`);
             const data = await response.json();
+            if (!response.ok || !Array.isArray(data)) throw new Error(data.error || 'Unable to load violations.');
 
-            if (!data || data.length === 0) {
+            if (data.length === 0) {
                 violationResults.innerHTML = `
                     <div style="background: var(--success-bg); border: 1px solid var(--success-border); border-radius: var(--radius-md); padding: 14px 16px; color: var(--success-text); display: flex; align-items: center; justify-content: space-between;">
                         <div>
@@ -437,14 +596,13 @@ if (violationForm) {
 
 // ---------------- ADMIN PORTAL & BUSINESS INTELLIGENCE ----------------
 const adminPage = document.querySelector('body[data-page="admin"]');
-const currentAdminEmail = sessionStorage.getItem('adminEmail') || 'rorocruz@gmail.com';
 let adminSlotsCache = [];
 let adminCurrentZoneFilter = 'ALL';
 
 // --- 1. OVERVIEW KPIS ---
 async function loadAdminStats() {
     try {
-        const response = await fetch(`${API_BASE}?action=admin_stats`);
+        const response = await apiFetch(`${API_BASE}?action=admin_stats`);
         const data = await response.json();
 
         if (data.success) {
@@ -465,7 +623,7 @@ async function loadAdminStats() {
 // --- 2. BUSINESS INTELLIGENCE & REVENUE ANALYTICS ---
 async function loadAdminAnalytics() {
     try {
-        const response = await fetch(`${API_BASE}?action=admin_analytics`);
+        const response = await apiFetch(`${API_BASE}?action=admin_analytics`);
         const data = await response.json();
 
         if (!data.success) {
@@ -621,7 +779,7 @@ async function loadAdminViolations() {
     if (!table) return;
 
     try {
-        const response = await fetch(`${API_BASE}?action=admin_violations_list`);
+        const response = await apiFetch(`${API_BASE}?action=admin_violations_list`);
         const data = await response.json();
 
         if (!data.success || !data.violations) {
@@ -643,8 +801,8 @@ async function loadAdminViolations() {
 
             const actionCell = isPaid
                 ? `<span style="font-size: 0.75rem; color: var(--text-muted);">Settled</span>`
-                : `<button class="btn-sm btn-success" onclick="resolveAdminViolation(${v.violation_id}, 'PAID')">Mark as Paid</button>
-                   <button class="btn-sm btn-outline" style="margin-left: 4px;" onclick="resolveAdminViolation(${v.violation_id}, 'DISMISSED')">Dismiss</button>`;
+                : `<button class="btn btn-sm btn-success" onclick="resolveAdminViolation(${v.violation_id}, 'PAID')">Mark as Paid</button>
+                   <button class="btn btn-sm btn-outline" style="margin-left: 4px;" onclick="resolveAdminViolation(${v.violation_id}, 'DISMISSED')">Dismiss</button>`;
 
             return `
                 <tr>
@@ -670,13 +828,12 @@ async function resolveAdminViolation(violationId, status) {
     if (!confirm(`Are you sure you want to ${actionLabel}? This action will be logged in the immutable audit trail.`)) return;
 
     try {
-        const response = await fetch(`${API_BASE}?action=admin_resolve_violation`, {
+        const response = await apiFetch(`${API_BASE}?action=admin_resolve_violation`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 violation_id: violationId,
                 status: status,
-                admin_email: currentAdminEmail
             })
         });
         const data = await response.json();
@@ -700,7 +857,7 @@ async function loadAdminAuditLogs() {
     if (!table) return;
 
     try {
-        const response = await fetch(`${API_BASE}?action=admin_audit_logs`);
+        const response = await apiFetch(`${API_BASE}?action=admin_audit_logs`);
         const data = await response.json();
 
         if (!data.success || !data.logs) {
@@ -738,7 +895,7 @@ async function loadAdminReservations() {
     if (!table) return;
 
     try {
-        const response = await fetch(`${API_BASE}?action=admin_reservations`);
+        const response = await apiFetch(`${API_BASE}?action=admin_reservations`);
         const data = await response.json();
 
         if (!data.success) {
@@ -762,7 +919,7 @@ async function loadAdminReservations() {
                 <td>${r.end_date || 'N/A'}</td>
                 <td><strong>₱${Number(r.fee).toFixed(2)}</strong></td>
                 <td>
-                    <button class="btn-sm btn-danger" onclick="overrideReservation(${r.reservation_id})">Override / Cancel</button>
+                    <button class="btn btn-sm btn-danger" onclick="overrideReservation(${r.reservation_id})">Override / Cancel</button>
                 </td>
             </tr>
         `).join('');
@@ -776,14 +933,13 @@ async function overrideReservation(reservationId) {
     if (!confirm('Override this reservation? This will cancel it, free the assigned slot, and log the action in the audit trail.')) return;
 
     try {
-        const response = await fetch(`${API_BASE}?action=override_reservation`, {
+        const response = await apiFetch(`${API_BASE}?action=override_reservation`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 reservation_id: reservationId,
                 status: 'CANCELLED',
                 release_slot: true,
-                admin_email: currentAdminEmail
             })
         });
         const data = await response.json();
@@ -809,7 +965,7 @@ async function loadAdminAccounts(search = '') {
 
     try {
         const url = `${API_BASE}?action=admin_accounts` + (search ? `&search=${encodeURIComponent(search)}` : '');
-        const response = await fetch(url);
+        const response = await apiFetch(url);
         const data = await response.json();
 
         if (!data.success) {
@@ -826,15 +982,20 @@ async function loadAdminAccounts(search = '') {
 
         table.innerHTML = accounts.map(a => {
             const isVip = Number(a.is_vip) === 1;
-            const isAdmin = Number(a.is_admin) === 1;
+            const role = String(a.role || (Number(a.is_admin) === 1 ? 'ADMIN' : 'DRIVER')).toUpperCase();
             return `
                 <tr>
                     <td><strong>${a.email}</strong></td>
                     <td><code>${a.plate_number}</code></td>
                     <td>${isVip ? '<span class="badge badge-vip">VIP / PWD PRIORITY</span>' : '<span class="badge badge-bypassed">STANDARD</span>'}</td>
-                    <td>${isAdmin ? '<span style="font-weight: 600; color: var(--primary);">Administrator</span>' : '<span style="color: var(--text-secondary);">Driver</span>'}</td>
                     <td>
-                        <button class="btn-sm ${isVip ? 'btn-outline' : 'btn-primary'}" onclick="setVip(${a.account_id}, ${isVip ? 0 : 1})">
+                        <select id="accountRole-${a.account_id}" aria-label="Role for ${a.email}">
+                            ${['ADMIN', 'DRIVER', 'CASHIER', 'VENDOR'].map(option => `<option value="${option}" ${role === option ? 'selected' : ''}>${option}</option>`).join('')}
+                        </select>
+                        <button class="btn btn-sm btn-outline" onclick="setAccountRole(${a.account_id})">Save Role</button>
+                    </td>
+                    <td>
+                        <button class="btn btn-sm ${isVip ? 'btn-outline' : 'btn-primary'}" onclick="setVip(${a.account_id}, ${isVip ? 0 : 1})">
                             ${isVip ? 'Revoke VIP Status' : 'Grant VIP / PWD'}
                         </button>
                     </td>
@@ -847,15 +1008,37 @@ async function loadAdminAccounts(search = '') {
     }
 }
 
+async function setAccountRole(accountId) {
+    const roleSelect = document.getElementById(`accountRole-${accountId}`);
+    if (!roleSelect) return;
+
+    try {
+        const response = await apiFetch(`${API_BASE}?action=set_account_role`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ account_id: accountId, role: roleSelect.value })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            alert(data.error || 'Failed to update account role.');
+            return;
+        }
+        const searchInput = document.getElementById('accountSearchInput');
+        loadAdminAccounts(searchInput ? searchInput.value.trim() : '');
+        loadAdminAuditLogs();
+    } catch (error) {
+        alert('Server connection failed.');
+    }
+}
+
 async function setVip(accountId, newVipState) {
     try {
-        const response = await fetch(`${API_BASE}?action=set_vip`, {
+        const response = await apiFetch(`${API_BASE}?action=set_vip`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 account_id: accountId,
-                is_vip: newVipState,
-                admin_email: currentAdminEmail
+                is_vip: newVipState
             })
         });
         const data = await response.json();
@@ -878,7 +1061,7 @@ async function loadAlprLogs() {
     if (!alprTable) return;
 
     try {
-        const response = await fetch(`${API_BASE}?action=alpr_logs`);
+        const response = await apiFetch(`${API_BASE}?action=alpr_logs`);
         const logs = await response.json();
 
         if (!logs || logs.length === 0) {
@@ -921,7 +1104,7 @@ async function loadAdminMap() {
     if (!adminMap) return;
 
     try {
-        const response = await fetch(`${API_BASE}?action=map`);
+        const response = await apiFetch(`${API_BASE}?action=map`);
         const slots = await response.json();
 
         if (!slots || slots.length === 0) {
@@ -1001,13 +1184,12 @@ async function toggleSlotOverride(slotId, newOccupiedState) {
     if (!confirm(`Force Slot status to ${stateName}? This manual override will be recorded in the audit trail.`)) return;
 
     try {
-        const response = await fetch(`${API_BASE}?action=toggle_slot`, {
+        const response = await apiFetch(`${API_BASE}?action=toggle_slot`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 slot_id: slotId,
                 is_occupied: newOccupiedState,
-                admin_email: currentAdminEmail
             })
         });
         const data = await response.json();
@@ -1048,31 +1230,125 @@ if (accountSearchInput) {
     });
 }
 
-// Subnav smooth scroll active state
+const pageSessionReady = enforcePageRole();
+
+// --- ADMIN SIDEBAR ACCORDION / DROPDOWN CONTROLS ---
+function initAdminSidebar() {
+    const sidebar = document.getElementById('adminSidebar');
+    if (!sidebar) return;
+
+    // 1. Group toggle clicks (collapsible dropdowns)
+    const groupToggles = sidebar.querySelectorAll('.group-header-btn');
+    groupToggles.forEach(toggle => {
+        toggle.addEventListener('click', (e) => {
+            e.preventDefault();
+            const group = toggle.closest('.sidebar-nav-group');
+            if (!group) return;
+            const isOpen = group.classList.toggle('open');
+            toggle.setAttribute('aria-expanded', String(isOpen));
+        });
+    });
+
+    // 2. User profile card dropdown popover toggle
+    const userToggle = document.getElementById('sidebarUserDropdownToggle');
+    const userMenu = document.getElementById('sidebarUserMenu');
+    if (userToggle && userMenu) {
+        userToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isVisible = userMenu.style.display === 'flex';
+            userMenu.style.display = isVisible ? 'none' : 'flex';
+            userToggle.setAttribute('aria-expanded', String(!isVisible));
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!userToggle.contains(e.target) && !userMenu.contains(e.target)) {
+                userMenu.style.display = 'none';
+                userToggle.setAttribute('aria-expanded', 'false');
+            }
+        });
+    }
+
+    // 3. Smooth scrolling for internal sidebar section links
+    const allSectionLinks = document.querySelectorAll(
+        '.sidebar-nav-item[href^="#"], .dropdown-item[href^="#"]'
+    );
+    allSectionLinks.forEach(link => {
+        link.addEventListener('click', (e) => {
+            const targetId = link.getAttribute('href');
+            const targetEl = document.querySelector(targetId);
+            if (targetEl) {
+                e.preventDefault();
+                const offset = (document.querySelector('.app-header')?.getBoundingClientRect().height || 64) + 24;
+                const elementPosition = targetEl.getBoundingClientRect().top;
+                const offsetPosition = elementPosition + window.pageYOffset - offset;
+
+                window.scrollTo({
+                    top: offsetPosition,
+                    behavior: 'smooth'
+                });
+
+                // Update the active sidebar section
+                allSectionLinks.forEach(l => {
+                    if (l.getAttribute('href') === targetId) {
+                        l.classList.add('active');
+                    } else {
+                        l.classList.remove('active');
+                    }
+                });
+            }
+        });
+    });
+}
+
+// Keep the active sidebar section in sync with scrolling
 window.addEventListener('scroll', () => {
     const sections = document.querySelectorAll('section[id]');
-    const navLinks = document.querySelectorAll('.admin-subnav a');
+    const sidebarNavItems = document.querySelectorAll('.sidebar-nav-item[href^="#"]');
+    const dropdownItems = document.querySelectorAll('.dropdown-item[href^="#"]');
+
+    if (!sections.length) return;
+
     let currentId = '';
+    const scrollPos = window.pageYOffset + (document.querySelector('.app-header')?.getBoundingClientRect().height || 64) + 28;
 
     sections.forEach(section => {
-        const sectionTop = section.offsetTop - 120;
-        if (window.pageYOffset >= sectionTop) {
+        const top = section.offsetTop;
+        const height = section.offsetHeight;
+        if (scrollPos >= top && scrollPos < top + height) {
             currentId = section.getAttribute('id');
         }
     });
 
+    if (window.pageYOffset < 150 && sections.length > 0) {
+        currentId = sections[0].getAttribute('id');
+    }
+
     if (currentId) {
-        navLinks.forEach(link => {
-            link.classList.remove('active');
-            if (link.getAttribute('href') === `#${currentId}`) {
-                link.classList.add('active');
+        const matchHref = `#${currentId}`;
+
+        sidebarNavItems.forEach(link => {
+            link.classList.toggle('active', link.getAttribute('href') === matchHref);
+        });
+
+        dropdownItems.forEach(link => {
+            const isMatch = link.getAttribute('href') === matchHref;
+            link.classList.toggle('active', isMatch);
+            if (isMatch) {
+                const parentGroup = link.closest('.sidebar-nav-group');
+                if (parentGroup && !parentGroup.classList.contains('open')) {
+                    parentGroup.classList.add('open');
+                    parentGroup.querySelector('.group-header-btn')?.setAttribute('aria-expanded', 'true');
+                }
             }
         });
+
     }
 });
 
 // --- ADMIN BOOTSTRAP INITIALIZATION ---
-if (adminPage) {
+pageSessionReady.then(user => {
+    if (!adminPage || !user) return;
+    initAdminSidebar();
     loadAdminStats();
     loadAdminAnalytics();
     loadAdminViolations();
@@ -1087,5 +1363,4 @@ if (adminPage) {
         loadAdminStats();
         loadAlprLogs();
     }, 30000);
-}
-
+});

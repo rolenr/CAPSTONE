@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Parking Map - Parking Ltd.</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/layout.css">
+    <link rel="stylesheet" href="css/customer.css">
+</head>
+<body data-page="live-map">
+<header class="app-header" data-app-header></header>
+
+<main class="container">
+    <div class="page-title-banner">
+        <div>
+            <h1 class="page-title-main">Live Parking Map</h1>
+            <p class="page-title-sub">Explore the parking layout and current zone occupancy.</p>
+        </div>
+        <a href="reserve.html" class="btn btn-primary">Reserve a slot</a>
+    </div>
+    <!-- LIVE PARKING MAP AVAILABILITY -->
+    <div class="card">
+        <div class="card-header-clean">
+            <h2>Live Zone Map Availability</h2>
+            <span class="section-tag">Interactive Map</span>
+        </div>
+        <p class="section-description">Select any zone on the facility layout to inspect individual slot status.</p>
+
+        <div id="liveMap">Loading capacity data...</div>
+        <div class="zone-detail-panel" id="zoneDetailPanel" style="display: none;"></div>
+    </div>
+
+</main>
+
+<footer class="app-footer" data-app-footer></footer>
+<script src="js/layout.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

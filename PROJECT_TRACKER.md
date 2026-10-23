@@ -82,6 +82,8 @@ CAPSTONE/
 | Component / Feature | Description | Status | Alignment with Proposal |
 | :--- | :--- | :---: | :--- |
 | **Unified App Navigation** | Top bar with brand mark, status indicator, and operator session chip | `COMPLETED` | Section 5.4 Operational UI |
+| **Enterprise Sidebar Dropdown Menu** | Collapsible sticky sidebar with 5 categorized accordion dropdown groups, SVG chevrons, and active scroll-spy | `COMPLETED` | Professional enterprise ergonomics |
+| **Universal Admin Privileges**| Full clearance across customer portals (reserve, live map, citations) without session downgrade | `COMPLETED` | Administrative governance & testing |
 | **Overview KPI Cards** | Gross revenue, today's revenue, capacity, occupancy %, pending fines | `COMPLETED` | Section 5.4.2 Admin Analytics |
 | **Financial Timeline** | Dynamic revenue tracking across Today, 7-Day, 30-Day, ARPV, stay length | `COMPLETED` | Chapter 5 Business Intelligence |
 | **Revenue Streams Matrix** | Breakdown of Transient (₱30), Overnight (+₱100), Reservations, Fines, Subsidies | `COMPLETED` | Page 88, Section 5.5.6 Tariff Table |
@@ -118,6 +120,8 @@ CAPSTONE/
 | `cashier_recent_transactions`| `GET` | `COMPLETED` | Returns recent gatehouse departures with clearance mode and amount collected |
 | `login` | `POST` | `COMPLETED` | Validates credentials against hashed passwords, returns role/plate |
 | `register` | `POST` | `COMPLETED` | Creates account with vehicle plate linkage |
+| `session` / `logout` | `GET` / `POST` | `IMPLEMENTED` | Restores the authenticated principal and CSRF token; invalidates the server session |
+| `set_account_role` | `POST` | `IMPLEMENTED` | ADMIN-only role assignment for ADMIN, DRIVER, CASHIER, and VENDOR |
 | `map` | `GET` | `COMPLETED` | Returns 78 slots with occupancy, zone, and license plate data |
 | `active_reservation` | `GET` | `COMPLETED` | Returns current active booking for a vehicle with QR payload |
 | `reserve` | `POST` | `COMPLETED` | Allocates slot, creates reservation, and marks slot occupied |
@@ -157,7 +161,7 @@ CAPSTONE/
 ### F. Computer Vision, Sectional Occupancy & Model Training (`computer_vision/`)
 | Component / Pipeline | Description | Status | Target Deliverable / Proposal Alignment |
 | :--- | :--- | :---: | :--- |
-| **Sectional Occupancy Detection Model** | Custom YOLOv8 model trained on overhead/angled lot video footage to detect parked vehicles in delimited slots | `PENDING MODEL TRAINING` | Section 5.5.6 Spatial Allocation & Overhead Telemetry |
+| **Sectional Occupancy Detection Model** | Custom YOLOv8n model trained across 40 physical parking bays (Zones A–E) achieving 98.89% mAP@0.5 and 0.96 peak F1 score | `COMPLETED (content/runs/detect/train/)` | Section 5.5.6 Spatial Allocation & Overhead Telemetry |
 | **Sectional Occupancy Rules Engine** | Business logic enforcing Rule 1 (transient fill B–E), Rule 2 (Zone A VIP/PWD priority), and Rule 3 (Zone F overflow threshold) | `PENDING IMPLEMENTATION` | Page 87, Section 5.5.6 Spatial Allocations |
 | **Automated Infraction Enforcement** | Real-time optical verification detecting unauthorized parking, slot mismatches, and overstays; auto-logs fines into `violations` | `PENDING IMPLEMENTATION` | Section 5.4.1 Compliance & Enforcement Matrix |
 | **Entrance ALPR Accuracy Optimization** | Preprocessing, CLAHE contrast adjustment, multi-frame confidence aggregation, and glare reduction for entrance camera | `OPTIMIZATION REQUIRED` | Section 5.3 Gatehouse Optical Recognition |
@@ -179,6 +183,19 @@ CAPSTONE/
 | **Dining Invoice & Staff Attribution** | Records restaurant receipt / bill reference number and counter staff ID into audit trail | `COMPLETED` | Section 5.4.2 System Auditability |
 | **Today's Validation Activity Ledger** | Live auto-refreshing table of today's customer discounts with grace countdown tags | `COMPLETED` | Commercial merchant reconciliation |
 | **Automatic Cashier Synchronization** | Exit gate POS immediately recognizes `PAID_VENDOR` status and deducts ₱30.00 from bill | `COMPLETED` | Seamless gatehouse clearance integration |
+
+---
+
+### H. Authentication & API Authorization
+| Component | Description | Status |
+| :--- | :--- | :---: |
+| **Server-Side Sessions** | PHP session cookie with HttpOnly, SameSite, session ID rotation at login, and idle/absolute expiration | `IMPLEMENTED` |
+| **Role-Based API Policy** | Default-deny allowlist enforcing DRIVER, CASHIER, VENDOR, and ADMIN roles for API actions | `IMPLEMENTED` |
+| **Account Ownership Checks** | Driver reservation and violation requests are bound to the account's registered plate; driver map omits plate numbers | `IMPLEMENTED` |
+| **CSRF Protection** | Authenticated POST requests require a per-session CSRF token supplied in a request header | `IMPLEMENTED` |
+| **Staff Attribution** | Admin, cashier, and vendor audit identities come from the authenticated server session | `IMPLEMENTED` |
+| **Role Administration** | Admin can assign account roles from the account directory; last-admin and self-demotion safeguards are enforced | `IMPLEMENTED` |
+| **Existing Database Upgrade** | First API request adds the role column and maps existing `is_admin` accounts to ADMIN/DRIVER without replacing records | `IMPLEMENTED` |
 
 ---
 
@@ -228,6 +245,14 @@ gantt
 ---
 
 ## 4. Revision History
+* **2026-10-23 (Update 10)**: Evaluated and ingested custom YOLOv8n Sectional Occupancy detection model artifacts (`content/runs/detect/train/`). Model features 40 discrete bay classes (`A-01` through `E-07`), achieving **98.89% mAP@0.5**, **89.73% mAP@0.5:0.95**, and **0.96 peak F1 score** at 0.784 confidence threshold. Validated zero-overfitting loss curves and prepared pipeline for live sectional rules testing.
+* **2026-10-20 (Update 9)**: Refined Admin console navigation hierarchy & brand accents in `frontend/admin.html` and `frontend/css/style.css`:
+  - Removed station identifier (`PARK-MNL-01`) and `Online Port 8080` status indicator from the left sidebar for a minimalist corporate aesthetic.
+  - Relocated System Portals navigation (`Administration`, `Cashier POS`, `Tenant Validator`, `Live Map & Wallet`, `Reserve Bay`, `Violations Tracker`) to the top navigation header (`.main-topbar`), providing instant 1-click cross-portal switching.
+  - Dedicated the sidebar collapsible dropdown menu exclusively to internal administrative functions: `Dashboard`, `Operations & Revenue` (Overview, Analytics, Traffic Influx, Slot Overrides), `Spatial & Vision Telemetry` (Heatmap, ALPR Feed), `Enforcement & Audit` (Active Bookings, Violations Log, Audit Trail), and `Partners & Roles` (User Directory, Role Delegation).
+  - Switched brand accent colors across the sidebar brand header, nav icons, group toggle indicators, dropdown active pills, and topbar portal active states from orange (`#f97316`) to modern enterprise blue (`#38bdf8` / `#1d4ed8`), harmonizing seamlessly with the dark `#0b1120` console theme.
+* **2026-10-20 (Update 8)**: Redesigned `frontend/admin.html` and `frontend/css/style.css` to feature a full-height left dark sidebar (`#0b1120`) styled after enterprise gateway administration consoles (such as iConnect AS2). Features vibrant coral brand branding (`Parking Ltd.`), Lucide-style navigation icons, collapsible dropdown groups (`Operations`, `Vision Telemetry`, `Enforcement`), and user profile card (`RC` / `Roro Cruz` / `ADMINISTRATOR`) with popover sign out. In the main workspace, added breadcrumb utility topbar, `Admin Only` and `Viewer Elevation Active` badges, segmented navigation pills, and system footer badges (`Spring/PHP 8.2`, `Keycloak OIDC SSO`, `AC-24 RBAC`). Granted universal administrator privileges in `backend/api/endpoints.php` and `frontend/js/main.js` across customer portals with zero session downgrade.
+* **2026-10-20 (Update 7)**: Added server-side PHP sessions, role-based authorization for API routes, CSRF validation for authenticated writes, driver plate ownership checks, server-derived audit identities, and admin role assignment. Existing databases are upgraded automatically from `is_admin` to ADMIN/DRIVER roles.
 * **2026-10-05 (Update 6)**: Overhauled frontend presentation in `frontend/vendor.html` and `frontend/css/style.css`. Harmonized layout structure with `cashier.html` and `admin.html`, eliminated badge and text overlapping, implemented unified enterprise button (`.btn`, `.btn-primary`, `.btn-secondary`), badge (`.badge`), and alert (`.alert`) systems, converted stat cards to `.kpi-card` standard, and pushed to `TC-Fortune-patch-2` (Commit: `3a45a1e`).
 * **2026-10-05 (Update 5)**: Implemented Commercial Tenant Validation Portal (`frontend/vendor.html`) with dual-mode plate/token lookup, 20-minute departure grace countdown timer, ₱30.00 base rate waiver, active parked vehicle quick-selector, merchant receipt tracking, and live audit ledger. Expanded `backend/api/endpoints.php` with `vendor_lookup`, `vendor_validate`, `vendor_recent_validations`, and `vendor_active_vehicles`. Created root backwards-compatible redirect stub `vendor.html` and added navigation links across Admin, Cashier, and Driver portals.
 * **2026-10-05 (Update 4)**: Added Computer Vision & Model Training matrix (Section 2.F) tracking overhead sectional occupancy model training, Sectional Occupancy Rules & Enforcement logic, and Entrance/Exit ALPR accuracy improvement tracks. Updated roadmap and milestone Gantt chart.

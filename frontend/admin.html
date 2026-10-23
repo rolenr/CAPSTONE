@@ -3,73 +3,176 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Operations & Analytics - Parking Ltd.</title>
+    <title>Station Administration - Parking Ltd.</title>
     <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/admin.css">
+    <link rel="stylesheet" href="css/layout.css">
 </head>
 <body data-page="admin">
 
-<!-- Unified Top Navigation Bar -->
-<header class="app-header">
-    <div class="header-inner">
-        <a href="admin.html" class="brand-wrap">
-            <div class="brand-icon">P</div>
-            <div class="brand-title">Parking Ltd.</div>
-            <span class="brand-badge">Operations</span>
-        </a>
+<div class="admin-layout">
 
-        <nav class="main-nav">
-            <a href="admin.html" class="active">Administration</a>
-            <a href="cashier.html">Cashier POS</a>
-            <a href="vendor.html">Tenant Validator</a>
-            <a href="dashboard.html">Live Map &amp; Wallet</a>
-            <a href="reserve.html">Reserve Slot</a>
-            <a href="violations.html">Violations Tracker</a>
-        </nav>
-
-        <div class="header-meta">
-            <div class="system-status-indicator">
-                <span class="status-indicator-dot"></span>
-                <span>System Online</span>
+    <!-- Enterprise Left Dark Sidebar (Administrative sections) -->
+    <aside class="admin-sidebar" id="adminSidebar">
+        <div class="sidebar-top">
+            <!-- Brand Header -->
+            <div class="sidebar-brand">
+                <a href="admin.html" class="brand-link">
+                    <span class="brand-name">Parking Ltd.</span>
+                    <span class="brand-tagline">Administration Console</span>
+                </a>
             </div>
-            <div class="user-profile-chip">
-                <div class="user-avatar-initials">RC</div>
-                <span>Roro Cruz (Admin)</span>
+
+            <!-- Sidebar Navigation Menu with Dropdowns (Admin Actions Only) -->
+            <nav class="sidebar-menu" id="sidebarNav">
+                <!-- 1. Dashboard (Direct Link) -->
+                <a href="#overview" class="sidebar-nav-item active">
+                    <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="3" width="7" height="7"></rect>
+                        <rect x="14" y="3" width="7" height="7"></rect>
+                        <rect x="14" y="14" width="7" height="7"></rect>
+                        <rect x="3" y="14" width="7" height="7"></rect>
+                    </svg>
+                    <span class="nav-label">Dashboard</span>
+                </a>
+
+                <!-- 2. Operations & Revenue (Dropdown) -->
+                <div class="sidebar-nav-group open" data-group="ops">
+                    <button type="button" class="group-header-btn" aria-expanded="true">
+                        <span class="group-btn-left">
+                            <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <line x1="12" y1="20" x2="12" y2="10"></line>
+                                <line x1="18" y1="20" x2="18" y2="4"></line>
+                                <line x1="6" y1="20" x2="6" y2="16"></line>
+                            </svg>
+                            <span class="nav-label">Operations</span>
+                        </span>
+                        <svg class="group-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                    </button>
+                    <div class="group-dropdown-list">
+                        <a href="#overview" class="dropdown-item active">Executive Overview</a>
+                        <a href="#analytics" class="dropdown-item">Financial Analytics</a>
+                        <a href="#peak-hours" class="dropdown-item">24h Traffic Influx</a>
+                        <a href="#slot-controls" class="dropdown-item">Slot Overrides</a>
+                    </div>
+                </div>
+
+                <!-- 3. Spatial & Vision Telemetry (Dropdown) -->
+                <div class="sidebar-nav-group open" data-group="telemetry">
+                    <button type="button" class="group-header-btn" aria-expanded="true">
+                        <span class="group-btn-left">
+                            <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                                <circle cx="12" cy="13" r="4"></circle>
+                            </svg>
+                            <span class="nav-label">Vision Telemetry</span>
+                        </span>
+                        <svg class="group-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                    </button>
+                    <div class="group-dropdown-list">
+                        <a href="#heatmap" class="dropdown-item">Zone Heatmap</a>
+                        <a href="#alpr-feed" class="dropdown-item">ALPR Camera Feed</a>
+                    </div>
+                </div>
+
+                <!-- 4. Enforcement & Audit (Dropdown) -->
+                <div class="sidebar-nav-group open" data-group="enforcement">
+                    <button type="button" class="group-header-btn" aria-expanded="true">
+                        <span class="group-btn-left">
+                            <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                            </svg>
+                            <span class="nav-label">Enforcement</span>
+                        </span>
+                        <svg class="group-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                    </button>
+                    <div class="group-dropdown-list">
+                        <a href="#reservations" class="dropdown-item">Active Bookings</a>
+                        <a href="#violations" class="dropdown-item">Violations Log</a>
+                        <a href="#audit-trail" class="dropdown-item">Audit Trail</a>
+                    </div>
+                </div>
+
+                <!-- 5. Partners & Roles (Dropdown) -->
+                <div class="sidebar-nav-group open" data-group="partners">
+                    <button type="button" class="group-header-btn" aria-expanded="true">
+                        <span class="group-btn-left">
+                            <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                                <circle cx="9" cy="7" r="4"></circle>
+                                <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                                <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                            </svg>
+                            <span class="nav-label">Partners &amp; Roles</span>
+                        </span>
+                        <svg class="group-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                    </button>
+                    <div class="group-dropdown-list">
+                        <a href="#accounts" class="dropdown-item">User Directory</a>
+                        <a href="#accounts" class="dropdown-item">Role Delegation</a>
+                    </div>
+                </div>
+            </nav>
+        </div>
+
+        <!-- Sidebar Bottom: Administrator Profile Card Only (No Port 8080) -->
+        <div class="sidebar-bottom">
+            <!-- User Profile Card -->
+            <button type="button" class="sidebar-user-card" id="sidebarUserDropdownToggle" aria-expanded="false" aria-controls="sidebarUserMenu">
+                <div class="user-card-avatar" data-session-avatar>P</div>
+                <div class="user-card-details">
+                    <div class="user-card-name" data-session-email>Checking session…</div>
+                    <div class="user-card-role" data-session-role>Administrator</div>
+                </div>
+                <div class="user-card-chevron">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
+                </div>
+            </button>
+
+            <!-- Quick Profile Popover -->
+            <div class="sidebar-user-menu" id="sidebarUserMenu" style="display: none;">
+                <div class="menu-user-header">
+                    <div class="menu-user-email" data-session-email></div>
+                    <div class="user-card-role" data-session-plate></div>
+                </div>
+                <a href="dashboard.html" class="user-menu-link">Customer View</a>
+                <a href="cashier.html" class="user-menu-link">Cashier POS</a>
+                <a href="vendor.html" class="user-menu-link">Tenant Validator</a>
+                <hr style="border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 4px 0;">
+                <a href="#" id="sidebarLogoutBtn" data-signout class="user-menu-link link-signout">Sign Out</a>
             </div>
-            <a href="#" id="logoutBtn" class="btn-signout">Sign Out</a>
         </div>
-    </div>
-</header>
+    </aside>
 
-<div class="admin-container">
+    <!-- Main Content Stream -->
+    <main class="admin-main-wrapper">
 
-    <!-- Page Title & Actions Banner -->
-    <div class="page-title-banner">
-        <div>
-            <h1 class="page-title-main">Operations &amp; Business Analytics</h1>
-            <p class="page-title-sub">Real-time facility telemetry, financial performance, and gatehouse controls</p>
-        </div>
-        <div class="page-title-actions">
-            <div class="auto-refresh-pill">
-                <span class="status-indicator-dot"></span>
-                <span>Auto-refresh active (30s)</span>
+        <!-- Top Utility Header with System Portals Navigation -->
+        <header class="app-header" data-app-header></header>
+
+        <div class="main-content-body">
+
+            <!-- Page Title & Actions Banner (Page title) -->
+            <div class="page-title-banner">
+                <div>
+                    <div class="page-title-row">
+                        <h1 class="page-title-main">Station Administration</h1>
+                        <span class="section-tag">Administration</span>
+                    </div>
+                    <p class="page-title-sub">Manage local facility parameters, capacity allocation, financial analytics, and gatehouse telemetry.</p>
+                </div>
+                <button type="button" id="refreshDashboardBtn" class="btn btn-outline" onclick="window.location.reload()">Refresh Data</button>
             </div>
-            <button type="button" id="refreshDashboardBtn" class="btn-sm btn-outline" onclick="window.location.reload()">Refresh Data</button>
-        </div>
-    </div>
-
-    <!-- Quick Jump Section Tabs -->
-    <div class="admin-subnav">
-        <a href="#overview" class="active">Overview</a>
-        <a href="#analytics">Financials</a>
-        <a href="#heatmap">Zone Heatmap</a>
-        <a href="#peak-hours">Traffic Influx</a>
-        <a href="#alpr-feed">ALPR Feed</a>
-        <a href="#slot-controls">Slot Overrides</a>
-        <a href="#reservations">Reservations</a>
-        <a href="#violations">Violations</a>
-        <a href="#accounts">User Directory</a>
-        <a href="#audit-trail">Audit Trail</a>
-    </div>
 
     <!-- 1. OVERVIEW KPI CARDS -->
     <section id="overview" class="stat-cards-grid">
@@ -203,7 +306,8 @@
         </div>
 
         <!-- Violations Table -->
-        <table class="admin-table">
+        <div class="table-scroll" role="region" aria-label="Administrative records" tabindex="0">
+<table class="admin-table">
             <thead>
                 <tr>
                     <th>Case ID</th>
@@ -220,6 +324,7 @@
                 <tr><td colspan="8">Loading enforcement records...</td></tr>
             </tbody>
         </table>
+</div>
     </section>
 
     <!-- 6. LIVE ALPR DETECTION FEED -->
@@ -229,7 +334,8 @@
             <span class="section-tag">Camera Telemetry</span>
         </div>
 
-        <table class="admin-table">
+        <div class="table-scroll" role="region" aria-label="Administrative records" tabindex="0">
+<table class="admin-table">
             <thead>
                 <tr>
                     <th>Timestamp</th>
@@ -244,6 +350,7 @@
                 <tr><td colspan="6">Loading detections...</td></tr>
             </tbody>
         </table>
+</div>
     </section>
 
     <!-- 7. SLOT MANAGEMENT & MANUAL OVERRIDES -->
@@ -279,7 +386,8 @@
             <h2>Active Prepaid Reservations</h2>
             <span class="section-tag">Slot Allocations</span>
         </div>
-        <table class="admin-table">
+        <div class="table-scroll" role="region" aria-label="Administrative records" tabindex="0">
+<table class="admin-table">
             <thead>
                 <tr>
                     <th>Plate Number</th>
@@ -295,6 +403,7 @@
                 <tr><td colspan="7">Loading reservations...</td></tr>
             </tbody>
         </table>
+</div>
     </section>
 
     <!-- 9. USER ACCOUNTS & PRIVILEGE MANAGEMENT -->
@@ -308,7 +417,8 @@
                 <input type="text" id="accountSearchInput" placeholder="Search by email or license plate..." class="search-input">
             </div>
         </div>
-        <table class="admin-table">
+        <div class="table-scroll" role="region" aria-label="Administrative records" tabindex="0">
+<table class="admin-table">
             <thead>
                 <tr>
                     <th>Email Address</th>
@@ -322,6 +432,7 @@
                 <tr><td colspan="5">Loading accounts...</td></tr>
             </tbody>
         </table>
+</div>
     </section>
 
     <!-- 10. IMMUTABLE AUDIT TRAIL -->
@@ -330,7 +441,8 @@
             <h2>System Audit Trail &amp; Operational Logs</h2>
             <span class="section-tag">Compliance Trail</span>
         </div>
-        <table class="admin-table audit-table">
+        <div class="table-scroll" role="region" aria-label="Administrative records" tabindex="0">
+<table class="admin-table audit-table">
             <thead>
                 <tr>
                     <th>Timestamp</th>
@@ -344,19 +456,17 @@
                 <tr><td colspan="5">Loading audit trail records...</td></tr>
             </tbody>
         </table>
+</div>
     </section>
 
+    </div><!-- .main-content-body -->
+
+    <!-- Shared application footer -->
+    <footer class="app-footer" data-app-footer></footer>
+    </main>
 </div>
 
-<footer class="app-footer">
-    Parking Ltd. Operations Console &bull; Centralized Facility Management &bull; Local Edge Node Active
-</footer>
-
-<script>
-    if (sessionStorage.getItem('isAdmin') !== 'true') {
-        window.location.href = 'login.html';
-    }
-</script>
+<script src="js/layout.js"></script>
 <script src="js/main.js"></script>
 </body>
 </html>
