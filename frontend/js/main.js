@@ -6,6 +6,47 @@ const API_BASE = (function() {
     return 'backend/api/endpoints.php';
 })();
 
+function normalizeLicensePlateInput(value) {
+    return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function normalizePlateOrTokenInput(value) {
+    const input = String(value || '').trim();
+    if (/^QR_/i.test(input)) return input.toUpperCase().replace(/\s+/g, '');
+    return normalizeLicensePlateInput(input);
+}
+
+function formatPhtDateTime(value) {
+    if (!value) return '—';
+    const raw = String(value).trim();
+    const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T');
+    const withTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized)
+        ? normalized
+        : `${normalized}Z`;
+    const date = new Date(withTimezone);
+    if (Number.isNaN(date.getTime())) return raw;
+
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Manila',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hourCycle: 'h23'
+    }).formatToParts(date).map(part => [part.type, part.value]));
+    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} PHT`;
+}
+
+document.querySelectorAll('[data-license-plate-input]').forEach((input) => {
+    const normalize = () => { input.value = normalizeLicensePlateInput(input.value); };
+    input.addEventListener('input', normalize);
+    normalize();
+});
+
+document.querySelectorAll('[data-license-plate-or-token]').forEach((input) => {
+    const normalize = () => { input.value = normalizePlateOrTokenInput(input.value); };
+    input.addEventListener('input', normalize);
+    normalize();
+});
+
 let csrfToken = sessionStorage.getItem('csrfToken') || '';
 
 // Centralize same-origin credentials and CSRF handling for all API requests.
@@ -58,6 +99,7 @@ async function enforcePageRole() {
 
         const sessionData = await response.json();
         const user = sessionData.user || {};
+        user.plate_number = normalizeLicensePlateInput(user.plate_number);
         csrfToken = sessionData.csrf_token || '';
         currentUser.licensePlate = user.plate_number || '';
         currentUser.isVIP = Boolean(user.is_vip);
@@ -146,7 +188,7 @@ if (authForm) {
             const data = await response.json();
 
             if (data.success) {
-                sessionStorage.setItem('licensePlate', data.license_plate);
+                sessionStorage.setItem('licensePlate', normalizeLicensePlateInput(data.license_plate));
                 sessionStorage.setItem('isVIP', data.is_vip);
                 sessionStorage.setItem('isAdmin', data.is_admin);
                 sessionStorage.setItem('adminEmail', data.email || '');
@@ -177,7 +219,7 @@ if (registerForm) {
         e.preventDefault();
         const email = document.getElementById('regEmail').value;
         const password = document.getElementById('regPassword').value;
-        const plate = document.getElementById('regPlate').value;
+        const plate = normalizeLicensePlateInput(document.getElementById('regPlate').value);
 
         try {
             const response = await apiFetch(`${API_BASE}?action=register`, {
@@ -375,7 +417,7 @@ const startDate = document.getElementById('startDate');
 const endDate = document.getElementById('endDate');
 
 if (startDate && endDate) {
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = formatPhtDateTime(new Date().toISOString()).slice(0, 10);
     startDate.min = todayStr;
     endDate.min = todayStr;
     if (!startDate.value) startDate.value = todayStr;
@@ -441,8 +483,8 @@ function renderReservationDetails(data, plate) {
 function reservationPlate() {
     const target = document.getElementById('bookingPlate');
     return currentUser.role === 'ADMIN' && target
-        ? target.value.trim().toUpperCase()
-        : currentUser.licensePlate;
+        ? normalizeLicensePlateInput(target.value)
+        : normalizeLicensePlateInput(currentUser.licensePlate);
 }
 
 async function checkActiveReservation() {
@@ -546,7 +588,7 @@ if (reservationForm) {
 if (violationForm) {
     violationForm.addEventListener("submit", async function (e) {
         e.preventDefault();
-        const plate = document.getElementById("searchPlate").value.trim().toUpperCase();
+        const plate = normalizeLicensePlateInput(document.getElementById("searchPlate").value);
 
         try {
             const response = await apiFetch(`${API_BASE}?action=violations&plate=${encodeURIComponent(plate)}`);
@@ -577,7 +619,7 @@ if (violationForm) {
                     <div class="violation-card-item">
                         <div class="violation-card-info">
                             <h4>${v.violation_type}</h4>
-                            <p>Location: Zone ${v.zone || '—'} &bull; Slot ${v.slot_number || 'Driveway/Perimeter'} &bull; Issued: ${v.issued_at}</p>
+                            <p>Location: Zone ${v.zone || '—'} &bull; Slot ${v.slot_number || 'Driveway/Perimeter'} &bull; Issued: ${formatPhtDateTime(v.issued_at)}</p>
                         </div>
                         <div class="violation-card-meta">
                             <div class="violation-fine-amount">₱${parseFloat(v.penalty_amount || 0).toFixed(2)}</div>
@@ -812,7 +854,7 @@ async function loadAdminViolations() {
                     <td>${v.violation_type}</td>
                     <td><strong>₱${Number(v.penalty_amount).toFixed(2)}</strong></td>
                     <td>${statusBadge}</td>
-                    <td style="font-size: 0.78rem; color: var(--text-muted);">${v.issued_at}</td>
+                    <td style="font-size: 0.78rem; color: var(--text-muted);">${formatPhtDateTime(v.issued_at)}</td>
                     <td>${actionCell}</td>
                 </tr>
             `;
@@ -875,7 +917,7 @@ async function loadAdminAuditLogs() {
             const actionClass = `audit-action-${l.action_type}`;
             return `
                 <tr>
-                    <td style="white-space: nowrap; font-size: 0.78rem; color: var(--text-muted);">${l.created_at}</td>
+                    <td style="white-space: nowrap; font-size: 0.78rem; color: var(--text-muted);">${formatPhtDateTime(l.created_at)}</td>
                     <td><strong>${l.admin_email}</strong></td>
                     <td><span class="audit-action-tag ${actionClass}">${l.action_type}</span></td>
                     <td><code>${l.target_entity} #${l.target_id || ''}</code></td>
@@ -1084,7 +1126,7 @@ async function loadAlprLogs() {
 
             return `
                 <tr>
-                    <td style="white-space: nowrap; font-size: 0.78rem; color: var(--text-muted);">${log.timestamp || 'N/A'}</td>
+                    <td style="white-space: nowrap; font-size: 0.78rem; color: var(--text-muted);">${formatPhtDateTime(log.timestamp)}</td>
                     <td><code>${log.plate_number}</code></td>
                     <td>${log.zone ? 'Zone ' + log.zone + ' &bull; ' : ''}Slot ${log.slot_number || 'Unassigned'}</td>
                     <td><span style="font-weight: 600; color: var(--primary);">98.5%</span></td>
@@ -1131,7 +1173,9 @@ function renderFilteredSlots() {
 
     const countLabel = document.getElementById('filteredSlotsCount');
     if (countLabel) {
-        countLabel.textContent = `Showing ${filteredSlots.length} of ${adminSlotsCache.length} slots (Zone ${adminCurrentZoneFilter})`;
+        countLabel.textContent = adminCurrentZoneFilter === 'ALL'
+            ? `Showing all ${filteredSlots.length} spaces`
+            : `Showing ${filteredSlots.length} spaces in Zone ${adminCurrentZoneFilter}`;
     }
 
     // Group filtered slots by zone
@@ -1158,8 +1202,8 @@ function renderFilteredSlots() {
                     <p class="status-text ${statusClass}">
                         ${isOccupied ? 'Occupied' : 'Available'}
                     </p>
-                    <button class="btn-action" onclick="toggleSlotOverride(${slot.slot_id}, ${isOccupied ? 0 : 1})">
-                        ${isOccupied ? 'Force Free' : 'Force Occupied'}
+                    <button type="button" class="btn-action slot-override-button" aria-label="Mark ${slot.slot_number} ${isOccupied ? 'available' : 'occupied'}" onclick="toggleSlotOverride(${slot.slot_id}, ${isOccupied ? 0 : 1})">
+                        Mark ${isOccupied ? 'available' : 'occupied'}
                     </button>
                 </div>
             `;
@@ -1169,7 +1213,7 @@ function renderFilteredSlots() {
             <div class="zone-section">
                 <div class="zone-header">
                     <h3>Zone ${zone}</h3>
-                    <span class="zone-badge">${totalCount - occupiedCount} / ${totalCount} available</span>
+                    <span class="zone-badge"><strong>${totalCount - occupiedCount}</strong> available <span aria-hidden="true">·</span> ${occupiedCount} occupied</span>
                 </div>
                 <div class="admin-grid">
                     ${cards}
@@ -1180,8 +1224,8 @@ function renderFilteredSlots() {
 }
 
 async function toggleSlotOverride(slotId, newOccupiedState) {
-    const stateName = newOccupiedState ? 'OCCUPIED' : 'AVAILABLE';
-    if (!confirm(`Force Slot status to ${stateName}? This manual override will be recorded in the audit trail.`)) return;
+    const stateName = newOccupiedState ? 'occupied' : 'available';
+    if (!confirm(`Mark this space as ${stateName}? This manual override will be recorded in the audit trail.`)) return;
 
     try {
         const response = await apiFetch(`${API_BASE}?action=toggle_slot`, {
@@ -1212,8 +1256,12 @@ const filterButtonsContainer = document.getElementById('zoneFilterButtons');
 if (filterButtonsContainer) {
     filterButtonsContainer.addEventListener('click', (e) => {
         if (e.target.classList.contains('zone-filter-btn')) {
-            filterButtonsContainer.querySelectorAll('.zone-filter-btn').forEach(btn => btn.classList.remove('active'));
+            filterButtonsContainer.querySelectorAll('.zone-filter-btn').forEach(btn => {
+                btn.classList.remove('active');
+                btn.setAttribute('aria-pressed', 'false');
+            });
             e.target.classList.add('active');
+            e.target.setAttribute('aria-pressed', 'true');
             adminCurrentZoneFilter = e.target.dataset.filter || 'ALL';
             renderFilteredSlots();
         }

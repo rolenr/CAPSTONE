@@ -360,22 +360,28 @@
             <span class="section-tag">Facility Controls</span>
         </div>
 
-        <div class="toolbar-wrap">
-            <div class="zone-filter-buttons" id="zoneFilterButtons">
-                <button type="button" class="zone-filter-btn active" data-filter="ALL">All Zones</button>
-                <button type="button" class="zone-filter-btn" data-filter="A">Zone A</button>
-                <button type="button" class="zone-filter-btn" data-filter="B">Zone B</button>
-                <button type="button" class="zone-filter-btn" data-filter="C">Zone C</button>
-                <button type="button" class="zone-filter-btn" data-filter="D">Zone D</button>
-                <button type="button" class="zone-filter-btn" data-filter="E">Zone E</button>
-                <button type="button" class="zone-filter-btn" data-filter="F">Zone F (Overflow)</button>
+        <p class="section-description slot-controls-description">Review availability by zone. Manual status changes are recorded in the audit trail.</p>
+
+        <div class="toolbar-wrap slot-controls-toolbar">
+            <div class="zone-filter-buttons" id="zoneFilterButtons" role="group" aria-label="Filter parking spaces by zone">
+                <button type="button" class="zone-filter-btn active" data-filter="ALL" aria-pressed="true">All zones</button>
+                <button type="button" class="zone-filter-btn" data-filter="A" aria-pressed="false">Zone A</button>
+                <button type="button" class="zone-filter-btn" data-filter="B" aria-pressed="false">Zone B</button>
+                <button type="button" class="zone-filter-btn" data-filter="C" aria-pressed="false">Zone C</button>
+                <button type="button" class="zone-filter-btn" data-filter="D" aria-pressed="false">Zone D</button>
+                <button type="button" class="zone-filter-btn" data-filter="E" aria-pressed="false">Zone E</button>
+                <button type="button" class="zone-filter-btn" data-filter="F" aria-pressed="false">Zone F · Overflow</button>
             </div>
-            <div>
-                <span id="filteredSlotsCount" class="counter-label">Showing 78 slots</span>
+            <div class="slot-controls-meta">
+                <span id="filteredSlotsCount" class="counter-label" aria-live="polite">Loading spaces…</span>
+                <div class="slot-status-legend" aria-label="Space status legend">
+                    <span><i class="slot-legend-dot available" aria-hidden="true"></i>Available</span>
+                    <span><i class="slot-legend-dot occupied" aria-hidden="true"></i>Occupied</span>
+                </div>
             </div>
         </div>
 
-        <div id="adminMapControls" class="admin-grid">
+        <div id="adminMapControls" class="admin-slot-zones" aria-live="polite">
             Loading parking slots...
         </div>
     </section>

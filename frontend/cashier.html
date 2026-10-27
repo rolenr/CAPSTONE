@@ -39,7 +39,7 @@
         </div>
     </div>
 
-    <!-- 2-Column Operations Layout: Left = Settlement / Right = Barrier Clearance -->
+    <!-- 2-Column Operations Layout: Left = Settlement / Right = Exit Clearance -->
     <div class="cashier-layout-grid">
 
         <!-- 1. LEFT COLUMN: PAYMENT SETTLEMENT & POS STATION -->
@@ -53,9 +53,10 @@
             <form id="cashierLookupForm" style="margin-bottom: 1rem;">
                 <label for="lookupQuery">Scan Entry Token (QR) or License Plate</label>
                 <div class="form-row">
-                    <input type="text" id="lookupQuery" placeholder="e.g. GAB1234 or QR_ACT_07" required style="font-family: var(--font-mono); font-weight: 600; text-transform: uppercase;">
+                    <input type="text" id="lookupQuery" data-license-plate-or-token placeholder="e.g. GAB1234 or QR_ACT_07" required style="font-family: var(--font-mono); font-weight: 600; text-transform: uppercase;">
                     <button type="submit" class="btn btn-primary" style="width: auto; padding: 0.55rem 1.25rem; white-space: nowrap;">Query Stay</button>
                 </div>
+                <small class="field-help">Enter a plate using letters and numbers only, without spaces or hyphens. QR tokens can be scanned as issued.</small>
             </form>
 
             <!-- Invoice Details Card (Populated after query) -->
@@ -155,81 +156,75 @@
             </div>
         </div>
 
-        <!-- 2. RIGHT COLUMN: EXIT BARRIER & VERIFICATION (ALPR PRIORITY + QR FALLBACK) -->
+        <!-- 2. RIGHT COLUMN: EXIT CLEARANCE CHECK (PLATE + QR FALLBACK) -->
         <div class="card">
             <div class="card-header-clean">
-                <h2>2. Exit Gate Barrier Station</h2>
-                <span class="section-tag">Dual Verification Gate</span>
+                <h2>2. Exit Clearance Check</h2>
+                <span class="section-tag">Plate or Entry QR</span>
             </div>
 
-            <!-- Physical Barrier State Visualizer -->
             <div class="barrier-station-box">
                 <div class="barrier-header-row">
                     <div>
-                        <strong style="letter-spacing: 0.04em; font-size: 0.85rem;">EXIT BARRIER RELAY 01</strong>
-                        <div style="font-size: 0.7rem; color: var(--slate-400);">Hardware Actuator #RELAY-EXIT-L1</div>
+                        <strong style="letter-spacing: 0.04em; font-size: 0.85rem;">MANUAL EXIT BARRIER</strong>
+                        <div style="font-size: 0.7rem; color: var(--slate-400);">The guard operates the existing barrier controls.</div>
                     </div>
-                    <span id="barrierStatusPill" class="barrier-state-pill barrier-state-closed">
-                        <span style="width: 6px; height: 6px; border-radius: 50%; background: #ef4444;"></span>
-                        BARRIER CLOSED
+                    <span id="barrierStatusPill" class="barrier-state-pill" style="background: #e2e8f0; color: #334155;">
+                        WAITING FOR CHECK
                     </span>
                 </div>
 
-                <!-- Animated Barrier Boom -->
-                <div class="barrier-anim-container">
-                    <div class="barrier-post"></div>
-                    <div id="barrierArm" class="barrier-arm"></div>
-                </div>
-
-                <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; color: var(--slate-300);">
-                    <span id="barrierFeedbackMsg">Vehicle must be financially cleared prior to barrier lift.</span>
-                    <span id="barrierCountdown" style="font-weight: 600; color: #86efac; display: none;">Closing in 5s...</span>
+                <div style="font-size: 0.85rem; color: var(--slate-300); padding-top: 0.75rem;">
+                    <span id="barrierFeedbackMsg">Check the active session. A cleared result authorizes manual opening; it does not operate the barrier.</span>
                 </div>
             </div>
 
-            <!-- PRIORITY 1: AUTOMATED ALPR CAMERA SCAN -->
+            <!-- Plate-based clearance check -->
             <div class="alpr-scan-zone">
-                <div class="alpr-scan-title">Priority 1: Automated ALPR Camera Detection</div>
+                <div class="alpr-scan-title">Check by License Plate</div>
                 <p style="font-size: 0.75rem; color: #cbd5e1; margin-bottom: 8px;">
-                    Standard exit flow: Overhead optical camera scans approaching vehicle plate to verify cleared payment.
+                    Match the vehicle plate to an active parking session and verify its payment status.
                 </p>
 
                 <div style="margin: 8px 0;">
                     <span style="font-size: 0.7rem; text-transform: uppercase; color: #94a3b8; letter-spacing: 0.05em;">Scanned Plate</span>
                     <div><span id="alprLivePlate" class="alpr-live-plate">READY</span></div>
-                    <div class="alpr-conf-meter">OCR Confidence: <strong id="alprConfScore" style="color: #60a5fa;">—</strong></div>
+                    <div class="alpr-conf-meter">Lookup Status: <strong id="alprConfScore" style="color: #60a5fa;">—</strong></div>
                 </div>
 
                 <button type="button" id="triggerAlprBtn" class="btn btn-primary" style="width: 100%; padding: 0.65rem; font-weight: 600;">
-                    Scan Approaching Plate (ALPR Priority)
+                    Check Plate Clearance
                 </button>
             </div>
 
             <!-- PRIORITY 2 / FALLBACK: QR CODE SCANNER (OPTICAL EXCEPTION) -->
             <div class="fallback-box">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                    <strong style="font-size: 0.8125rem; color: var(--text-primary);">Priority 2: QR Scanner Fallback</strong>
+                    <strong style="font-size: 0.8125rem; color: var(--text-primary);">Fallback: Entry QR Token</strong>
                     <span class="fallback-badge">Optical Exception</span>
                 </div>
                 <p style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 10px;">
-                    Use strictly if camera fails to read the license plate due to weather, obstruction, or unreadable digits.
+                    Use the issued entry QR token when the plate cannot be matched. Session IDs and plate numbers are not accepted here.
                 </p>
 
                 <div class="form-row">
-                    <input type="text" id="qrFallbackInput" placeholder="Scan customer QR token or enter Session ID" style="font-family: var(--font-mono); font-size: 0.78rem;">
+                    <input type="text" id="qrFallbackInput" placeholder="Scan issued entry QR token" style="font-family: var(--font-mono); font-size: 0.78rem;">
                     <button type="button" id="triggerQrFallbackBtn" class="btn btn-outline" style="width: auto; padding: 0.5rem 1rem; white-space: nowrap; font-weight: 600;">
                         Validate QR
                     </button>
                 </div>
             </div>
 
-            <!-- Emergency Manual Barrier Toggle -->
-            <div style="margin-top: 1rem; padding-top: 8px; border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 0.72rem; color: var(--text-muted);">Emergency Bypass Relay:</span>
-                <button type="button" id="emergencyOverrideBtn" class="btn btn-sm btn-danger" style="font-size: 0.7rem;">
-                    Manual Force Barrier
+            <div id="departureConfirmBox" class="fallback-box" hidden style="margin-top: 1rem; border-color: #86efac;">
+                <strong style="font-size: 0.8125rem; color: var(--text-primary);">Record the vehicle's departure</strong>
+                <p style="font-size: 0.75rem; color: var(--text-secondary); margin: 0.4rem 0 0.75rem;">
+                    After the guard confirms the vehicle has passed, record the departure to close the session and release its slot.
+                </p>
+                <button type="button" id="confirmDepartureBtn" class="btn btn-primary" style="width: 100%;">
+                    Confirm Vehicle Passed
                 </button>
             </div>
+
         </div>
 
     </div>
@@ -272,7 +267,7 @@
 <script>
     // --- CASHIER INTERFACE CONTROLLER ---
     let currentSession = null;
-    let autoCloseTimer = null;
+    let pendingDepartureSessionId = null;
 
     // Load active parked vehicles for quick selection chips
     async function loadActiveParkedChips() {
@@ -317,7 +312,9 @@
     // Query stay and compute invoice
     document.getElementById('cashierLookupForm')?.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const query = document.getElementById('lookupQuery').value.trim();
+        pendingDepartureSessionId = null;
+        document.getElementById('departureConfirmBox').hidden = true;
+        const query = normalizePlateOrTokenInput(document.getElementById('lookupQuery').value);
         if (!query) return;
 
         try {
@@ -347,7 +344,7 @@
 
         document.getElementById('invPlate').textContent = s.plate_number;
         document.getElementById('invSlot').textContent = `Zone ${s.zone} &bull; Slot ${s.slot_number}`;
-        document.getElementById('invEntryTime').textContent = s.entry_time;
+        document.getElementById('invEntryTime').textContent = formatPhtDateTime(s.entry_time);
         document.getElementById('invDuration').textContent = `${d.human} (${d.minutes} mins)`;
 
         document.getElementById('invBaseFee').textContent = `₱${Number(t.base_fee).toFixed(2)}`;
@@ -372,9 +369,9 @@
 
         updateTotalDue();
 
-        // Also pre-stage the ALPR exit box for this vehicle
+        // Stage the plate and issued QR token for exit clearance.
         document.getElementById('alprLivePlate').textContent = s.plate_number;
-        document.getElementById('qrFallbackInput').value = s.entry_token || s.session_id;
+        document.getElementById('qrFallbackInput').value = s.entry_token || '';
     }
 
     function updateTotalDue() {
@@ -440,14 +437,14 @@
             const data = await response.json();
 
             if (data.success) {
-                alert(`Payment CLEARED for ${data.plate_number}. Direct vehicle to Exit Barrier.`);
+                alert(`Payment recorded for ${data.plate_number}. Check exit clearance before the guard opens the barrier.`);
                 loadActiveParkedChips();
                 loadRecentExits();
 
-                // Stage Exit Barrier for priority ALPR scan
+                // Stage the plate for a separate exit clearance check.
                 document.getElementById('alprLivePlate').textContent = data.plate_number;
-                document.getElementById('alprConfScore').textContent = '99.4% (Camera Armed)';
-                document.getElementById('barrierFeedbackMsg').textContent = `Vehicle ${data.plate_number} financially cleared. Ready for exit camera scan.`;
+                document.getElementById('alprConfScore').textContent = 'Ready to check';
+                document.getElementById('barrierFeedbackMsg').textContent = `Payment recorded for ${data.plate_number}. Check the active session before the guard operates the barrier.`;
             } else {
                 alert(data.error || 'Payment failed.');
             }
@@ -456,17 +453,19 @@
         }
     });
 
-    // --- EXIT BARRIER OPERATIONS (PRIORITY 1: ALPR, FALLBACK: QR) ---
+    // --- EXIT CLEARANCE CHECK (PLATE, FALLBACK: ISSUED QR TOKEN) ---
 
-    // PRIORITY 1: Automated ALPR Camera Detection
+    // Primary exit clearance lookup by plate
     document.getElementById('triggerAlprBtn')?.addEventListener('click', async () => {
-        const plate = document.getElementById('alprLivePlate').textContent.trim();
+        pendingDepartureSessionId = null;
+        document.getElementById('departureConfirmBox').hidden = true;
+        const plate = normalizeLicensePlateInput(document.getElementById('alprLivePlate').textContent);
         if (!plate || plate === 'READY') {
             alert('No vehicle staged at Exit Lane. Please select or query a vehicle first.');
             return;
         }
 
-        document.getElementById('alprConfScore').textContent = 'Scanning...';
+        document.getElementById('alprConfScore').textContent = 'Checking...';
 
         try {
             const response = await apiFetch(`${API_BASE}?action=exit_barrier_clearance`, {
@@ -480,26 +479,23 @@
             });
             const data = await response.json();
 
-            if (data.success && data.barrier_actuated) {
-                document.getElementById('alprConfScore').textContent = '99.5% Confirmed';
-                actuateBarrierOpen(`ALPR MATCH CONFIRMED (${data.plate_number})`);
-                loadActiveParkedChips();
-                loadRecentExits();
+            if (data.success && data.clearance_allowed) {
+                showClearanceDecision(data, true);
             } else {
-                document.getElementById('alprConfScore').textContent = 'UNPAID / REJECTED';
-                alert(data.error || 'Exit Denied.');
-                document.getElementById('barrierFeedbackMsg').textContent = data.error || 'Barrier Denied.';
+                showClearanceDecision(data, false);
             }
         } catch (err) {
-            alert('Communication error with gate hardware.');
+            showClearanceDecision({ error: 'Could not reach the clearance service.' }, false);
         }
     });
 
-    // FALLBACK PRIORITY 2: QR Scanner / Token Fallback
+    // Fallback clearance lookup by issued entry QR token
     document.getElementById('triggerQrFallbackBtn')?.addEventListener('click', async () => {
+        pendingDepartureSessionId = null;
+        document.getElementById('departureConfirmBox').hidden = true;
         const token = document.getElementById('qrFallbackInput').value.trim();
         if (!token) {
-            alert('Please scan customer QR code or enter Session ID.');
+            alert('Please scan the issued entry QR token.');
             return;
         }
 
@@ -516,71 +512,69 @@
             });
             const data = await response.json();
 
-            if (data.success && data.barrier_actuated) {
-                actuateBarrierOpen(`QR FALLBACK CONFIRMED (${data.plate_number})`);
-                loadActiveParkedChips();
-                loadRecentExits();
+            if (data.success && data.clearance_allowed) {
+                showClearanceDecision(data, true);
             } else {
-                alert(data.error || 'Invalid QR or unpaid stay.');
+                showClearanceDecision(data, false);
             }
         } catch (err) {
-            alert('Server error.');
+            showClearanceDecision({ error: 'Could not reach the clearance service.' }, false);
         }
     });
 
-    // Actuate Barrier Open (Animation & Auto-close)
-    function actuateBarrierOpen(reason) {
-        const arm = document.getElementById('barrierArm');
+    function showClearanceDecision(data, allowed) {
         const pill = document.getElementById('barrierStatusPill');
         const msg = document.getElementById('barrierFeedbackMsg');
-        const count = document.getElementById('barrierCountdown');
-
-        if (arm) arm.classList.add('arm-open');
+        const confirmBox = document.getElementById('departureConfirmBox');
+        const confirmButton = document.getElementById('confirmDepartureBtn');
+        pendingDepartureSessionId = allowed && data.session_id ? Number(data.session_id) : null;
+        if (confirmBox) confirmBox.hidden = !pendingDepartureSessionId;
+        if (confirmButton) confirmButton.disabled = false;
         if (pill) {
-            pill.className = 'barrier-state-pill barrier-state-open';
-            pill.innerHTML = '<span style="width: 6px; height: 6px; border-radius: 50%; background: #22c55e;"></span> BARRIER OPEN';
+            pill.className = 'barrier-state-pill';
+            pill.textContent = allowed ? 'CLEARED TO EXIT' : 'NOT CLEARED';
+            pill.style.background = allowed ? '#dcfce7' : '#fee2e2';
+            pill.style.color = allowed ? '#166534' : '#991b1b';
         }
-        if (msg) msg.textContent = `Barrier raised: ${reason}. Vehicle exiting...`;
-
-        // Start countdown to auto-close barrier
-        clearTimeout(autoCloseTimer);
-        let secondsLeft = 5;
-        if (count) {
-            count.style.display = 'inline';
-            count.textContent = `Closing in ${secondsLeft}s...`;
+        if (msg) {
+            const detail = allowed
+                ? `${data.message || 'Payment status is valid.'} Payment status: ${data.payment_status}.`
+                : (data.error || 'Exit clearance denied.');
+            msg.textContent = detail;
         }
+    }
 
-        const interval = setInterval(() => {
-            secondsLeft--;
-            if (count) count.textContent = `Closing in ${secondsLeft}s...`;
-            if (secondsLeft <= 0) {
-                clearInterval(interval);
-                actuateBarrierClosed();
+    document.getElementById('confirmDepartureBtn')?.addEventListener('click', async (event) => {
+        if (!pendingDepartureSessionId) return;
+        if (!confirm('Has the guard confirmed that this vehicle physically passed the exit?')) return;
+
+        const button = event.currentTarget;
+        button.disabled = true;
+        try {
+            const response = await apiFetch(`${API_BASE}?action=confirm_vehicle_departure`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: pendingDepartureSessionId })
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+                document.getElementById('barrierFeedbackMsg').textContent = data.error || 'Departure could not be recorded.';
+                button.disabled = false;
+                return;
             }
-        }, 1000);
-    }
 
-    function actuateBarrierClosed() {
-        const arm = document.getElementById('barrierArm');
-        const pill = document.getElementById('barrierStatusPill');
-        const msg = document.getElementById('barrierFeedbackMsg');
-        const count = document.getElementById('barrierCountdown');
-
-        if (arm) arm.classList.remove('arm-open');
-        if (pill) {
-            pill.className = 'barrier-state-pill barrier-state-closed';
-            pill.innerHTML = '<span style="width: 6px; height: 6px; border-radius: 50%; background: #ef4444;"></span> BARRIER CLOSED';
-        }
-        if (msg) msg.textContent = 'Vehicle departed. Barrier safely lowered.';
-        if (count) count.style.display = 'none';
-        document.getElementById('alprLivePlate').textContent = 'READY';
-        document.getElementById('alprConfScore').textContent = '—';
-    }
-
-    // Emergency Override
-    document.getElementById('emergencyOverrideBtn')?.addEventListener('click', () => {
-        if (confirm('EMERGENCY: Force open exit barrier? This emergency bypass will be logged in the immutable audit trail.')) {
-            actuateBarrierOpen('EMERGENCY MANUAL BYPASS');
+            pendingDepartureSessionId = null;
+            document.getElementById('departureConfirmBox').hidden = true;
+            const pill = document.getElementById('barrierStatusPill');
+            pill.textContent = 'DEPARTURE RECORDED';
+            pill.style.background = '#dbeafe';
+            pill.style.color = '#1e40af';
+            document.getElementById('barrierFeedbackMsg').textContent = data.message;
+            loadActiveParkedChips();
+            loadRecentExits();
+        } catch (err) {
+            document.getElementById('barrierFeedbackMsg').textContent = 'Could not reach the departure service.';
+            button.disabled = false;
         }
     });
 
@@ -599,10 +593,13 @@
             }
 
             table.innerHTML = data.transactions.map(t => {
-                const isAlpr = t.exit_method === 'ALPR';
-                const methodBadge = isAlpr 
-                    ? '<span class="badge badge-paid">ALPR CAMERA (PRIORITY)</span>'
-                    : '<span class="badge badge-overnight">QR TOKEN (FALLBACK)</span>';
+                const methodBadges = {
+                    ALPR: '<span class="badge badge-paid">ALPR CAMERA</span>',
+                    QR_FALLBACK: '<span class="badge badge-overnight">QR TOKEN (FALLBACK)</span>',
+                    SESSION_ID: '<span class="badge badge-overnight">MANUAL SESSION LOOKUP</span>'
+                };
+                const methodBadge = methodBadges[t.exit_method]
+                    || '<span class="badge">NOT RECORDED</span>';
 
                 return `
                     <tr>
@@ -613,7 +610,7 @@
                         <td><span class="badge badge-paid">${t.payment_status}</span></td>
                         <td>${methodBadge}</td>
                         <td><span style="font-size: 0.75rem; color: var(--text-secondary);">${t.staff_id || 'ATT-01'}</span></td>
-                        <td style="font-size: 0.78rem; color: var(--text-muted); white-space: nowrap;">${t.exit_time}</td>
+                        <td style="font-size: 0.78rem; color: var(--text-muted); white-space: nowrap;">${formatPhtDateTime(t.exit_time)}</td>
                     </tr>
                 `;
             }).join('');

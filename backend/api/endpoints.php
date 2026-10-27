@@ -2,6 +2,8 @@
 // 1. Force PHP to output errors as JSON instead of HTML to prevent frontend crashes
 error_reporting(E_ALL);
 ini_set('display_errors', 0);
+// Keep persisted application timestamps in UTC; the UI presents them in PHT.
+date_default_timezone_set('UTC');
 header('Content-Type: application/json');
 
 // Authentication is backed by a server-side PHP session. The browser only holds
@@ -24,6 +26,15 @@ set_exception_handler(function($e) {
     echo json_encode(["error" => "Exception: " . $e->getMessage()]);
     exit;
 });
+
+function normalizeLicensePlate($value) {
+    if (!is_string($value)) return '';
+    return preg_replace('/[^A-Z0-9]/', '', strtoupper(trim($value)));
+}
+
+function isValidLicensePlate($value) {
+    return is_string($value) && preg_match('/^[A-Z]{3}[0-9]{3,4}$/D', $value) === 1;
+}
 
 // 2. Initialize SQLite Connection
 try {
@@ -81,6 +92,7 @@ $actionRoles = [
     'cashier_lookup' => ['CASHIER', 'ADMIN'],
     'cashier_payment' => ['CASHIER', 'ADMIN'],
     'exit_barrier_clearance' => ['CASHIER', 'ADMIN'],
+    'confirm_vehicle_departure' => ['CASHIER', 'ADMIN'],
     'cashier_recent_transactions' => ['CASHIER', 'ADMIN']
 ];
 
@@ -150,6 +162,17 @@ if (!in_array($action, $publicActions, true)) {
 // from client-supplied admin_email or staff_id fields.
 $actorEmail = $_SESSION['auth_user']['email'] ?? '';
 
+function isExitPaymentCleared($paymentStatus, $vendorScanTime = null) {
+    $clearedStatuses = ['PAID', 'BYPASSED', 'PAID_OVERNIGHT', 'PAID_RESERVATION'];
+    if (in_array($paymentStatus, $clearedStatuses, true)) return true;
+    if ($paymentStatus !== 'PAID_VENDOR' || empty($vendorScanTime)) return false;
+
+    $vendorTimestamp = strtotime($vendorScanTime);
+    if ($vendorTimestamp === false) return false;
+    $minutesSinceVendor = time() - $vendorTimestamp;
+    return $minutesSinceVendor >= 0 && $minutesSinceVendor <= (20 * 60);
+}
+
 if ($action === 'session' && $method === 'GET') {
     echo json_encode([
         'success' => true,
@@ -188,7 +211,12 @@ if ($method === 'POST' && $action === 'register') {
 
     $email = $data['email'] ?? '';
     $password = password_hash($data['password'] ?? '', PASSWORD_DEFAULT);
-    $plate = strtoupper(trim($data['plate'] ?? ''));
+    $plate = normalizeLicensePlate($data['plate'] ?? '');
+    if (!isValidLicensePlate($plate)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Enter three letters followed by three or four digits, without spaces (for example, ABC1234).']);
+        exit;
+    }
 
     try {
         $db->beginTransaction();
@@ -296,11 +324,11 @@ if ($method === 'POST' && $action === 'reserve') {
         echo json_encode(['error' => 'Provide a valid vehicle plate.']);
         exit;
     }
-    $customPlate = $isAdmin ? strtoupper(trim($providedPlate)) : '';
+    $customPlate = $isAdmin ? normalizeLicensePlate($providedPlate) : '';
     if ($isAdmin && $customPlate !== '') {
         $plate = $customPlate;
     } else {
-        $plate = strtoupper(trim($_SESSION['auth_user']['plate_number'] ?? ''));
+        $plate = normalizeLicensePlate($_SESSION['auth_user']['plate_number'] ?? '');
     }
 
     if ($plate === '') {
@@ -316,7 +344,7 @@ if ($method === 'POST' && $action === 'reserve') {
         ? DateTimeImmutable::createFromFormat('!Y-m-d', $startDate) : false;
     $end = is_string($endDate) && preg_match('/^\d{4}-\d{2}-\d{2}$/D', $endDate)
         ? DateTimeImmutable::createFromFormat('!Y-m-d', $endDate) : false;
-    if (!preg_match('/^[A-Z0-9][A-Z0-9 -]{1,19}$/', $plate) ||
+    if (!isValidLicensePlate($plate) ||
         !in_array($zone, ['A', 'B', 'C', 'D', 'E'], true) ||
         !$start || !$end || $start->format('Y-m-d') !== $startDate || $end->format('Y-m-d') !== $endDate || $end < $start) {
         http_response_code(400);
@@ -332,7 +360,7 @@ if ($method === 'POST' && $action === 'reserve') {
     }
 
     // VIP SECURITY CHECK
-    $accountCheck = $db->prepare("SELECT is_vip FROM accounts WHERE plate_number = ?");
+    $accountCheck = $db->prepare("SELECT is_vip FROM accounts WHERE UPPER(REPLACE(REPLACE(plate_number, ' ', ''), '-', '')) = ?");
     $accountCheck->execute([$plate]);
     $account = $accountCheck->fetch(PDO::FETCH_ASSOC);
 
@@ -348,7 +376,7 @@ if ($method === 'POST' && $action === 'reserve') {
 
     try {
         $db->beginTransaction();
-        $vehicle = $db->prepare("SELECT vehicle_id FROM vehicles WHERE plate_number = ?");
+        $vehicle = $db->prepare("SELECT vehicle_id FROM vehicles WHERE UPPER(REPLACE(REPLACE(plate_number, ' ', ''), '-', '')) = ?");
         $vehicle->execute([$plate]);
         $vehicle = $vehicle->fetch(PDO::FETCH_ASSOC);
 
@@ -443,11 +471,11 @@ if ($method === 'POST' && $action === 'reserve') {
 
 // --- ROUTE: Check Active Reservation ---
 if ($method === 'GET' && $action === 'active_reservation') {
-    $requestedPlate = strtoupper(trim($_GET['plate'] ?? ''));
+    $requestedPlate = normalizeLicensePlate($_GET['plate'] ?? '');
     if (($_SESSION['auth_user']['role'] ?? '') === 'ADMIN' && $requestedPlate !== '') {
         $plate = $requestedPlate;
     } else {
-        $plate = strtoupper(trim($_SESSION['auth_user']['plate_number'] ?? ''));
+        $plate = normalizeLicensePlate($_SESSION['auth_user']['plate_number'] ?? '');
     }
 
     if (!$plate) {
@@ -466,7 +494,7 @@ if ($method === 'GET' && $action === 'active_reservation') {
         FROM reservations r
         JOIN vehicles v ON r.vehicle_id = v.vehicle_id
         JOIN parking_slots s ON r.slot_id = s.slot_id
-        WHERE v.plate_number = ? AND r.status = 'ACTIVE'
+        WHERE UPPER(REPLACE(REPLACE(v.plate_number, ' ', ''), '-', '')) = ? AND r.status = 'ACTIVE'
         LIMIT 1
     ");
     $stmt->execute([$plate]);
@@ -514,7 +542,7 @@ if (($method === 'GET' || $method === 'POST') && $action === 'vendor_lookup') {
     }
 
     try {
-        $cleanPlate = strtoupper(str_replace([' ', '-'], '', $inputVal));
+        $cleanPlate = normalizeLicensePlate($inputVal);
         $stmt = $db->prepare("
             SELECT ps.session_id, ps.entry_time, ps.payment_status, ps.location_status,
                    ps.entry_token, ps.vendor_scan_time, ps.total_fee,
@@ -585,7 +613,7 @@ if ($method === 'POST' && $action === 'vendor_validate') {
     }
 
     try {
-        $cleanPlate = strtoupper(str_replace([' ', '-'], '', $inputVal));
+        $cleanPlate = normalizeLicensePlate($inputVal);
         $stmt = $db->prepare("
             SELECT ps.session_id, ps.entry_time, ps.payment_status, ps.location_status,
                    ps.entry_token, ps.vendor_scan_time,
@@ -788,8 +816,12 @@ if ($method === 'POST' && $action === 'checkout') {
         exit;
     }
 
-    $entry_time = new DateTime($session['entry_time']);
-    $exit_time = new DateTime();
+    $utcTimezone = new DateTimeZone('UTC');
+    $manilaTimezone = new DateTimeZone('Asia/Manila');
+    $entry_time = new DateTime($session['entry_time'], $utcTimezone);
+    $exit_time = new DateTime('now', $utcTimezone);
+    $entry_local_time = (clone $entry_time)->setTimezone($manilaTimezone);
+    $exit_local_time = (clone $exit_time)->setTimezone($manilaTimezone);
     $interval = $entry_time->diff($exit_time);
     $total_minutes = ($interval->days * 24 * 60) + ($interval->h * 60) + $interval->i;
 
@@ -797,7 +829,7 @@ if ($method === 'POST' && $action === 'checkout') {
     $status = $session['payment_status'];
 
     if ($status === 'PAID_VENDOR') {
-        $vendor_time = new DateTime($session['vendor_scan_time']);
+        $vendor_time = new DateTime($session['vendor_scan_time'], $utcTimezone);
         $minutes_since_vendor = ($vendor_time->diff($exit_time)->days * 24 * 60) + ($vendor_time->diff($exit_time)->h * 60) + $vendor_time->diff($exit_time)->i;
 
         if ($minutes_since_vendor > 20) {
@@ -810,9 +842,9 @@ if ($method === 'POST' && $action === 'checkout') {
         $fee = 0.00;
         $status = 'BYPASSED';
     } else {
-        $entry_date = $entry_time->format('Y-m-d');
-        $exit_date = $exit_time->format('Y-m-d');
-        $exit_hour = (int)$exit_time->format('H');
+        $entry_date = $entry_local_time->format('Y-m-d');
+        $exit_date = $exit_local_time->format('Y-m-d');
+        $exit_hour = (int)$exit_local_time->format('H');
 
         if ($exit_date > $entry_date || $exit_hour >= 23) {
             $fee = 100.00;
@@ -863,8 +895,8 @@ if ($method === 'GET' && $action === 'admin_stats') {
         $grossRevenue = $sessionRevenue + $reservationRevenue + $violationRevenue;
 
         // Today's revenue
-        $todaySessionRev = (float)$db->query("SELECT COALESCE(SUM(total_fee), 0) FROM parking_sessions WHERE payment_status IN ('PAID', 'PAID_OVERNIGHT', 'PAID_RESERVATION') AND DATE(entry_time) = DATE('now', 'localtime')")->fetchColumn();
-        $todayViolationRev = (float)$db->query("SELECT COALESCE(SUM(penalty_amount), 0) FROM violations WHERE status = 'PAID' AND DATE(issued_at) = DATE('now', 'localtime')")->fetchColumn();
+        $todaySessionRev = (float)$db->query("SELECT COALESCE(SUM(total_fee), 0) FROM parking_sessions WHERE payment_status IN ('PAID', 'PAID_OVERNIGHT', 'PAID_RESERVATION') AND DATE(entry_time, '+8 hours') = DATE('now', '+8 hours')")->fetchColumn();
+        $todayViolationRev = (float)$db->query("SELECT COALESCE(SUM(penalty_amount), 0) FROM violations WHERE status = 'PAID' AND DATE(issued_at, '+8 hours') = DATE('now', '+8 hours')")->fetchColumn();
         $todayRevenue = $todaySessionRev + $todayViolationRev;
 
         $occupancyRate = $totalSlots > 0 ? round(($occupiedSlots / $totalSlots) * 100, 1) : 0;
@@ -941,25 +973,25 @@ if ($method === 'GET' && $action === 'admin_analytics') {
         $todayRev = (float)$db->query("
             SELECT COALESCE(SUM(total_fee), 0) FROM parking_sessions
             WHERE payment_status IN ('PAID', 'PAID_OVERNIGHT', 'PAID_RESERVATION')
-            AND DATE(entry_time) = DATE('now', 'localtime')
+            AND DATE(entry_time, '+8 hours') = DATE('now', '+8 hours')
         ")->fetchColumn();
 
         $weekRev = (float)$db->query("
             SELECT COALESCE(SUM(total_fee), 0) FROM parking_sessions
             WHERE payment_status IN ('PAID', 'PAID_OVERNIGHT', 'PAID_RESERVATION')
-            AND entry_time >= DATE('now', '-7 days', 'localtime')
+            AND entry_time >= datetime('now', '+8 hours', '-7 days', 'start of day', '-8 hours')
         ")->fetchColumn();
 
         $monthRev = (float)$db->query("
             SELECT COALESCE(SUM(total_fee), 0) FROM parking_sessions
             WHERE payment_status IN ('PAID', 'PAID_OVERNIGHT', 'PAID_RESERVATION')
-            AND entry_time >= DATE('now', '-30 days', 'localtime')
+            AND entry_time >= datetime('now', '+8 hours', '-30 days', 'start of day', '-8 hours')
         ")->fetchColumn();
 
         // Add violations to periods
-        $todayRev += (float)$db->query("SELECT COALESCE(SUM(penalty_amount), 0) FROM violations WHERE status = 'PAID' AND DATE(issued_at) = DATE('now', 'localtime')")->fetchColumn();
-        $weekRev += (float)$db->query("SELECT COALESCE(SUM(penalty_amount), 0) FROM violations WHERE status = 'PAID' AND issued_at >= DATE('now', '-7 days', 'localtime')")->fetchColumn();
-        $monthRev += (float)$db->query("SELECT COALESCE(SUM(penalty_amount), 0) FROM violations WHERE status = 'PAID' AND issued_at >= DATE('now', '-30 days', 'localtime')")->fetchColumn();
+        $todayRev += (float)$db->query("SELECT COALESCE(SUM(penalty_amount), 0) FROM violations WHERE status = 'PAID' AND DATE(issued_at, '+8 hours') = DATE('now', '+8 hours')")->fetchColumn();
+        $weekRev += (float)$db->query("SELECT COALESCE(SUM(penalty_amount), 0) FROM violations WHERE status = 'PAID' AND issued_at >= datetime('now', '+8 hours', '-7 days', 'start of day', '-8 hours')")->fetchColumn();
+        $monthRev += (float)$db->query("SELECT COALESCE(SUM(penalty_amount), 0) FROM violations WHERE status = 'PAID' AND issued_at >= datetime('now', '+8 hours', '-30 days', 'start of day', '-8 hours')")->fetchColumn();
 
         // Average Revenue Per Vehicle (ARPV)
         $completedSessions = (int)$db->query("SELECT COUNT(*) FROM parking_sessions WHERE location_status = 'EXITED'")->fetchColumn();
@@ -1036,7 +1068,7 @@ if ($method === 'GET' && $action === 'admin_analytics') {
 
         // 3. Peak Hours & Hourly Influx (24 hours)
         $hourlyCounts = $db->query("
-            SELECT CAST(strftime('%H', entry_time) AS INTEGER) as hr, COUNT(*) as cnt
+            SELECT CAST(strftime('%H', entry_time, '+8 hours') AS INTEGER) as hr, COUNT(*) as cnt
             FROM parking_sessions
             GROUP BY hr
         ")->fetchAll(PDO::FETCH_KEY_PAIR);
@@ -1488,11 +1520,11 @@ if ($method === 'POST' && $action === 'admin_resolve_violation') {
 
 // --- ROUTE: Violations Tracker (Customer Search) ---
 if ($method === 'GET' && $action === 'violations') {
-    $requestedPlate = strtoupper(trim($_GET['plate'] ?? ''));
+    $requestedPlate = normalizeLicensePlate($_GET['plate'] ?? '');
     if (($_SESSION['auth_user']['role'] ?? '') === 'ADMIN' && $requestedPlate !== '') {
         $plate = $requestedPlate;
     } else {
-        $plate = strtoupper(trim($_SESSION['auth_user']['plate_number'] ?? ''));
+        $plate = normalizeLicensePlate($_SESSION['auth_user']['plate_number'] ?? '');
     }
 
     $stmt = $db->prepare("
@@ -1500,7 +1532,7 @@ if ($method === 'GET' && $action === 'violations') {
         FROM violations v
         JOIN parking_sessions ps ON v.session_id = ps.session_id
         JOIN vehicles ve ON ps.vehicle_id = ve.vehicle_id
-        WHERE ve.plate_number = ?
+        WHERE UPPER(REPLACE(REPLACE(ve.plate_number, ' ', ''), '-', '')) = ?
     ");
 
     $stmt->execute([$plate]);
@@ -1510,7 +1542,9 @@ if ($method === 'GET' && $action === 'violations') {
 
 // --- ROUTE: Cashier Lookup (Active Sessions & Tariff Computation) ---
 if ($method === 'GET' && $action === 'cashier_lookup') {
-    $query = strtoupper(trim($_GET['query'] ?? ''));
+    $rawQuery = trim($_GET['query'] ?? '');
+    $query = strtoupper($rawQuery);
+    $plateQuery = normalizeLicensePlate($rawQuery);
 
     try {
         if (empty($query)) {
@@ -1539,10 +1573,10 @@ if ($method === 'GET' && $action === 'cashier_lookup') {
             JOIN vehicles ve ON ps.vehicle_id = ve.vehicle_id
             JOIN parking_slots sl ON ps.slot_id = sl.slot_id
             WHERE ps.exit_time IS NULL
-              AND (ve.plate_number = ? OR ps.session_id = ? OR ps.entry_token = ?)
+              AND (UPPER(REPLACE(REPLACE(ve.plate_number, ' ', ''), '-', '')) = ? OR ps.session_id = ? OR ps.entry_token = ?)
             ORDER BY ps.session_id DESC LIMIT 1
         ");
-        $stmt->execute([$query, $query, $query]);
+        $stmt->execute([$plateQuery, $query, $query]);
         $session = $stmt->fetch(PDO::FETCH_ASSOC);
 
         if (!$session) {
@@ -1562,10 +1596,14 @@ if ($method === 'GET' && $action === 'cashier_lookup') {
         $baseFee = $isGracePeriod ? 0.00 : 30.00;
 
         // 2. Overnight surcharge: +₱100.00 if vehicle crosses 23:00 or duration > 12 hours
-        $entryHour = (int)date('H', $entryTimestamp);
-        $currentHour = (int)date('H', $now);
+        $manilaTimezone = new DateTimeZone('Asia/Manila');
+        $entryLocalTime = (new DateTimeImmutable('@' . $entryTimestamp))->setTimezone($manilaTimezone);
+        $currentLocalTime = (new DateTimeImmutable('@' . $now))->setTimezone($manilaTimezone);
+        $entryHour = (int)$entryLocalTime->format('H');
+        $currentHour = (int)$currentLocalTime->format('H');
         $daysDiff = (int)floor(($now - $entryTimestamp) / 86400);
-        $isOvernight = ($daysDiff > 0 || ($entryHour < 23 && $currentHour >= 23) || $durationMinutes > 720);
+        $crossedLocalDate = $entryLocalTime->format('Y-m-d') !== $currentLocalTime->format('Y-m-d');
+        $isOvernight = ($crossedLocalDate || ($entryHour < 23 && $currentHour >= 23) || $daysDiff > 0 || $durationMinutes > 720);
         $overnightSurcharge = $isOvernight ? 100.00 : 0.00;
 
         // 3. Vendor validation discount (e.g. Joey's Restaurant, 20 mins free)
@@ -1693,127 +1731,269 @@ if ($method === 'POST' && $action === 'cashier_payment') {
     exit;
 }
 
-// --- ROUTE: Exit Barrier Clearance (Priority 1: ALPR Optical Scan, Fallback: QR Scan) ---
+// --- ROUTE: Exit Clearance Decision (plate lookup, with issued QR fallback) ---
 if ($method === 'POST' && $action === 'exit_barrier_clearance') {
     $data = json_decode(file_get_contents('php://input'), true);
-    $clearanceMode = strtoupper(trim($data['method'] ?? 'ALPR')); // 'ALPR' (Priority) or 'QR_FALLBACK'
-    $plate = strtoupper(trim($data['plate_number'] ?? ''));
-    $tokenOrSession = trim($data['token_or_session'] ?? '');
+    $clearanceMode = strtoupper(trim($data['method'] ?? 'ALPR'));
+    $plate = normalizeLicensePlate($data['plate_number'] ?? '');
+    $qrToken = trim($data['qr_token'] ?? $data['token_or_session'] ?? '');
     $staffId = $actorEmail;
+    $auditMethod = in_array($clearanceMode, ['ALPR', 'QR_FALLBACK'], true) ? $clearanceMode : 'INVALID';
+
+    // Do not include raw QR tokens or arbitrary user input in audit details.
+    // The database timestamp and authenticated staff identity complete the record.
+    $logClearanceAttempt = function($outcome, $paymentStatus, $reason, $sessionId = null) use ($db, $staffId, $auditMethod) {
+        $details = "outcome={$outcome}; method={$auditMethod}; payment_status={$paymentStatus}; reason={$reason}";
+        $stmt = $db->prepare("
+            INSERT INTO audit_logs (admin_email, action_type, target_entity, target_id, details)
+            VALUES (?, 'EXIT_CLEARANCE', ?, ?, ?)
+        ");
+        $stmt->execute([
+            $staffId,
+            $sessionId ? 'parking_session' : 'exit_clearance_attempt',
+            $sessionId ? (string)$sessionId : null,
+            $details
+        ]);
+    };
 
     try {
         $session = null;
 
         if ($clearanceMode === 'ALPR') {
             if (empty($plate)) {
-                echo json_encode(["success" => false, "barrier_actuated" => false, "error" => "ALPR Optical Scan error: No plate string received from camera."]);
+                $logClearanceAttempt('NOT_CLEARED', 'UNKNOWN', 'missing_plate');
+                echo json_encode(["success" => false, "clearance_allowed" => false, "decision" => "NOT_CLEARED", "error" => "No plate number was provided."]);
                 exit;
             }
 
-            // Lookup active session by License Plate (Priority 1)
+            // Match the exact plate to a vehicle with a currently parked session.
             $stmt = $db->prepare("
                 SELECT ps.session_id, ps.slot_id, ps.total_fee, ps.payment_status, ps.entry_token,
+                       ps.vendor_scan_time, ps.location_status,
                        ve.plate_number, sl.slot_number, sl.zone
                 FROM parking_sessions ps
                 JOIN vehicles ve ON ps.vehicle_id = ve.vehicle_id
                 JOIN parking_slots sl ON ps.slot_id = sl.slot_id
-                WHERE ve.plate_number = ? AND ps.exit_time IS NULL
+                WHERE UPPER(REPLACE(REPLACE(ve.plate_number, ' ', ''), '-', '')) = ?
+                  AND ps.exit_time IS NULL AND ps.location_status = 'PARKED'
                 ORDER BY ps.session_id DESC LIMIT 1
             ");
             $stmt->execute([$plate]);
             $session = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if (!$session) {
+                $logClearanceAttempt('NOT_CLEARED', 'UNKNOWN', 'no_active_session_for_plate');
                 echo json_encode([
                     "success" => false,
-                    "barrier_actuated" => false,
-                    "error" => "ALPR optical detection failed to match active parking record for plate '{$plate}'. Please use QR Fallback."
+                    "clearance_allowed" => false,
+                    "decision" => "NOT_CLEARED",
+                    "error" => "No active parked session matched that plate. Verify the plate or use the issued entry QR token."
                 ]);
                 exit;
             }
-        } else {
-            // Fallback Priority 2: QR Token or Session ID
-            if (empty($tokenOrSession)) {
-                echo json_encode(["success" => false, "barrier_actuated" => false, "error" => "Fallback error: QR Token or Session ID required."]);
+        } elseif ($clearanceMode === 'QR_FALLBACK') {
+            if (empty($qrToken)) {
+                $logClearanceAttempt('NOT_CLEARED', 'UNKNOWN', 'missing_entry_qr_token');
+                echo json_encode(["success" => false, "clearance_allowed" => false, "decision" => "NOT_CLEARED", "error" => "Scan the issued entry QR token to use fallback clearance."]);
                 exit;
             }
 
+            // A QR fallback is accepted only when it matches the issued entry token.
+            // Session IDs and plate numbers are not credentials for this path.
             $stmt = $db->prepare("
                 SELECT ps.session_id, ps.slot_id, ps.total_fee, ps.payment_status, ps.entry_token,
+                       ps.vendor_scan_time, ps.location_status,
                        ve.plate_number, sl.slot_number, sl.zone
                 FROM parking_sessions ps
                 JOIN vehicles ve ON ps.vehicle_id = ve.vehicle_id
                 JOIN parking_slots sl ON ps.slot_id = sl.slot_id
-                WHERE (ps.entry_token = ? OR ps.session_id = ? OR ve.plate_number = ?) AND ps.exit_time IS NULL
+                WHERE ps.entry_token = ?
+                  AND ps.exit_time IS NULL AND ps.location_status = 'PARKED'
                 ORDER BY ps.session_id DESC LIMIT 1
             ");
-            $stmt->execute([$tokenOrSession, $tokenOrSession, $tokenOrSession]);
+            $stmt->execute([$qrToken]);
             $session = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if (!$session) {
+                $logClearanceAttempt('NOT_CLEARED', 'UNKNOWN', 'entry_token_not_for_active_session');
                 echo json_encode([
                     "success" => false,
-                    "barrier_actuated" => false,
-                    "error" => "Invalid QR token or session ID. No active parking session found."
+                    "clearance_allowed" => false,
+                    "decision" => "NOT_CLEARED",
+                    "error" => "That entry QR token does not match an active parked session."
                 ]);
                 exit;
             }
+        } else {
+            http_response_code(400);
+            $logClearanceAttempt('NOT_CLEARED', 'UNKNOWN', 'unsupported_clearance_method');
+            echo json_encode(["success" => false, "clearance_allowed" => false, "decision" => "NOT_CLEARED", "error" => "Unsupported clearance method."]);
+            exit;
         }
 
-        // Financial Clearance Check
-        $clearedStatuses = ['PAID', 'PAID_RESERVATION', 'PAID_OVERNIGHT', 'PAID_VENDOR', 'BYPASSED'];
-        $isCleared = in_array($session['payment_status'], $clearedStatuses);
+        $isCleared = isExitPaymentCleared($session['payment_status'], $session['vendor_scan_time']);
 
         if (!$isCleared) {
+            $denialReason = $session['payment_status'] === 'PAID_VENDOR'
+                ? 'vendor_departure_window_expired_or_invalid'
+                : 'payment_status_not_allowed';
+            $logClearanceAttempt('NOT_CLEARED', $session['payment_status'], $denialReason, $session['session_id']);
             echo json_encode([
                 "success" => false,
-                "barrier_actuated" => false,
+                "clearance_allowed" => false,
+                "decision" => "NOT_CLEARED",
                 "session_id" => $session['session_id'],
                 "plate_number" => $session['plate_number'],
-                "error" => "BARRIER DENIED: Vehicle payment status is {$session['payment_status']}. Direct driver to cashier booth to settle payment."
+                "payment_status" => $session['payment_status'],
+                "error" => "Not cleared to exit. Payment status is {$session['payment_status']}; direct the driver to the cashier."
             ]);
             exit;
         }
 
-        // Close session, mark exited, free slot, decrement zone occupancy
-        $now = date('Y-m-d H:i:s');
-        $up = $db->prepare("
-            UPDATE parking_sessions
-            SET exit_time = ?, location_status = 'EXITED', exit_method = ?, staff_id = ?
-            WHERE session_id = ?
-        ");
-        $up->execute([$now, $clearanceMode, $staffId, $session['session_id']]);
-
-        // Free slot
-        $freeSlot = $db->prepare("UPDATE parking_slots SET is_occupied = 0 WHERE slot_id = ?");
-        $freeSlot->execute([$session['slot_id']]);
-
-        // Decrement zone active parked count
-        $decZone = $db->prepare("UPDATE spatial_allocation SET active_parked_count = MAX(0, active_parked_count - 1) WHERE zone_id = ?");
-        $decZone->execute([$session['zone']]);
-
-        // Write to audit logs
-        $methodLabel = ($clearanceMode === 'ALPR') ? "ALPR Camera (Priority)" : "QR Token Scanner (Fallback)";
-        $audit = $db->prepare("
-            INSERT INTO audit_logs (admin_email, action_type, target_entity, target_id, details)
-            VALUES (?, 'EXIT_CLEARANCE', 'parking_session', ?, ?)
-        ");
-        $auditDetails = "Vehicle {$session['plate_number']} cleared via {$methodLabel}. Exit barrier ACTUATED: OPEN. Slot {$session['slot_number']} (Zone {$session['zone']}) freed.";
-        $audit->execute([$staffId, $session['session_id'], $auditDetails]);
+        // Record the decision only. The guard operates the physical barrier;
+        // this check does not confirm that the vehicle actually departed.
+        $logClearanceAttempt('CLEARED_TO_EXIT', $session['payment_status'], 'eligible_status_and_active_session', $session['session_id']);
 
         echo json_encode([
             "success" => true,
-            "barrier_actuated" => true,
+            "clearance_allowed" => true,
+            "decision" => "CLEARED_TO_EXIT",
             "clearance_mode" => $clearanceMode,
             "session_id" => $session['session_id'],
             "plate_number" => $session['plate_number'],
+            "payment_status" => $session['payment_status'],
             "slot_number" => $session['slot_number'],
             "zone" => $session['zone'],
-            "exit_time" => $now,
-            "message" => "Exit barrier actuated: OPEN ({$methodLabel} verified). Vehicle departs."
+            "message" => "Cleared to exit. Guard may operate the barrier manually; departure has not yet been recorded."
         ]);
     } catch (PDOException $e) {
-        echo json_encode(["success" => false, "barrier_actuated" => false, "error" => "Database error: " . $e->getMessage()]);
+        echo json_encode(["success" => false, "clearance_allowed" => false, "decision" => "NOT_CLEARED", "error" => "Database error: " . $e->getMessage()]);
+    }
+    exit;
+}
+
+// --- ROUTE: Staff Confirmation of Physical Vehicle Departure ---
+if ($method === 'POST' && $action === 'confirm_vehicle_departure') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $sessionId = filter_var($data['session_id'] ?? null, FILTER_VALIDATE_INT);
+    $staffId = $actorEmail;
+
+    if (!$sessionId || $sessionId < 1) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'A valid session ID is required.']);
+        exit;
+    }
+
+    try {
+        $db->beginTransaction();
+
+        $sessionStmt = $db->prepare("
+            SELECT ps.session_id, ps.slot_id, ps.payment_status, ps.vendor_scan_time,
+                   ve.plate_number, sl.slot_number, sl.zone, sl.is_occupied
+            FROM parking_sessions ps
+            JOIN vehicles ve ON ve.vehicle_id = ps.vehicle_id
+            JOIN parking_slots sl ON sl.slot_id = ps.slot_id
+            WHERE ps.session_id = ? AND ps.exit_time IS NULL AND ps.location_status = 'PARKED'
+        ");
+        $sessionStmt->execute([$sessionId]);
+        $session = $sessionStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$session) {
+            $db->rollBack();
+            http_response_code(404);
+            echo json_encode(['success' => false, 'error' => 'No active parked session was found.']);
+            exit;
+        }
+
+        $clearanceStmt = $db->prepare("
+            SELECT details
+            FROM audit_logs
+            WHERE action_type = 'EXIT_CLEARANCE'
+              AND target_entity = 'parking_session'
+              AND target_id = ?
+            ORDER BY log_id DESC
+            LIMIT 1
+        ");
+        $clearanceStmt->execute([(string)$sessionId]);
+        $lastClearance = $clearanceStmt->fetchColumn();
+        if (!is_string($lastClearance) || strpos($lastClearance, 'outcome=CLEARED_TO_EXIT;') !== 0 ||
+            !preg_match('/(?:^|;\s*)method=(ALPR|QR_FALLBACK)(?:;|$)/', $lastClearance, $methodMatch)) {
+            $db->rollBack();
+            http_response_code(409);
+            echo json_encode(['success' => false, 'error' => 'Run and pass an exit clearance check before confirming departure.']);
+            exit;
+        }
+
+        if (!isExitPaymentCleared($session['payment_status'], $session['vendor_scan_time'])) {
+            $db->rollBack();
+            http_response_code(409);
+            echo json_encode(['success' => false, 'error' => 'Payment status is no longer valid for exit clearance.']);
+            exit;
+        }
+
+        if ((int)$session['is_occupied'] !== 1) {
+            $db->rollBack();
+            http_response_code(409);
+            echo json_encode(['success' => false, 'error' => 'The assigned parking slot is not marked occupied. Reconcile the slot before confirming departure.']);
+            exit;
+        }
+
+        $zoneStmt = $db->prepare('SELECT zone_id FROM spatial_allocation WHERE zone_id = ?');
+        $zoneStmt->execute([$session['zone']]);
+        if (!$zoneStmt->fetchColumn()) {
+            $db->rollBack();
+            http_response_code(409);
+            echo json_encode(['success' => false, 'error' => 'Zone occupancy is not configured; departure was not recorded.']);
+            exit;
+        }
+
+        $exitMethod = $methodMatch[1];
+        $exitTime = date('Y-m-d H:i:s');
+        $updateSession = $db->prepare("
+            UPDATE parking_sessions
+            SET exit_time = ?, location_status = 'EXITED', exit_method = ?, staff_id = ?
+            WHERE session_id = ? AND exit_time IS NULL AND location_status = 'PARKED'
+        ");
+        $updateSession->execute([$exitTime, $exitMethod, $staffId, $sessionId]);
+        if ($updateSession->rowCount() !== 1) {
+            $db->rollBack();
+            http_response_code(409);
+            echo json_encode(['success' => false, 'error' => 'The session changed before departure could be recorded.']);
+            exit;
+        }
+
+        $freeSlot = $db->prepare('UPDATE parking_slots SET is_occupied = 0 WHERE slot_id = ? AND is_occupied = 1');
+        $freeSlot->execute([$session['slot_id']]);
+        if ($freeSlot->rowCount() !== 1) {
+            $db->rollBack();
+            http_response_code(409);
+            echo json_encode(['success' => false, 'error' => 'The parking slot could not be released; departure was not recorded.']);
+            exit;
+        }
+
+        $decrementZone = $db->prepare("UPDATE spatial_allocation SET active_parked_count = MAX(0, active_parked_count - 1) WHERE zone_id = ?");
+        $decrementZone->execute([$session['zone']]);
+
+        $audit = $db->prepare("
+            INSERT INTO audit_logs (admin_email, action_type, target_entity, target_id, details)
+            VALUES (?, 'EXIT_DEPARTURE_CONFIRMED', 'parking_session', ?, ?)
+        ");
+        $auditDetails = "Staff confirmed vehicle {$session['plate_number']} passed the exit after {$exitMethod} clearance. Session exited; slot {$session['slot_number']} (Zone {$session['zone']}) released.";
+        $audit->execute([$staffId, (string)$sessionId, $auditDetails]);
+
+        $db->commit();
+        echo json_encode([
+            'success' => true,
+            'session_id' => (int)$sessionId,
+            'plate_number' => $session['plate_number'],
+            'slot_number' => $session['slot_number'],
+            'zone' => $session['zone'],
+            'exit_time' => $exitTime,
+            'message' => 'Departure recorded and parking slot released.'
+        ]);
+    } catch (PDOException $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => 'Failed to record vehicle departure.']);
     }
     exit;
 }

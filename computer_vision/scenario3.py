@@ -2,85 +2,32 @@ import sqlite3
 import random
 import uuid
 import time
-import cv2
-import easyocr
 import re
 from collections import Counter, defaultdict
-from ultralytics import YOLO
 import os
-
-# Dynamic path resolution (cross-platform compatible with fallback)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(SCRIPT_DIR)
-DB_PATH = os.path.join(BASE_DIR, "backend", "database", "parking.db")
-if not os.path.exists(DB_PATH):
-    DB_PATH = os.path.join(BASE_DIR, "parking.db")
-    if not os.path.exists(DB_PATH):
-        DB_PATH = r"D:\xampp\htdocs\CAPSTONE\parking.db"
+
+try:
+    from .video_args import parse_video_args
+except ImportError:
+    from video_args import parse_video_args
+
+try:
+    from .plate_utils import normalize_license_plate, prompt_for_license_plate
+except ImportError:
+    from plate_utils import normalize_license_plate, prompt_for_license_plate
+
+DB_PATH = os.path.join(os.path.dirname(SCRIPT_DIR), "backend", "database", "parking.db")
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    cursor = conn.cursor()
-    
-    # Initialize new schema tables including reservations
-    cursor.executescript('''
-        CREATE TABLE IF NOT EXISTS vehicles (
-            vehicle_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            plate_number TEXT NOT NULL UNIQUE,
-            owner_name TEXT,
-            vehicle_type TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS spatial_allocation (
-            zone_id TEXT PRIMARY KEY,
-            max_capacity INTEGER NOT NULL,
-            active_parked_count INTEGER DEFAULT 0,
-            active_reservation_count INTEGER DEFAULT 0
-        );
-        CREATE TABLE IF NOT EXISTS parking_slots (
-            slot_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            slot_number TEXT NOT NULL UNIQUE,
-            zone TEXT NOT NULL,
-            is_occupied INTEGER DEFAULT 0
-        );
-        CREATE TABLE IF NOT EXISTS reservations (
-            reservation_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            vehicle_id INTEGER,
-            slot_id INTEGER,
-            reservation_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-            expiry_time DATETIME,
-            status TEXT DEFAULT 'ACTIVE',
-            token_id INTEGER, 
-            start_date datetime, 
-            end_date datetime,
-            FOREIGN KEY(vehicle_id) REFERENCES vehicles(vehicle_id),
-            FOREIGN KEY(slot_id) REFERENCES parking_slots(slot_id)
-        );
-        CREATE TABLE IF NOT EXISTS parking_sessions (
-            session_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            vehicle_id INTEGER,
-            slot_id INTEGER,
-            entry_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-            exit_time DATETIME,
-            total_fee REAL DEFAULT 0,
-            FOREIGN KEY(vehicle_id) REFERENCES vehicles(vehicle_id),
-            FOREIGN KEY(slot_id) REFERENCES parking_slots(slot_id)
-        );
-    ''')
-    
-    # Seed spatial zones and slots if the database is completely empty
-    cursor.execute("SELECT COUNT(*) FROM spatial_allocation")
-    if cursor.fetchone()[0] == 0:
-        zones = ['A', 'B', 'C', 'D', 'E']
-        for zone in zones:
-            cursor.execute("INSERT INTO spatial_allocation (zone_id, max_capacity) VALUES (?, 10)", (zone,))
-            for i in range(1, 4):
-                cursor.execute("INSERT INTO parking_slots (slot_number, zone, is_occupied) VALUES (?, ?, 0)", (f"{zone}-0{i}", zone))
-    
-    conn.commit()
-    conn.close()
+    if not os.path.isfile(DB_PATH):
+        raise FileNotFoundError(f"Project database not found: {DB_PATH}")
 
 def process_video_feed(video_path, model_path, window_name, feed_type="entrance"):
+    import cv2
+    import easyocr
+    from ultralytics import YOLO
+
     print(f"[VISION PIPELINE]: Initializing YOLOv8 and EasyOCR on {video_path}...")
     model = YOLO(model_path)
     reader = easyocr.Reader(['en'])
@@ -138,7 +85,7 @@ def process_video_feed(video_path, model_path, window_name, feed_type="entrance"
 
                             ocr_results = reader.readtext(contrast)
                             for bbox, text, prob in ocr_results:
-                                cleaned_text = re.sub(r'[^A-Z0-9]', '', text.upper())
+                                cleaned_text = normalize_license_plate(text)
                                 
                                 # Validate string format
                                 if re.match(r'^[A-Z]{3}\d{3,4}$', cleaned_text):
@@ -194,7 +141,19 @@ def check_and_assign_slot(cursor, vehicle_id):
         slot_id, slot_number, zone = slot
         return slot_id, slot_number, zone, False
 
-def run_scenario_3():
+def run_scenario_3(entrance_video=None):
+    if entrance_video is None:
+        video_dir = os.path.join(SCRIPT_DIR, "simulation_videos")
+        entrance_video = parse_video_args(
+            "Scenario 3: entrance plate recognition and walk-in slot assignment.",
+            {
+                "entry_video": (
+                    "Recorded video of a walk-in vehicle arriving at the entrance.",
+                    os.path.join(video_dir, "Entry Fortuner - Day (walk-in).mp4"),
+                )
+            },
+        )["entry_video"]
+
     print("=================================================================")
     print("      RUNNING SCENARIO 3: ENTRANCE CAMERA & SLOT ASSIGNMENT      ")
     print("=================================================================\n")
@@ -205,11 +164,6 @@ def run_scenario_3():
     model_weights = os.path.join(SCRIPT_DIR, "entrance-feed-best1.pt")
     if not os.path.exists(model_weights):
         model_weights = r"R:\Capstone\entrance-feed-best1.pt"
-    
-    video_dir = os.path.join(SCRIPT_DIR, "simulation_videos")
-    entrance_video = os.path.join(video_dir, "Entry Fortuner - Day (walk-in).mp4")
-    if not os.path.exists(entrance_video):
-        entrance_video = r"R:\Capstone\fortunerEntry.mp4"
     
     entry_plate = process_video_feed(entrance_video, model_weights, 'Scenario 3: Entrance Feed', feed_type="entrance")
     
@@ -230,21 +184,23 @@ def run_scenario_3():
             ''', (token_input,))
             res = cursor.fetchone()
             if res:
-                entry_plate = res[0]
+                entry_plate = normalize_license_plate(res[0])
                 print(f"[SYSTEM]: Reservation confirmed via token. Plate linked: {entry_plate}")
             else:
                 print("[ERROR]: Invalid or expired Reservation Token.")
                 conn.close()
                 return
         else:
-            entry_plate = input("[MANUAL OVERRIDE]: Enter License Plate manually for Walk-in: ").strip().upper()
+            entry_plate = prompt_for_license_plate(
+                "[MANUAL OVERRIDE]: Enter License Plate for Walk-in (no spaces, e.g. ABC1234): "
+            )
             if not entry_plate:
-                print("[ERROR]: No plate provided.")
+                print("[ERROR]: No valid plate provided.")
                 conn.close()
                 return
 
     # 1. Register or fetch vehicle
-    cursor.execute("SELECT vehicle_id FROM vehicles WHERE plate_number = ?", (entry_plate,))
+    cursor.execute("SELECT vehicle_id FROM vehicles WHERE UPPER(REPLACE(REPLACE(plate_number, ' ', ''), '-', '')) = ?", (entry_plate,))
     vehicle = cursor.fetchone()
     if not vehicle:
         cursor.execute("INSERT INTO vehicles (plate_number, vehicle_type) VALUES (?, 'Transient')", (entry_plate,))

@@ -48,6 +48,8 @@ python3 computer_vision/scenario4.py
 python3 computer_vision/scenario5.py
 ```
 
+The scenarios use `backend/database/parking.db` and change live parking records. For video selection, expected outcomes, and limitations, see **[Recorded-Video Guide](docs/RECORDED_VIDEO_DEMO.md)**.
+
 ---
 
 ## Project Status & Tracking

@@ -11,3 +11,6 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Local computer-vision Python environment
+.venv-cv/

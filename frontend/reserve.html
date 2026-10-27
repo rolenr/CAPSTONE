@@ -68,8 +68,8 @@
             <div class="admin-booking-controls" data-role-only="ADMIN" hidden>
                 <div class="form-group">
                     <label for="bookingPlate">Vehicle plate to reserve for</label>
-                    <input type="text" id="bookingPlate" maxlength="20" pattern="[A-Za-z0-9][A-Za-z0-9 -]{1,19}" placeholder="e.g. ABC-1234" aria-describedby="bookingPlateHelp">
-                    <small class="field-help" id="bookingPlateHelp">Book for your linked vehicle or enter another vehicle's plate.</small>
+                    <input type="text" id="bookingPlate" data-license-plate-input minlength="6" maxlength="7" pattern="[A-Za-z]{3}[0-9]{3,4}" placeholder="e.g. ABC1234" autocapitalize="characters" aria-describedby="bookingPlateHelp">
+                    <small class="field-help" id="bookingPlateHelp">Book for your linked vehicle or enter another plate: three letters followed by three or four digits, without spaces or hyphens.</small>
                 </div>
                 <label class="checkbox-label" for="replaceExistingReservation">
                     <input type="checkbox" id="replaceExistingReservation">

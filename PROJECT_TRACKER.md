@@ -71,9 +71,10 @@ CAPSTONE/
 | **Lost Ticket Handling** | Checkbox penalty option (+₱100.00) when physical entry token is lost | `COMPLETED` | Section 5.4.1 Exception Handling |
 | **Fine Settlement at Gate** | Itemized display of outstanding citations with 1-click cash fine settlement | `COMPLETED` | Section 5.4.1 Compliance Tracking |
 | **Cash Tender & Change** | Live cash tender calculator computing change due to driver | `COMPLETED` | Cashier POS functionality |
-| **Priority 1: ALPR Exit Scan**| Automated exit gate camera scan to verify financial clearance and actuate barrier | `COMPLETED` | Core Proposal Specification |
-| **Priority 2: QR Fallback** | Manual QR code / Token scanner fallback when optical OCR camera is unreadable | `COMPLETED` | Core Proposal Specification |
-| **Visual Barrier Actuator** | Animated barrier arm visualizer with auto-close countdown timer (5s) | `COMPLETED` | Hardware relay simulation |
+| **Exit Clearance by Plate** | Match a plate to an active session and check payment status; guard operates the physical barrier manually | `IMPLEMENTED` | Exit eligibility check |
+| **Issued QR Token Fallback** | Check the issued entry QR token when a plate cannot be matched; session IDs and plates are not accepted as fallback credentials | `IMPLEMENTED` | Token fallback verification |
+| **Manual Barrier Operation** | Cashier screen states that the guard operates the existing barrier controls; no hardware command or opening animation is sent | `IMPLEMENTED` | Current project scope |
+| **Staff Departure Confirmation** | After the guard confirms the vehicle passed, cashier/admin records exit and releases its slot | `IMPLEMENTED` | Manual gate operation workflow |
 | **Cashier Exit Audit Feed** | Real-time table logging recent departures, payment amounts, and verification mode | `COMPLETED` | Section 5.4.2 System Auditability |
 
 ---
@@ -90,7 +91,7 @@ CAPSTONE/
 | **Sectional Heatmap** | Overhead vision telemetry across Zones A–E (paved) & Zone F (overflow) | `COMPLETED` | Section 5.5.6 Spatial Allocations |
 | **24-Hour Traffic Influx** | Bar chart showing hourly arrival volume and morning/evening peak demand | `COMPLETED` | Traffic influx analysis |
 | **Violations Management** | Enforcement table with 1-click cash fine settlement or dismissal | `COMPLETED` | Section 5.4.1 Compliance Tracking |
-| **ALPR Hardware Telemetry** | Live plate detection logs, OCR confidence scores, gate barrier states | `COMPLETED` | Section 5.3 ALPR Gatehouse Feed |
+| **Exit Clearance Status** | Cashier can check eligibility by plate or issued QR token; this does not report a physical barrier state | `IMPLEMENTED` | Exit verification |
 | **Slot Overrides & Filters** | Force-occupy or force-free individual slots with Zone A–F filtering | `COMPLETED` | Facility exception handling |
 | **Prepaid Bookings Table** | Manage active reservations with emergency override/cancellation | `COMPLETED` | Reservation clearance |
 | **User Directory & Privileges**| Search registered vehicles, toggle VIP / PWD priority privileges | `COMPLETED` | Section 5.5.6 Rule 2 Access Rights |
@@ -116,7 +117,8 @@ CAPSTONE/
 | :--- | :---: | :---: | :--- |
 | `cashier_lookup` | `GET` | `COMPLETED` | Queries active stays, computes elapsed duration, and evaluates full tariff breakdown |
 | `cashier_payment` | `POST` | `COMPLETED` | Processes cashier fee settlement, logs Staff ID, clears fines, writes audit log |
-| `exit_barrier_clearance`| `POST` | `COMPLETED` | **Priority ALPR** or **QR Fallback** exit verification; actuates barrier & frees slot |
+| `exit_barrier_clearance`| `POST` | `IMPLEMENTED` | Plate or issued QR-token clearance decision; does not actuate the barrier or mark the vehicle departed |
+| `confirm_vehicle_departure` | `POST` | `IMPLEMENTED` | CASHIER/ADMIN-only confirmation requiring the latest approved clearance and a still-valid payment status; records exit, frees slot, updates zone count, and audits the action |
 | `cashier_recent_transactions`| `GET` | `COMPLETED` | Returns recent gatehouse departures with clearance mode and amount collected |
 | `login` | `POST` | `COMPLETED` | Validates credentials against hashed passwords, returns role/plate |
 | `register` | `POST` | `COMPLETED` | Creates account with vehicle plate linkage |
@@ -166,9 +168,9 @@ CAPSTONE/
 | **Automated Infraction Enforcement** | Real-time optical verification detecting unauthorized parking, slot mismatches, and overstays; auto-logs fines into `violations` | `PENDING IMPLEMENTATION` | Section 5.4.1 Compliance & Enforcement Matrix |
 | **Entrance ALPR Accuracy Optimization** | Preprocessing, CLAHE contrast adjustment, multi-frame confidence aggregation, and glare reduction for entrance camera | `OPTIMIZATION REQUIRED` | Section 5.3 Gatehouse Optical Recognition |
 | **Exit ALPR Optical & OCR Tuning** | Fine-tuning plate localization, OCR character ambiguity resolution (0/O, 1/I, 8/B), regex validation, and angle perspective correction | `OPTIMIZATION REQUIRED` | Section 5.3 & Cashier Exit Gate Clearance |
-| **Scenario 3 Gate Entrance Simulation** | Script simulating vehicle approach, OCR capture, slot assignment, and barrier trigger | `COMPLETED (CROSS-PLATFORM)` | Core Demonstration Pipeline |
-| **Scenario 4 Exit Verification Simulation** | Script simulating exit plate detection, database clearance check, and barrier release | `COMPLETED (CROSS-PLATFORM)` | Core Demonstration Pipeline |
-| **Scenario 5 Closed-Loop Cycle Simulation**| Integrated end-to-end simulation covering entry, parking, cashier payment, and ALPR exit release | `READY FOR TESTING` | Core Demonstration Pipeline |
+| **Scenario 3 Gate Entrance Simulation** | Script simulating vehicle approach, OCR capture, slot assignment, and software workflow | `COMPLETED (CROSS-PLATFORM)` | Recorded-video demo pipeline |
+| **Scenario 4 Exit Verification Simulation** | Script simulating exit plate detection and payment clearance decision | `COMPLETED (CROSS-PLATFORM)` | Recorded-video demo pipeline |
+| **Scenario 5 Closed-Loop Cycle Simulation**| Integrated demo covering entry, parking, cashier payment, and exit clearance decision; physical barrier remains manual | `READY FOR TESTING` | Recorded-video demo pipeline |
 
 ---
 
@@ -240,11 +242,12 @@ gantt
    - **Entrance Camera**: Dynamic exposure/lighting compensation (daylight glare vs night shadow), plate localization fine-tuning.
    - **Exit Camera**: Enhanced OCR post-processing, character ambiguity correction (0 vs O, 1 vs I, 8 vs B), Philippine plate regex validation (`[A-Z]{3}\s?[0-9]{3,4}`), and multi-frame vote aggregation.
 5. **End-to-End System Simulation & Defense Dry-Run**:
-   - Run `computer_vision/scenario5.py` against active SQLite database and web UI to demonstrate closed-loop real-time integration.
+   - Run `computer_vision/scenario5.py` against the project database and web UI to demonstrate the recorded-video workflow and exit clearance decision. Physical cameras and barrier control are outside the current implementation scope.
 
 ---
 
 ## 4. Revision History
+* **2026-10-27 (Update 11)**: Changed exit handling to a clearance decision for manual guard operation. The API now checks active parked sessions, allows `PAID`, `BYPASSED`, `PAID_OVERNIGHT`, and `PAID_RESERVATION`, and allows `PAID_VENDOR` only within its 20-minute window. QR fallback accepts only the issued entry token. Approved and denied checks record the authenticated operator, timestamp, method, outcome, and status/reason in the audit trail without storing raw QR tokens. Ten isolated API checks passed for allowed/denied statuses, plate mismatch, unknown token, and session-ID-as-QR rejection; sessions remained parked. A cashier/admin departure-confirmation route now requires the latest approved clearance, rechecks payment eligibility, records the physical departure, frees the slot, updates zone occupancy, and audits the confirmation. Removed the simulated barrier actuation and emergency override from the cashier screen.
 * **2026-10-23 (Update 10)**: Evaluated and ingested custom YOLOv8n Sectional Occupancy detection model artifacts (`content/runs/detect/train/`). Model features 40 discrete bay classes (`A-01` through `E-07`), achieving **98.89% mAP@0.5**, **89.73% mAP@0.5:0.95**, and **0.96 peak F1 score** at 0.784 confidence threshold. Validated zero-overfitting loss curves and prepared pipeline for live sectional rules testing.
 * **2026-10-20 (Update 9)**: Refined Admin console navigation hierarchy & brand accents in `frontend/admin.html` and `frontend/css/style.css`:
   - Removed station identifier (`PARK-MNL-01`) and `Online Port 8080` status indicator from the left sidebar for a minimalist corporate aesthetic.
