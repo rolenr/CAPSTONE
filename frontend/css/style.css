@@ -1414,9 +1414,89 @@ button[type="submit"]:hover {
 }
 
 /* ---------------- CUSTOMER LIVE MAP ---------------- */
+.live-map-card {
+    max-width: 940px;
+    margin: 0 auto;
+}
+
+.live-map-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 410px) minmax(260px, 1fr);
+    gap: 1.5rem;
+    align-items: start;
+}
+
+.map-sidebar {
+    min-width: 0;
+}
+
+.map-zone-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.map-zone-card {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+    padding: 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--white);
+    color: var(--text-primary);
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
+}
+
+.map-zone-card:hover,
+.map-zone-card.selected {
+    border-color: #0f766e;
+    background: #f0fdfa;
+}
+
+.map-zone-letter {
+    display: grid;
+    place-items: center;
+    flex: 0 0 30px;
+    height: 30px;
+    border-radius: 8px;
+    background: #e2e8f0;
+    font-weight: 800;
+    font-size: .8rem;
+}
+
+.map-zone-card.selected .map-zone-letter {
+    background: #0f766e;
+    color: white;
+}
+
+.map-zone-copy {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.25;
+}
+
+.map-zone-copy strong { font-size: .8rem; }
+.map-zone-copy small { color: var(--text-muted); font-size: .68rem; }
+
+.map-zone-availability {
+    margin-left: auto;
+    font-size: .72rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.map-zone-availability.available { color: #047857; }
+.map-zone-availability.full { color: #b91c1c; }
+
 .lot-photo-wrap {
     position: relative;
     width: 100%;
+    max-width: 410px;
     border-radius: var(--radius-lg);
     overflow: hidden;
     line-height: 0;
@@ -1433,59 +1513,65 @@ button[type="submit"]:hover {
     position: absolute;
     top: 0;
     left: 0;
-    width: auto;
-    max-width: none;
+    min-height: 25px;
     transform: translate(-50%, -50%);
     display: inline-flex;
-    flex-direction: column;
     align-items: center;
-    gap: 1px;
+    justify-content: center;
     padding: 4px 7px;
-    border-radius: var(--radius-sm);
-    border: 1.5px solid white;
-    background: rgba(15, 23, 42, 0.85);
-    color: white;
+    border-radius: 4px;
+    border: 1px solid rgba(15, 23, 42, .22);
+    background: rgba(255, 255, 255, .94);
+    color: #0f172a;
     cursor: pointer;
     font-family: inherit;
-    line-height: 1.2;
+    font-size: .6rem;
+    font-weight: 750;
+    letter-spacing: .05em;
+    line-height: 1;
     white-space: nowrap;
-    box-shadow: var(--shadow-sm);
-    transition: transform 0.12s ease;
+    box-shadow: 0 2px 7px rgba(15, 23, 42, .18);
+    transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
     z-index: 2;
 }
 
 .zone-marker:hover {
-    transform: translate(-50%, -50%) scale(1.06);
+    border-color: #0f766e;
+    box-shadow: 0 2px 9px rgba(15, 23, 42, .25);
 }
 
-.zone-marker.available { border-color: #10b981; }
-.zone-marker.full { border-color: #ef4444; }
-
-.zone-marker-label {
-    font-weight: 700;
-    font-size: 0.78rem;
-}
-
-.zone-marker-count {
-    font-size: 0.65rem;
-    font-weight: 500;
-}
-
-.zone-marker.available .zone-marker-count { color: #86efac; }
-.zone-marker.full .zone-marker-count { color: #fca5a5; }
+.zone-marker.selected { background: #0f766e; border-color: #0f766e; color: white; }
 
 .zone-detail-panel {
     margin-top: 1rem;
-    padding-top: 1rem;
-    border-top: 1px solid var(--border-color);
+    padding: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    background: #f8fafc;
+}
+
+.zone-detail-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: .75rem;
+}
+
+.zone-detail-heading h3 { margin: 2px 0 0; }
+.zone-detail-heading strong { color: #047857; font-size: .82rem; }
+.map-detail-eyebrow { color: var(--text-muted); font-size: .68rem; text-transform: uppercase; letter-spacing: .08em; }
+
+.zone-detail-slots {
+    max-height: 230px;
+    overflow: auto;
 }
 
 .slot-dot {
     position: absolute;
     top: 0;
     left: 0;
-    width: 11px;
-    height: 11px;
+    width: 13px;
+    height: 13px;
     padding: 0;
     border-radius: 50%;
     border: 1.5px solid white;
@@ -1497,6 +1583,8 @@ button[type="submit"]:hover {
 
 .slot-dot.free { background: #10b981; }
 .slot-dot.occupied { background: #ef4444; }
+.slot-dot:hover,
+.slot-dot:focus-visible { box-shadow: 0 0 0 3px rgba(15, 118, 110, .65), 0 1px 3px rgba(0,0,0,.4); }
 
 .zone-detail-slots {
     display: grid;
@@ -1521,6 +1609,12 @@ button[type="submit"]:hover {
 
 .slot-row span.free { background: #10b981; }
 .slot-row span.occupied { background: #ef4444; }
+
+@media (max-width: 760px) {
+    .live-map-layout { grid-template-columns: 1fr; }
+    .lot-photo-wrap { margin: 0 auto; }
+    .map-sidebar { width: 100%; }
+}
 
 /* ---------------- DIGITAL PASS / WALLET ---------------- */
 .pass-ticket-card {

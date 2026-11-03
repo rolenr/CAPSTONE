@@ -33,7 +33,11 @@ Open **`http://127.0.0.1:8080`** in any web browser. You will be automatically d
 * **Customer Driver Portal**:
   * Email: `driver1@gmail.com`
   * Password: `password123`
-  * Features: Live 78-slot map availability, digital QR pass wallet, and prepaid booking.
+  * Features: Live 69-slot map availability, digital QR pass wallet, and prepaid booking.
+
+The live map uses `frontend/images/parking-lot-mapv2.png`. Active slot counts are A=9, B=7, C=6, D=7, E=10, and F=30. For an existing database created before map v2, run `python3 backend/database/update_map_v2_slots.py`. The migration preserves historical sessions by retiring nine old slot rows and moves active assignments from A-10 to A-09 and B-09 to B-07. It can be run again safely when the map inventory changes.
+
+Reservation payments use **Xendit Test Mode**. A booking holds a slot for 10 minutes and issues a pass only after the server verifies a successful Xendit payment. For account setup, HTTPS tunnel, webhook, expiry worker, tests, and expected output, see [Xendit Sandbox Reservations](docs/XENDIT_SANDBOX_RESERVATIONS.md). Test transactions use virtual funds; live keys are rejected by this application.
 
 ### 3. Run Computer Vision Simulations
 Ensure Python 3.9+ is installed with the required dependencies (`opencv-python`, `easyocr`, `ultralytics`):
@@ -49,6 +53,10 @@ python3 computer_vision/scenario5.py
 ```
 
 The scenarios use `backend/database/parking.db` and change live parking records. For video selection, expected outcomes, and limitations, see **[Recorded-Video Guide](docs/RECORDED_VIDEO_DEMO.md)**.
+
+For reusable Scenario 5 entrance/exit clip commands and live VIGI NVR setup, see **[Scenario 5 and Live VIGI Camera Setup](docs/SCENARIO5_AND_LIVE_VIGI_SETUP.md)**.
+
+For the separate sectional bay and 10-minute no-parking monitor, see **[Sectional Occupancy Setup](docs/SECTIONAL_OCCUPANCY_SETUP.md)**.
 
 ---
 

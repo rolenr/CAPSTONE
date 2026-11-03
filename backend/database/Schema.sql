@@ -31,7 +31,8 @@ CREATE TABLE parking_slots (
     slot_number TEXT NOT NULL UNIQUE,
     zone TEXT NOT NULL,
     slot_type TEXT,
-    is_occupied INTEGER DEFAULT 0
+    is_occupied INTEGER DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE parking_sessions (
@@ -57,13 +58,46 @@ CREATE TABLE reservations (
     slot_id INTEGER,
     reservation_time DATETIME DEFAULT CURRENT_TIMESTAMP,
     expiry_time DATETIME,
-    status TEXT DEFAULT 'ACTIVE', 
-    token_id INTEGER, 
+    status TEXT DEFAULT 'PENDING_PAYMENT',
+    payment_state TEXT NOT NULL DEFAULT 'UNVERIFIED',
+    token_id TEXT,
     start_date datetime, 
     end_date datetime,
     FOREIGN KEY(vehicle_id) REFERENCES vehicles(vehicle_id),
     FOREIGN KEY(slot_id) REFERENCES parking_slots(slot_id)
 );
+
+CREATE TABLE reservation_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reservation_id INTEGER NOT NULL UNIQUE,
+    provider TEXT NOT NULL DEFAULT 'PAYMONGO',
+    checkout_session_id TEXT UNIQUE,
+    checkout_url TEXT,
+    payment_id TEXT UNIQUE,
+    amount_centavos INTEGER NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'PHP',
+    status TEXT NOT NULL DEFAULT 'CREATING',
+    refund_status TEXT,
+    refund_id TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    paid_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(reservation_id) REFERENCES reservations(reservation_id)
+);
+
+CREATE TABLE paymongo_webhook_events (
+    event_id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    processed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE xendit_webhook_events (
+    event_id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    processed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_reservations_hold ON reservations(status, expiry_time);
+CREATE UNIQUE INDEX idx_one_open_booking_per_slot ON reservations(slot_id) WHERE status IN ('ACTIVE','PENDING_PAYMENT');
 
 CREATE TABLE violations (
     violation_id INTEGER PRIMARY KEY AUTOINCREMENT,

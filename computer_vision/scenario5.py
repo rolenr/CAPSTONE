@@ -1,9 +1,8 @@
 import sqlite3
-import random
-import uuid
 import time
-import re
-from collections import Counter, defaultdict, deque
+import math
+import queue
+import threading
 from datetime import datetime, timedelta, timezone
 
 import os
@@ -18,6 +17,11 @@ try:
     from .plate_utils import normalize_license_plate, prompt_for_license_plate
 except ImportError:
     from plate_utils import normalize_license_plate, prompt_for_license_plate
+
+try:
+    from .live_vigi import PlateDetector
+except ImportError:
+    from live_vigi import PlateDetector
 
 DB_PATH = os.path.join(os.path.dirname(SCRIPT_DIR), "backend", "database", "parking.db")
 
@@ -47,179 +51,175 @@ def init_db():
     if not os.path.isfile(DB_PATH):
         raise FileNotFoundError(f"Project database not found: {DB_PATH}")
 
+def _play_recording_at_source_rate(cap, cv2, frames, latest, lock, stop, finished):
+    """Read at the clip's frame rate while recognition runs independently."""
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if not math.isfinite(fps) or not 1 <= fps <= 120:
+        fps = 30.0
+    started = time.monotonic()
+    frame_number = 0
+    try:
+        while not stop.is_set():
+            due = started + frame_number / fps
+            if stop.wait(max(0.0, due - time.monotonic())):
+                break
+            ok, frame = cap.read()
+            if not ok:
+                break
+            captured_at = time.monotonic()
+            with lock:
+                latest["frame"] = frame
+                latest["captured_at"] = captured_at
+            item = (captured_at, frame)
+            try:
+                frames.put_nowait(item)
+            except queue.Full:
+                # Bound latency if the CPU cannot keep up with the camera.
+                try:
+                    frames.get_nowait()
+                except queue.Empty:
+                    pass
+                frames.put_nowait(item)
+            frame_number += 1
+    finally:
+        finished.set()
+
+
+def _recognize_recording(frames, detector, feed_type, latest, lock, stop,
+                         finished, errors):
+    """Process buffered frames without delaying the video preview."""
+    while not stop.is_set() and (not finished.is_set() or not frames.empty()):
+        try:
+            captured_at, frame = frames.get(timeout=0.02)
+        except queue.Empty:
+            continue
+        if time.monotonic() - captured_at > 2.0:
+            continue
+        with lock:
+            if feed_type == "exit" and "plate" in latest:
+                continue
+        try:
+            annotated, events = detector.process(frame)
+        except Exception as exc:
+            errors.append(exc)
+            stop.set()
+            return
+        with lock:
+            latest["annotated"] = annotated
+            latest["annotated_at"] = captured_at
+            for _role, plate in events:
+                if "plate" not in latest:
+                    latest["plate"] = plate
+                    print(
+                        f"[VISION PIPELINE]: Recognized {feed_type} plate "
+                        f"'{plate}' using live camera rules.", flush=True
+                    )
+                    if feed_type == "entrance":
+                        stop.set()
+                    break
+
+
 def process_video_feed(video_path, model_path, window_name, feed_type="exit"):
+    """Replay at source speed with the same detector used by the live cameras."""
     import cv2
     import easyocr
     from ultralytics import YOLO
 
+    if feed_type not in ("entrance", "exit"):
+        raise ValueError("feed_type must be 'entrance' or 'exit'")
     print(f"[VISION PIPELINE]: Initializing YOLOv8 and EasyOCR on {video_path}...")
-    model = YOLO(model_path)
-    reader = easyocr.Reader(['en'])
+    detector = PlateDetector(feed_type, YOLO(model_path), easyocr.Reader(["en"]), cv2)
     cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        cap.release()
+        print(f"[VISION PIPELINE]: Could not open video: {video_path}")
+        return None
 
-    track_history = defaultdict(lambda: {"centers": deque(maxlen=6), "areas": deque(maxlen=6)})
-    plate_history = defaultdict(lambda: deque(maxlen=8))
-    confirmed_plate = None
-
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        # Continue showing the remainder of an exit clip after ALPR succeeds.
-        # Plate recognition authorizes exit; it does not prove the vehicle left.
-        if confirmed_plate:
-            cv2.putText(
-                frame,
-                f"ALPR CLEARANCE: {confirmed_plate} - review vehicle departure",
-                (24, 40),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (0, 220, 0),
-                2,
-            )
-            cv2.imshow(window_name, frame)
-            if cv2.waitKey(25) & 0xFF == ord('q'):
+    frames = queue.Queue(maxsize=16)
+    stop, finished = threading.Event(), threading.Event()
+    latest, lock, errors = {}, threading.Lock(), []
+    producer = threading.Thread(
+        target=_play_recording_at_source_rate,
+        args=(cap, cv2, frames, latest, lock, stop, finished), daemon=True,
+    )
+    recognizer = threading.Thread(
+        target=_recognize_recording,
+        args=(frames, detector, feed_type, latest, lock, stop, finished, errors),
+        daemon=True,
+    )
+    producer.start()
+    recognizer.start()
+    last_displayed_at = None
+    try:
+        while producer.is_alive() or recognizer.is_alive():
+            with lock:
+                frame = latest.get("frame")
+                captured_at = latest.get("captured_at", 0)
+                annotated = latest.get("annotated")
+                annotated_at = latest.get("annotated_at", 0)
+                plate = latest.get("plate")
+            if frame is not None and captured_at != last_displayed_at:
+                # Show annotations only when they belong to the current frame.
+                display = annotated if annotated_at == captured_at else frame
+                if plate and feed_type == "exit":
+                    display = display.copy()
+                    cv2.putText(
+                        display,
+                        f"PLATE RECOGNIZED: {plate} - review vehicle departure",
+                        (24, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 220, 0), 2,
+                    )
+                cv2.imshow(window_name, display)
+                last_displayed_at = captured_at
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                stop.set()
                 break
-            continue
+            if stop.is_set():
+                break
+            stop.wait(0.02)
+    finally:
+        stop.set()
+        producer.join()
+        recognizer.join()
+        cap.release()
+        cv2.destroyAllWindows()
+    if errors:
+        raise errors[0]
+    with lock:
+        return latest.get("plate")
 
-        height, width, _ = frame.shape
-        
-        # --- DYNAMIC ROI LOGIC ---
-        if feed_type == "entrance":
-            # Adjusted to match the blue box (lower center/right)
-            ymin, ymax = int(height * 0.30), int(height * 0.95)
-            xmin, xmax = int(width * 0.20), int(width * 0.95) 
-        else:
-            # Original exit ROI on the right side of the screen
-            ymin, ymax = int(height * 0.05), int(height * 0.70)
-            xmin, xmax = int(width * 0.40), int(width * 0.95)
-            
-        cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
-
-        # The entrance plate is small in the wide view. Use a lower confidence
-        # threshold and a larger inference size so distant plates enter tracking.
-        detection_confidence = 0.20 if feed_type == "entrance" else 0.35
-        inference_size = 960 if feed_type == "entrance" else 640
-        results = model.track(
-            frame,
-            persist=True,
-            tracker='bytetrack.yaml',
-            conf=detection_confidence,
-            imgsz=inference_size,
-            verbose=False,
-            device="cpu",
-        )
-
-        for r in results:
-            boxes = r.boxes
-            if boxes.id is not None:
-                coords = boxes.xyxy.cpu().numpy()
-                track_ids = boxes.id.cpu().numpy()
-
-                for box, track_id in zip(coords, track_ids):
-                    x1, y1, x2, y2 = map(int, box)
-                    cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
-                    track_id = int(track_id)
-                    box_area = max(0, x2 - x1) * max(0, y2 - y1)
-                    history = track_history[track_id]
-                    history["centers"].append(cy)
-                    history["areas"].append(box_area)
-
-                    # In a fixed entrance camera, an approaching vehicle's
-                    # plate generally grows in the image and/or moves lower in
-                    # the frame. Require a trend across several observations;
-                    # a first detection alone does not prove entry direction.
-                    approaching = False
-                    if feed_type == "entrance" and len(history["areas"]) >= 3:
-                        old_area = max(history["areas"][0], 1)
-                        area_growth = box_area >= old_area * 1.12
-                        downward_motion = history["centers"][-1] - history["centers"][0] >= max(8, int(height * 0.015))
-                        approaching = area_growth or downward_motion
-                    elif feed_type != "entrance":
-                        approaching = True
-
-                    inside_roi = xmin <= cx <= xmax and ymin <= cy <= ymax
-                    if confirmed_plate is None and inside_roi and approaching:
-                        plate_crop = frame[y1:y2, x1:x2]
-                        if plate_crop.size > 0:
-                            gray = cv2.cvtColor(plate_crop, cv2.COLOR_BGR2GRAY)
-                            resized = cv2.resize(gray, (0, 0), fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-                            contrast = cv2.convertScaleAbs(resized, alpha=1.5, beta=10)
-
-                            ocr_results = reader.readtext(
-                                contrast,
-                                allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-                                paragraph=False,
-                            )
-                            for bbox, text, prob in ocr_results:
-                                if prob < 0.20:
-                                    continue
-                                cleaned_text = normalize_license_plate(text)
-                                if re.fullmatch(r'[A-Z]{3}\d{3,4}', cleaned_text):
-                                    plate_history[track_id].append(cleaned_text)
-
-                                    # Allow occasional OCR errors between good
-                                    # frames; three matching reads in the recent
-                                    # track window confirm the plate.
-                                    plate, matches = Counter(plate_history[track_id]).most_common(1)[0]
-                                    if matches >= 3:
-                                        confirmed_plate = plate
-                                        print(
-                                            f"[VISION PIPELINE]: Recognized {feed_type} vehicle "
-                                            f"track {track_id}; plate '{plate}' confirmed "
-                                            f"({matches} matching reads)."
-                                        )
-                                        if feed_type == "entrance":
-                                            cap.release()
-                                            cv2.destroyAllWindows()
-                                            return plate
-
-                    if feed_type == "entrance":
-                        direction_label = "APPROACHING" if approaching else "checking direction"
-                        cv2.putText(
-                            frame,
-                            f"Track {track_id}: {direction_label}",
-                            (x1, max(20, y1 - 8)),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.55,
-                            (0, 220, 0) if approaching else (0, 200, 255),
-                            2,
-                        )
-
-        cv2.imshow(window_name, frame)
-        if cv2.waitKey(25) & 0xFF == ord('q'):
-            break
-
-    cap.release()
-    cv2.destroyAllWindows()
-    return confirmed_plate
 
 def check_and_assign_slot(cursor, vehicle_id):
     cursor.execute('''
-        SELECT r.reservation_id, r.slot_id, p.slot_number, p.zone 
+        SELECT r.reservation_id, r.slot_id, p.slot_number, p.zone, r.payment_state
         FROM reservations r
         JOIN parking_slots p ON r.slot_id = p.slot_id
         WHERE r.vehicle_id = ? AND r.status = 'ACTIVE'
+          AND r.payment_state IN ('PAID', 'ADMIN_EXEMPT') AND p.is_active = 1
     ''', (vehicle_id,))
     
     reservation = cursor.fetchone()
 
     if reservation:
-        res_id, slot_id, slot_number, zone = reservation
+        res_id, slot_id, slot_number, zone, payment_state = reservation
         print(f"\n[SYSTEM]: Prior reservation recognized! Assigning reserved slot.")
         cursor.execute("UPDATE reservations SET status = 'FULFILLED' WHERE reservation_id = ?", (res_id,))
-        return slot_id, slot_number, zone, True
+        return slot_id, slot_number, zone, payment_state
     else:
+        cursor.execute("SELECT 1 FROM reservations WHERE vehicle_id=? AND status IN ('PENDING_PAYMENT','ACTIVE') AND payment_state NOT IN ('PAID','ADMIN_EXEMPT') LIMIT 1", (vehicle_id,))
+        if cursor.fetchone():
+            return None, None, None, 'UNPAID_BOOKING'
         print("\n[SYSTEM]: No prior reservation found. Walk-in detected. Finding available slot...")
-        cursor.execute("SELECT slot_id, slot_number, zone FROM parking_slots WHERE is_occupied = 0 LIMIT 1")
+        cursor.execute("""SELECT s.slot_id, s.slot_number, s.zone FROM parking_slots s
+            WHERE s.is_active = 1 AND s.is_occupied = 0 AND NOT EXISTS (
+              SELECT 1 FROM reservations r WHERE r.slot_id=s.slot_id
+              AND r.status IN ('ACTIVE','PENDING_PAYMENT')) LIMIT 1""")
         slot = cursor.fetchone()
         
         if not slot:
-            return None, None, None, False
+            return None, None, None, None
             
         slot_id, slot_number, zone = slot
-        return slot_id, slot_number, zone, False
+        return slot_id, slot_number, zone, None
 
 def run_scenario_5_closed_loop(entrance_video=None, exit_video=None):
     if entrance_video is None or exit_video is None:
@@ -273,6 +273,7 @@ def run_scenario_5_closed_loop(entrance_video=None, exit_video=None):
                 FROM reservations r
                 JOIN vehicles v ON r.vehicle_id = v.vehicle_id
                 WHERE r.token_id = ? AND r.status = 'ACTIVE'
+                  AND r.payment_state IN ('PAID', 'ADMIN_EXEMPT')
             ''', (token_input,))
             res = cursor.fetchone()
             if res:
@@ -301,15 +302,17 @@ def run_scenario_5_closed_loop(entrance_video=None, exit_video=None):
         vehicle_id = vehicle[0]
 
     # 2. Assign Slot
-    slot_id, slot_number, zone, is_reserved = check_and_assign_slot(cursor, vehicle_id)
+    slot_id, slot_number, zone, payment_state = check_and_assign_slot(cursor, vehicle_id)
+    is_reserved = payment_state is not None
     
     if not slot_id:
-        print("[ERROR]: Public parking lot is completely full.")
+        print("[ERROR]: Booking payment is unconfirmed; entry denied." if payment_state == 'UNPAID_BOOKING' else "[ERROR]: Public parking lot is completely full.")
         conn.close()
         return
 
     # 3. Log session and occupy slot
-    cursor.execute("INSERT INTO parking_sessions (vehicle_id, slot_id) VALUES (?, ?)", (vehicle_id, slot_id))
+    initial_payment = 'PAID_RESERVATION' if payment_state == 'PAID' else ('BYPASSED' if payment_state == 'ADMIN_EXEMPT' else 'UNPAID')
+    cursor.execute("INSERT INTO parking_sessions (vehicle_id, slot_id, payment_status) VALUES (?, ?, ?)", (vehicle_id, slot_id, initial_payment))
     session_id = cursor.lastrowid
     
     cursor.execute("UPDATE parking_slots SET is_occupied = 1 WHERE slot_id = ?", (slot_id,))
@@ -328,18 +331,18 @@ def run_scenario_5_closed_loop(entrance_video=None, exit_video=None):
     print("="*40 + "\n")
     
     print(f"Public Lot Entry logged into DB (Session ID: {session_id}).")
-    print("Entrance barrier relay actuated -> VEHICLE PARKED.\n")
-    time.sleep(1)
+    print("Entry session recorded; slot assignment awaits physical parking.\n")
     
     # --- PHASE 2: CASHIER PAYMENT ---
     print("--- [PHASE 2: CASHIER PAYMENT] ---")
-    print(f"Session #{session_id} for {entry_plate} is now active and UNPAID.")
-    print("Open the Cashier POS, search by plate or session ID, and process the displayed amount.")
+    print(f"Session #{session_id} for {entry_plate} is now active and {initial_payment}.")
+    if initial_payment == 'UNPAID':
+        print("Open the Cashier POS, search by plate or session ID, and process the displayed amount.")
     print("The simulation will read the cashier's committed payment status before deciding exit clearance.\n")
     
     # --- SIMULATION CONTROL ---
     while True:
-        user_input = input("[SIMULATION CONTROL]: After cashier processing, press 'Y' to check exit clearance: ").strip().upper()
+        user_input = input("[SIMULATION CONTROL]: Press 'Y' to check exit clearance: ").strip().upper()
         if user_input == 'Y':
             break
 

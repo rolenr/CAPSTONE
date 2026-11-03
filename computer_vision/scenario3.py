@@ -114,32 +114,39 @@ def process_video_feed(video_path, model_path, window_name, feed_type="entrance"
 def check_and_assign_slot(cursor, vehicle_id):
     """
     Checks if the vehicle has an active reservation.
-    Returns: (slot_id, slot_number, zone, is_reserved_boolean)
+    Returns: (slot_id, slot_number, zone, verified_payment_state).
     """
     cursor.execute('''
-        SELECT r.reservation_id, r.slot_id, p.slot_number, p.zone 
+        SELECT r.reservation_id, r.slot_id, p.slot_number, p.zone, r.payment_state
         FROM reservations r
         JOIN parking_slots p ON r.slot_id = p.slot_id
         WHERE r.vehicle_id = ? AND r.status = 'ACTIVE'
+          AND r.payment_state IN ('PAID', 'ADMIN_EXEMPT') AND p.is_active = 1
     ''', (vehicle_id,))
     
     reservation = cursor.fetchone()
 
     if reservation:
-        res_id, slot_id, slot_number, zone = reservation
+        res_id, slot_id, slot_number, zone, payment_state = reservation
         print(f"\n[SYSTEM]: Prior reservation recognized! Assigning reserved slot.")
         cursor.execute("UPDATE reservations SET status = 'FULFILLED' WHERE reservation_id = ?", (res_id,))
-        return slot_id, slot_number, zone, True
+        return slot_id, slot_number, zone, payment_state
     else:
+        cursor.execute("SELECT 1 FROM reservations WHERE vehicle_id=? AND status IN ('PENDING_PAYMENT','ACTIVE') AND payment_state NOT IN ('PAID','ADMIN_EXEMPT') LIMIT 1", (vehicle_id,))
+        if cursor.fetchone():
+            return None, None, None, 'UNPAID_BOOKING'
         print("\n[SYSTEM]: No prior reservation found. Walk-in detected. Finding available slot...")
-        cursor.execute("SELECT slot_id, slot_number, zone FROM parking_slots WHERE is_occupied = 0 LIMIT 1")
+        cursor.execute("""SELECT s.slot_id, s.slot_number, s.zone FROM parking_slots s
+            WHERE s.is_active = 1 AND s.is_occupied = 0 AND NOT EXISTS (
+              SELECT 1 FROM reservations r WHERE r.slot_id=s.slot_id
+              AND r.status IN ('ACTIVE','PENDING_PAYMENT')) LIMIT 1""")
         slot = cursor.fetchone()
         
         if not slot:
-            return None, None, None, False
+            return None, None, None, None
             
         slot_id, slot_number, zone = slot
-        return slot_id, slot_number, zone, False
+        return slot_id, slot_number, zone, None
 
 def run_scenario_3(entrance_video=None):
     if entrance_video is None:
@@ -181,6 +188,7 @@ def run_scenario_3(entrance_video=None):
                 FROM reservations r
                 JOIN vehicles v ON r.vehicle_id = v.vehicle_id
                 WHERE r.token_id = ? AND r.status = 'ACTIVE'
+                  AND r.payment_state IN ('PAID', 'ADMIN_EXEMPT')
             ''', (token_input,))
             res = cursor.fetchone()
             if res:
@@ -209,10 +217,11 @@ def run_scenario_3(entrance_video=None):
         vehicle_id = vehicle[0]
         
     # 2. Call the Slot Assignment Function
-    slot_id, slot_number, zone, is_reserved = check_and_assign_slot(cursor, vehicle_id)
+    slot_id, slot_number, zone, payment_state = check_and_assign_slot(cursor, vehicle_id)
+    is_reserved = payment_state is not None
     
     if not slot_id:
-        print("[ERROR]: Public parking lot is completely full.")
+        print("[ERROR]: Booking payment is unconfirmed; entry denied." if payment_state == 'UNPAID_BOOKING' else "[ERROR]: Public parking lot is completely full.")
         conn.close()
         return
         
@@ -230,7 +239,8 @@ def run_scenario_3(entrance_video=None):
     print("="*40 + "\n")
     
     # 3. Create session and update spatial constraints
-    cursor.execute("INSERT INTO parking_sessions (vehicle_id, slot_id) VALUES (?, ?)", (vehicle_id, slot_id))
+    initial_payment = 'PAID_RESERVATION' if payment_state == 'PAID' else ('BYPASSED' if payment_state == 'ADMIN_EXEMPT' else 'UNPAID')
+    cursor.execute("INSERT INTO parking_sessions (vehicle_id, slot_id, payment_status) VALUES (?, ?, ?)", (vehicle_id, slot_id, initial_payment))
     session_id = cursor.lastrowid
     
     cursor.execute("UPDATE parking_slots SET is_occupied = 1 WHERE slot_id = ?", (slot_id,))

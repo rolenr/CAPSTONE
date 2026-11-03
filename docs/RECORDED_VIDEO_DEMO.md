@@ -1,6 +1,6 @@
 # Recorded-Video Vision Demo Guide
 
-This guide covers the existing recorded-video scenarios in `computer_vision/`. It describes current script behavior and expected code paths; it does not claim that a clip was successfully recognized or that the system supports live cameras.
+This guide covers the existing recorded-video scenarios in `computer_vision/`. For reusable Scenario 5 commands, the tested white pickup clips, and live NVR setup, see [Scenario 5 and Live VIGI Camera Setup](SCENARIO5_AND_LIVE_VIGI_SETUP.md).
 
 ## Requirements
 
@@ -49,13 +49,20 @@ python3 computer_vision/scenario4.py --exit-video "computer_vision/simulation_vi
 python3 computer_vision/scenario5.py \
   --entry-video "computer_vision/simulation_videos/RegularCustomer - Reservation (Entry and Exit).mp4" \
   --exit-video "computer_vision/simulation_videos/nissanExit.mp4"
+
+# Scenario 5: white pickup recorded from the entrance and exit cameras
+python3 computer_vision/scenario5.py \
+  --entry-video "computer_vision/simulation_videos/ENTRANCE-PU-WHITE.mp4" \
+  --exit-video "computer_vision/simulation_videos/EXIT-PU-WHITE.mp4"
 ```
+
+Scenario 5 replays each recording at its source frame rate. Its preview and recognition run independently, so CPU inference may skip or briefly buffer frames without slowing the displayed clip. It uses the same plate detector and OCR rules as `live_vigi.py`. The exit clip continues after plate recognition for guard review; payment clearance and confirmed physical departure remain separate steps.
 
 The scripts validate selected video paths before opening the database or loading models. A missing path prints the option, the resolved file path, and a correction hint. During processing, press `q` in the OpenCV video window to stop that feed. Some paths ask for terminal input, so run them in an interactive terminal.
 
 ## Expected outputs and prerequisites
 
-These are expected outcomes from reading the current script logic. Actual plate detections, matching clips, timing, and visual quality have not been verified by running the videos.
+These are expected outcomes from reading the current script logic. The white pickup clips were also exercised in an isolated Scenario 5 run; other clips and deployment conditions need separate verification.
 
 | Scenario | Expected behavior when prerequisites are met | Important prerequisite or limitation |
 | --- | --- | --- |
@@ -67,11 +74,11 @@ When ALPR does not return a plate, Scenarios 3-5 may prompt for manual values su
 
 ## Scope and limitations
 
-- This is recorded-file processing only. VIGI cameras, the DJI drone, DJI RC, and physical barrier controllers are not connected.
-- Messages mentioning a relay or an open barrier are printed simulation text. The scripts do not actuate a physical boom barrier.
+- Scenarios 3–5 process recorded files. The separate `live_vigi.py` program reads VIGI NVR feeds for detection only. DJI devices and physical barrier controllers are not connected.
+- Messages mentioning an open barrier are printed simulation text. The scripts do not actuate a physical boom barrier.
 - Scenarios 4 and 5 read the application's payment status from SQLite, but they do not call the US-01 clearance endpoint. Physical departure is confirmed in the terminal.
 - Scenario 5 writes sessions directly to the project database; the cashier web page can process the same session.
-- No occupancy-only video or section occupancy detector is configured. Slot selection in Scenarios 3 and 5 uses database availability, not detections from the overhead camera/drone.
+- No occupancy-only video is bundled. The standalone `computer_vision/sectional_occupancy.py` can process calibrated sectional footage, but it is not connected to Scenarios 3 and 5; their slot selection uses database availability.
 - The current scripts do not emit the versioned event payload in [DETECTION_EVENT_SCHEMA.md](DETECTION_EVENT_SCHEMA.md), and their outputs are not integrated into the web dashboard.
 - The default model paths are the model files in `computer_vision/`. Legacy Windows fallback paths remain in the scripts; if a local model file is missing, provide the expected file before starting the scenario.
 
