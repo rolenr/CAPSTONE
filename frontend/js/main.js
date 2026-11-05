@@ -129,6 +129,9 @@ async function enforcePageRole() {
         return user;
     } catch (error) {
         console.error('Unable to verify the current session.', error);
+        sessionStorage.clear();
+        window.location.replace('login.html');
+        return null;
     }
 }
 
@@ -146,6 +149,12 @@ function adaptAdminPersona(user, page) {
     link.textContent = 'Return to Administration';
     banner.append(identity, link);
     container.prepend(banner);
+}
+
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, character => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[character]);
 }
 
 // --- DOM Elements ---
@@ -458,6 +467,8 @@ function renderReservationDetails(data, plate) {
         qrCodeImage.src = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(qrPayload)}`;
     }
 
+    const passTitle = document.querySelector('.pass-ticket-header strong');
+    if (passTitle) passTitle.textContent = data.payment_provider === 'LOCAL' ? 'DEMO RESERVATION PASS' : 'ACTIVE RESERVATION PASS';
     if (qrZone) qrZone.textContent = data.zone || '';
     if (qrSlotNumber) qrSlotNumber.textContent = data.slot || '';
     if (qrDates) qrDates.textContent = `${data.start_date} to ${data.end_date}`;
@@ -477,19 +488,30 @@ function renderPaymentPending(data) {
     const pending = document.getElementById('paymentPendingSection');
     if (!pending) return;
     pending.style.display = 'block';
-    document.getElementById('paymentPendingTitle').textContent = data.payment_state === 'UNVERIFIED' ? 'Payment verification required' : 'Awaiting payment';
-    document.getElementById('paymentPendingTag').textContent = data.payment_state === 'UNVERIFIED' ? 'Staff review' : '10-minute hold';
-    document.getElementById('paymentPendingDescription').hidden = data.payment_state === 'UNVERIFIED';
-    document.getElementById('paymentHoldDeadline').textContent = data.payment_state === 'UNVERIFIED' ? 'staff review' : formatPhtDateTime(data.hold_deadline);
     const deadline = new Date(`${String(data.hold_deadline).replace(' ', 'T')}Z`);
     const expired = !Number.isNaN(deadline.getTime()) && deadline <= new Date();
+    const legacyUnresolved = expired && data.payment_provider && data.payment_provider !== 'LOCAL';
+    document.getElementById('paymentPendingTitle').textContent = data.payment_state === 'UNVERIFIED'
+        ? 'Payment verification required'
+        : legacyUnresolved ? 'Expired hold · provider review' : 'Awaiting payment';
+    document.getElementById('paymentPendingTag').textContent = data.payment_state === 'UNVERIFIED' || legacyUnresolved ? 'Staff review' : '10-minute hold';
+    document.getElementById('paymentPendingDescription').hidden = data.payment_state === 'UNVERIFIED';
+    if (data.payment_state !== 'UNVERIFIED') {
+        document.getElementById('paymentPendingDescription').innerHTML = data.payment_provider === 'LOCAL'
+            ? 'Your slot is held until <strong id="paymentHoldDeadline">—</strong>. Your pass appears only after the local demo payment succeeds. Returning from checkout does not confirm it.'
+            : 'Your slot is held until <strong id="paymentHoldDeadline">—</strong>. Your pass appears only after the payment provider confirms payment. Returning from checkout does not confirm it.';
+    }
+    document.getElementById('paymentHoldDeadline').textContent = data.payment_state === 'UNVERIFIED' ? 'staff review' : formatPhtDateTime(data.hold_deadline);
     document.getElementById('pendingSlotDetails').textContent = data.payment_state === 'UNVERIFIED'
         ? 'This older booking has no verified payment. No pass is available; contact staff.'
+        : legacyUnresolved
+        ? `This expired ${data.payment_provider} hold is still unresolved${data.payment_record_status ? ` (record: ${data.payment_record_status})` : ''}${data.checkout_session_exists ? '' : ' and has no stored checkout session'}. No pass was issued. The local simulator cannot verify or release this old provider hold. Use another plate for a local demo booking; staff should reconcile this record before reusing ${data.plate || 'the vehicle'}.`
         : expired
         ? 'The hold deadline has passed. Payment or checkout expiry is still being reconciled; no pass has been issued.'
         : `Zone ${data.zone}, slot ${data.slot} · ₱${Number(data.fee).toFixed(2)} · ${data.start_date} to ${data.end_date}`;
+    if (reservationFormContainer) reservationFormContainer.style.display = currentUser.role === 'ADMIN' && legacyUnresolved ? 'block' : 'none';
     const link = document.getElementById('resumeCheckoutLink');
-    if (data.checkout_url && /^https:\/\/(?:checkout-staging\.xendit\.co|dev\.xen\.to)\//.test(data.checkout_url)) {
+    if (data.checkout_url && (/^\/frontend\/demo-checkout\.html\?session=local_[a-f0-9]{48}$/.test(data.checkout_url) || /^https:\/\/payments-web-sandbox\.paymaya\.com\//.test(data.checkout_url))) {
         link.href = data.checkout_url;
         link.hidden = false;
     } else link.hidden = true;
@@ -1002,17 +1024,19 @@ async function loadAdminRefundQueue() {
         const data = await response.json();
         if (!response.ok || !data.success) throw new Error(data.error || 'Refund queue unavailable');
         const escape = value => String(value ?? '—').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-        table.innerHTML = data.refunds.length ? data.refunds.map(r => `<tr>
+        table.innerHTML = data.refunds.length ? data.refunds.map(r => {
+            return `<tr>
             <td>#${Number(r.reservation_id)}</td><td>${escape(r.plate_number)}</td>
             <td>₱${(Number(r.amount_centavos) / 100).toFixed(2)}</td>
             <td>${escape(r.refund_status)}</td><td><code>${escape(r.payment_id)}</code></td>
-            <td>${r.refund_status === 'STAFF_REVIEW' ? `<button class="btn btn-sm btn-outline" onclick="requestReservationRefund(${Number(r.reservation_id)})">Approve refund</button>` : 'Review in Xendit'}</td>
-        </tr>`).join('') : '<tr><td colspan="6">No refunds awaiting review.</td></tr>';
+            <td>${r.refund_status === 'STAFF_REVIEW' && r.reservation_status === 'CANCELLED' ? `<button class="btn btn-sm btn-outline" onclick="requestReservationRefund(${Number(r.reservation_id)})">Approve refund</button>` : 'Review payment provider'}</td>
+        </tr>`;
+        }).join('') : '<tr><td colspan="6">No refunds awaiting review.</td></tr>';
     } catch (error) { table.innerHTML = '<tr><td colspan="6">Refund queue unavailable.</td></tr>'; }
 }
 
 async function requestReservationRefund(reservationId) {
-    if (!confirm(`Approve a full Xendit sandbox refund for booking #${reservationId}?`)) return;
+    if (!confirm(`Approve a full demo/sandbox refund review for booking #${reservationId}?`)) return;
     const response = await apiFetch(`${API_BASE}?action=admin_request_refund`, {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({reservation_id: reservationId})
@@ -1080,17 +1104,17 @@ async function loadAdminAccounts(search = '') {
             const role = String(a.role || (Number(a.is_admin) === 1 ? 'ADMIN' : 'DRIVER')).toUpperCase();
             return `
                 <tr>
-                    <td><strong>${a.email}</strong></td>
-                    <td><code>${a.plate_number}</code></td>
-                    <td>${isVip ? '<span class="badge badge-vip">VIP / PWD PRIORITY</span>' : '<span class="badge badge-bypassed">STANDARD</span>'}</td>
+                    <td><strong>${escapeHtml(a.email)}</strong></td>
+                    <td><code>${escapeHtml(a.plate_number || 'No linked vehicle')}</code></td>
+                    <td>${a.plate_number ? (isVip ? '<span class="badge badge-vip">VIP / PWD PRIORITY</span>' : '<span class="badge badge-bypassed">STANDARD</span>') : 'Staff account'}</td>
                     <td>
-                        <select id="accountRole-${a.account_id}" aria-label="Role for ${a.email}">
-                            ${['ADMIN', 'DRIVER', 'CASHIER', 'VENDOR'].map(option => `<option value="${option}" ${role === option ? 'selected' : ''}>${option}</option>`).join('')}
+                        <select id="accountRole-${Number(a.account_id)}" aria-label="Role for ${escapeHtml(a.email)}">
+                            ${['ADMIN', 'DRIVER', 'CASHIER', 'VENDOR'].map(option => `<option value="${option}" ${role === option ? 'selected' : ''} ${option === 'DRIVER' && !a.plate_number ? 'disabled' : ''}>${option}</option>`).join('')}
                         </select>
                         <button class="btn btn-sm btn-outline" onclick="setAccountRole(${a.account_id})">Save Role</button>
                     </td>
                     <td>
-                        <button class="btn btn-sm ${isVip ? 'btn-outline' : 'btn-primary'}" onclick="setVip(${a.account_id}, ${isVip ? 0 : 1})">
+                        <button class="btn btn-sm ${isVip ? 'btn-outline' : 'btn-primary'}" onclick="setVip(${a.account_id}, ${isVip ? 0 : 1})" ${a.plate_number ? '' : 'disabled title="Staff account has no vehicle"'}>
                             ${isVip ? 'Revoke VIP Status' : 'Grant VIP / PWD'}
                         </button>
                     </td>

@@ -2,6 +2,10 @@
 
 This backlog translates the project evaluation into user-focused work items. Task IDs use `TASK<story>.<sequence>`; for example, `TASK01.1` is the first task under US-01. Status reflects the repository as reviewed on 2026-10-27. Verification notes distinguish isolated API checks from browser or physical-site testing.
 
+## Live exit update — 2026-11-05
+
+The October 27 scope and verification records below are historical. The live VIGI program now sends confirmed Channel 13 plates to the authenticated PHP exit-event endpoint. The API closes an active session and releases its slot when its payment status is eligible; a cashier plate lookup remains a status check. Scanning the issued entry QR token in Cashier POS also records an eligible departure immediately. Cashiers no longer press a separate departure-confirmation button. The guard still operates the physical barrier manually. These changes passed isolated HTTP checks with a copied database; an on-site moving-vehicle test remains outstanding. See [Scenario 5 and Live VIGI Camera Setup](SCENARIO5_AND_LIVE_VIGI_SETUP.md).
+
 ## Scope decisions
 
 - Use recorded video feeds for the next phase of computer-vision integration and simulation.

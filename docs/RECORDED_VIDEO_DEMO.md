@@ -74,7 +74,7 @@ When ALPR does not return a plate, Scenarios 3-5 may prompt for manual values su
 
 ## Scope and limitations
 
-- Scenarios 3–5 process recorded files. The separate `live_vigi.py` program reads VIGI NVR feeds for detection only. DJI devices and physical barrier controllers are not connected.
+- Scenarios 3–5 process recorded files. The separate `live_vigi.py` program reads VIGI NVR feeds and sends confirmed exit plates to the PHP API for eligible automatic departure; its entrance channel remains detection only. DJI devices and physical barrier controllers are not connected.
 - Messages mentioning an open barrier are printed simulation text. The scripts do not actuate a physical boom barrier.
 - Scenarios 4 and 5 read the application's payment status from SQLite, but they do not call the US-01 clearance endpoint. Physical departure is confirmed in the terminal.
 - Scenario 5 writes sessions directly to the project database; the cashier web page can process the same session.

@@ -1,6 +1,6 @@
 # Scenario 5 and Live VIGI Camera Setup
 
-Run the commands in this guide from the repository root, the directory containing `computer_vision/` and `backend/`. Scenario 5 replays two **recorded video files** and runs the entry, payment, and exit workflow. `live_vigi.py` reads **two live NVR channels** and prints plate detections; it does not create parking sessions or change the database.
+Run the commands in this guide from the repository root, the directory containing `computer_vision/` and `backend/`. Scenario 5 replays two **recorded video files** and runs the entry, payment, and exit workflow. `live_vigi.py` reads **two live NVR channels**. Entrance detections are printed; confirmed exit detections are sent to the PHP API, which checks payment and closes eligible sessions automatically.
 
 ## 1. Prepare Python and the model files
 
@@ -30,7 +30,7 @@ python computer_vision/live_vigi.py --help
 ls -lh computer_vision/entrance-feed-best1.pt computer_vision/best.pt backend/database/parking.db
 ```
 
-The first command should show `--entry-video PATH` and `--exit-video PATH`. The live command should show `--no-preview`. The `ls` command should list the two model files and database. The first model/OCR initialization may take a while, especially on CPU.
+The first command should show `--entry-video PATH` and `--exit-video PATH`. The live command should show `--no-preview` and `--detection-only`. The `ls` command should list the two model files and database. The first model/OCR initialization may take a while, especially on CPU.
 
 ## 2. Select Scenario 5 entrance and exit recordings
 
@@ -75,7 +75,7 @@ Scenario 5 **writes to `backend/database/parking.db`**. Recognizing an entrance 
 After entrance recognition, note the printed plate, session ID, and slot. To use the cashier web page, start the web server in a second terminal from the repository root:
 
 ```sh
-php -S 127.0.0.1:8080
+php -S 127.0.0.1:8080 backend/router.php
 ```
 
 Open `http://127.0.0.1:8080/cashier.html`, sign in with a cashier or administrator account, find the printed session or plate, and complete payment. Return to the Scenario 5 terminal and type `Y` when prompted. The script then replays the exit clip and checks the payment status stored in the database. Pressing `Y` does **not** mark a session paid.
@@ -108,7 +108,7 @@ If payment is still `UNPAID`, expect `[EXIT DENIED]`; settle payment in the cash
 
 ## 4. Connect the live VIGI NVR feeds
 
-The live program requires an NVR reachable from this computer, valid NVR credentials, and RTSP access. Its current channel mapping in `computer_vision/live_vigi.py` is:
+The live program requires an NVR reachable from this computer, valid NVR credentials, RTSP access, and the PHP server connected to the same parking database. Its current channel mapping in `computer_vision/live_vigi.py` is:
 
 | Role | NVR channel | Model |
 | --- | ---: | --- |
@@ -116,6 +116,15 @@ The live program requires an NVR reachable from this computer, valid NVR credent
 | Exit | 13 | `best.pt` |
 
 Those channel numbers are set in the `CAMERAS` constant near the top of `live_vigi.py`. They are **not** command-line options. If your NVR uses different channel numbers, edit that mapping and save the file before starting the program. The stream URL format is built by the script as `rtsp://<user>:<password>@<host>:<port>/live/<channel>/1/avm`.
+
+Create the local shared camera-event token once, then start the PHP server in a second terminal from the same project directory:
+
+```sh
+php backend/database/create_exit_camera_token.php
+php -S 127.0.0.1:8080 backend/router.php
+```
+
+The token is stored in the git-ignored `backend/database/exit_camera_token` file and is never printed. The PHP API and live vision program read this same file. If they run on different computers, set the same `PARKING_EXIT_EVENT_TOKEN` environment variable on both, and set `PARKING_EXIT_EVENT_URL` on the vision computer to the PHP API URL over HTTPS. The default API URL is `http://127.0.0.1:8080/backend/api/endpoints.php?action=exit_camera_event`. Keep the computers' clocks in sync; the API accepts only recent exit detections.
 
 In a macOS `zsh` terminal, set the NVR host and username and enter the password without echoing it or putting it in shell history:
 
@@ -159,7 +168,9 @@ When a moving plate is confirmed, the program prints an event with the local tim
 [2026-11-03T10:40:00+08:00] EXIT plate: LAC7863
 ```
 
-Those timestamps and detections are examples. The live program only displays and prints plate detections. It does not call Scenario 5, the clearance API, or the parking database. If the NVR cannot be opened, expect `[entrance] Stream unavailable; retrying.` or the corresponding exit message. Check the host, port, credentials, RTSP settings, network reachability, and channel mapping.
+Those timestamps and detections are examples. A confirmed exit plate is sent to the PHP API. If it matches an active parked session with `PAID`, `PAID_RESERVATION`, `PAID_OVERNIGHT`, `BYPASSED`, or a current `PAID_VENDOR` grace period, the API records the departure, releases the slot, and updates the zone count. The live terminal then prints a `Session ... closed; slot ... released` message. Unpaid, unknown, and expired vendor statuses remain parked. Entrance detections still do not create sessions. If the NVR cannot be opened, expect `[entrance] Stream unavailable; retrying.` or the corresponding exit message. Check the host, port, credentials, RTSP settings, network reachability, and channel mapping.
+
+The cashier's **Check Plate Clearance** button checks payment status without closing a session. Scanning the issued entry QR token in the cashier page validates the token and closes an eligible session immediately. The QR is never prefilled by a lookup. Neither path operates the physical barrier. To run the earlier print-only camera behavior explicitly, use `python computer_vision/live_vigi.py --detection-only`.
 
 ## 5. Quick checks when output differs
 

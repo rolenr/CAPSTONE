@@ -1,7 +1,8 @@
 """Continuously review plate detections from two VIGI NVR channels.
 
-This program is detection-only. It never opens the parking database or calls
-Scenario 5's entry, payment, or departure workflows.
+Entrance detections are printed only. Confirmed exit detections are sent to the
+local PHP API, which checks payment and closes the session when eligible.
+Use --detection-only to print detections without sending exit events.
 
 Set VIGI_NVR_IP, VIGI_NVR_USERNAME, and VIGI_NVR_PASSWORD in the environment.
 Optionally set VIGI_NVR_RTSP_PORT (default 554). From the repository root:
@@ -13,6 +14,7 @@ Press q in either preview window, or Ctrl+C in the terminal, to stop. Use
 """
 
 import argparse
+import json
 import os
 import queue
 import re
@@ -21,9 +23,12 @@ import threading
 import time
 from collections import Counter, defaultdict, deque
 from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from statistics import median
 from urllib.parse import quote
+from urllib.error import HTTPError, URLError
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 try:
     from .plate_utils import normalize_license_plate
@@ -398,7 +403,61 @@ def capture_frames(cv2, url, role, frames, stop):
             delay = min(delay * 2, 10.0)
 
 
-def recognize_frames(role, frames, detector, latest, lock, stop):
+def exit_event_configuration():
+    token = os.environ.get("PARKING_EXIT_EVENT_TOKEN", "")
+    if not token:
+        token_file = SCRIPT_DIR.parent / "backend/database/exit_camera_token"
+        if token_file.is_file():
+            token = token_file.read_text().strip()
+    if len(token) < 32:
+        raise ValueError("Set PARKING_EXIT_EVENT_TOKEN or create backend/database/exit_camera_token (at least 32 characters).")
+    url = os.environ.get(
+        "PARKING_EXIT_EVENT_URL",
+        "http://127.0.0.1:8080/backend/api/endpoints.php?action=exit_camera_event",
+    )
+    if not url.startswith(("http://127.0.0.1:", "http://localhost:", "https://")):
+        raise ValueError("PARKING_EXIT_EVENT_URL must use local HTTP or HTTPS.")
+    return token, url
+
+
+def publish_exit_events(events, stop, token, url):
+    """Send confirmed Channel 13 reads without blocking the vision worker."""
+    class NoRedirect(HTTPRedirectHandler):
+        def redirect_request(self, *_args, **_kwargs):
+            return None
+
+    opener = build_opener(NoRedirect)
+    while not stop.is_set() or not events.empty():
+        try:
+            plate, observed_at = events.get(timeout=0.2)
+        except queue.Empty:
+            continue
+        payload = json.dumps({
+            "channel": 13, "plate_number": plate, "observed_at": observed_at,
+        }).encode("utf-8")
+        request = Request(url, data=payload, headers={
+            "Content-Type": "application/json", "X-Exit-Event-Token": token,
+        }, method="POST")
+        for attempt in range(2):
+            try:
+                with opener.open(request, timeout=4) as response:
+                    result = json.load(response)
+                if result.get("departure_recorded"):
+                    print(f"[exit] Session {result.get('session_id')} closed; slot {result.get('slot_number')} released.", flush=True)
+                break
+            except HTTPError as error:
+                # A denied or unmatched event must not be retried as a new pass.
+                print(f"[exit] {plate}: API rejected detection (HTTP {error.code}).", flush=True)
+                break
+            except (URLError, TimeoutError, OSError, ValueError):
+                if attempt == 0:
+                    stop.wait(1)
+                else:
+                    print(f"[exit] {plate}: API unavailable; use issued QR fallback if needed.", flush=True)
+        events.task_done()
+
+
+def recognize_frames(role, frames, detector, latest, lock, stop, exit_events=None):
     while not stop.is_set():
         try:
             frame = frames.get(timeout=0.2)
@@ -415,15 +474,26 @@ def recognize_frames(role, frames, detector, latest, lock, stop):
         for event_role, plate in events:
             stamp = datetime.now().astimezone().isoformat(timespec="seconds")
             print(f"[{stamp}] {event_role.upper()} plate: {plate}", flush=True)
+            if event_role == "exit" and exit_events is not None:
+                try:
+                    exit_events.put_nowait((plate, datetime.now(timezone.utc).isoformat(timespec="seconds")))
+                except queue.Full:
+                    print("[exit] Event queue full; use issued QR fallback if needed.", flush=True)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--no-preview", action="store_true",
                         help="Print detections without OpenCV video windows.")
+    parser.add_argument("--detection-only", action="store_true",
+                        help="Print exit detections without recording departures in the API.")
     args = parser.parse_args(argv)
     try:
         host, port, username, password = configuration()
+    except ValueError as exc:
+        parser.error(str(exc))
+    try:
+        exit_token, exit_url = (None, None) if args.detection_only else exit_event_configuration()
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -436,6 +506,7 @@ def main(argv=None):
     signal.signal(signal.SIGTERM, lambda _number, _frame: stop.set())
     latest, lock = {}, threading.Lock()
     workers = []
+    exit_events = queue.Queue(maxsize=64) if exit_token else None
     try:
         for role, channel, _title in CAMERAS:
             model_file = SCRIPT_DIR / (
@@ -450,7 +521,12 @@ def main(argv=None):
                 threading.Thread(target=capture_frames,
                                  args=(cv2, url, role, frames, stop), daemon=True),
                 threading.Thread(target=recognize_frames,
-                                 args=(role, frames, detector, latest, lock, stop), daemon=True),
+                                 args=(role, frames, detector, latest, lock, stop, exit_events), daemon=True),
+            ))
+        if exit_events is not None:
+            workers.append(threading.Thread(
+                target=publish_exit_events,
+                args=(exit_events, stop, exit_token, exit_url), daemon=True,
             ))
         for worker in workers:
             worker.start()

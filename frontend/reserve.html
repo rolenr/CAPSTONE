@@ -16,15 +16,16 @@
     <div class="page-title-banner">
         <div>
             <h1 class="page-title-main">Prepaid Slot Reservation</h1>
+            <p>Demo payments only · No real money is charged.</p>
             <p class="page-title-sub">Guarantee an assigned parking bay with automated contactless entry</p>
         </div>
     </div>
 
     <div id="paymentPendingSection" class="card" style="display:none; margin-bottom:1rem" aria-live="polite">
         <div class="card-header-clean"><h2 id="paymentPendingTitle">Awaiting payment</h2><span id="paymentPendingTag" class="section-tag">10-minute hold</span></div>
-        <p id="paymentPendingDescription">Your slot is held until <strong id="paymentHoldDeadline">—</strong>. Your pass appears only after Xendit confirms payment. Returning from checkout does not confirm it.</p>
+        <p id="paymentPendingDescription">Your slot is held until <strong id="paymentHoldDeadline">—</strong>. Your pass appears only after the payment is confirmed. Returning from checkout does not confirm it.</p>
         <p id="pendingSlotDetails"></p>
-        <a id="resumeCheckoutLink" class="btn-primary-block" href="#" rel="noopener" style="display:inline-block; width:auto; text-decoration:none; margin-right:.5rem">Return to sandbox checkout</a>
+        <a id="resumeCheckoutLink" class="btn-primary-block" href="#" rel="noopener" style="display:inline-block; width:auto; text-decoration:none; margin-right:.5rem">Return to demo checkout</a>
         <button id="refreshPaymentStatus" type="button" class="btn btn-secondary">Refresh payment status</button>
     </div>
 
@@ -120,7 +121,7 @@
                 </div>
             </div>
 
-            <button type="submit" class="btn-primary-block">Hold Slot &amp; Continue to Sandbox Checkout</button>
+            <button type="submit" class="btn-primary-block">Hold Slot &amp; Continue to Demo Checkout</button>
         </form>
     </div>
 

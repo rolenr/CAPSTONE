@@ -14,3 +14,6 @@ Thumbs.db
 
 # Local computer-vision Python environment
 .venv-cv/
+
+# Shared local secret for authenticated exit-camera events
+backend/database/exit_camera_token

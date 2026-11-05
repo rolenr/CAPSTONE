@@ -10,11 +10,12 @@ CREATE TABLE accounts (
     account_id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
-    plate_number TEXT UNIQUE NOT NULL,
-    is_vip INTEGER DEFAULT 0, 
+    plate_number TEXT UNIQUE,
+    is_vip INTEGER DEFAULT 0,
     is_admin INTEGER DEFAULT 0,
     role TEXT NOT NULL DEFAULT 'DRIVER' CHECK (role IN ('ADMIN', 'DRIVER', 'CASHIER', 'VENDOR')),
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    CHECK (role <> 'DRIVER' OR plate_number IS NOT NULL),
     FOREIGN KEY(plate_number) REFERENCES vehicles(plate_number)
 );
 
@@ -61,7 +62,7 @@ CREATE TABLE reservations (
     status TEXT DEFAULT 'PENDING_PAYMENT',
     payment_state TEXT NOT NULL DEFAULT 'UNVERIFIED',
     token_id TEXT,
-    start_date datetime, 
+    start_date datetime,
     end_date datetime,
     FOREIGN KEY(vehicle_id) REFERENCES vehicles(vehicle_id),
     FOREIGN KEY(slot_id) REFERENCES parking_slots(slot_id)
@@ -70,7 +71,7 @@ CREATE TABLE reservations (
 CREATE TABLE reservation_payments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     reservation_id INTEGER NOT NULL UNIQUE,
-    provider TEXT NOT NULL DEFAULT 'PAYMONGO',
+    provider TEXT NOT NULL DEFAULT 'LOCAL',
     checkout_session_id TEXT UNIQUE,
     checkout_url TEXT,
     payment_id TEXT UNIQUE,
@@ -85,12 +86,13 @@ CREATE TABLE reservation_payments (
     FOREIGN KEY(reservation_id) REFERENCES reservations(reservation_id)
 );
 
-CREATE TABLE paymongo_webhook_events (
+CREATE TABLE xendit_webhook_events (
     event_id TEXT PRIMARY KEY,
     event_type TEXT NOT NULL,
     processed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE TABLE xendit_webhook_events (
+
+CREATE TABLE maya_webhook_events (
     event_id TEXT PRIMARY KEY,
     event_type TEXT NOT NULL,
     processed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP

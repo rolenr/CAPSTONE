@@ -126,7 +126,7 @@ CAPSTONE/
 | `set_account_role` | `POST` | `IMPLEMENTED` | ADMIN-only role assignment for ADMIN, DRIVER, CASHIER, and VENDOR |
 | `map` | `GET` | `COMPLETED` | Returns 69 active slots with occupancy, zone, and license plate data |
 | `active_reservation` | `GET` | `COMPLETED` | Returns current active booking for a vehicle with QR payload |
-| `reserve` | `POST` | `IMPLEMENTED` | Holds a slot for 10 minutes, creates a Xendit Test Mode checkout, and issues no pass until verified payment; audited admin exemption is available |
+| `reserve` | `POST` | `IMPLEMENTED` | Holds a slot for 10 minutes, creates a local demo checkout, and issues no pass until the simulated payment succeeds; audited admin exemption is available |
 | `violations` | `GET` | `COMPLETED` | Queries citation records for a specific license plate |
 | `admin_stats` | `GET` | `COMPLETED` | Computes live capacity, occupancy %, gross revenue, and pending fines |
 | `admin_analytics` | `GET` | `COMPLETED` | Generates 30-day timeline, tariff streams, and 24h hourly distribution |

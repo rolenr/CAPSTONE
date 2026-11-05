@@ -38,15 +38,18 @@ function isValidLicensePlate($value) {
 
 // 2. Initialize SQLite Connection
 try {
-    $dbPath = __DIR__ . '/../database/parking.db';
-    if (!file_exists($dbPath)) {
+    $dbPath = getenv('PARKING_DB_PATH') ?: __DIR__ . '/../database/parking.db';
+    if (!file_exists($dbPath) && !getenv('PARKING_DB_PATH')) {
         if (file_exists(__DIR__ . '/../parking.db')) {
             $dbPath = __DIR__ . '/../parking.db';
         }
     }
     $db = new PDO('sqlite:' . $dbPath);
     $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-    require_once __DIR__ . '/xendit_reservation_payments.php';
+    require_once __DIR__ . '/exit_departure.php';
+    require_once __DIR__ . '/cashier_billing.php';
+    require_once __DIR__ . '/maya_reservation_payments.php';
+    require_once __DIR__ . '/local_reservation_payments.php';
     paymentDb($db);
 
     // Upgrade older local databases on first API request without replacing data.
@@ -63,6 +66,27 @@ try {
 // 3. Define method and action BEFORE running the IF statements
 $method = $_SERVER['REQUEST_METHOD'];
 $action = $_GET['action'] ?? '';
+$cameraEvent = $action === 'exit_camera_event';
+
+if ($cameraEvent) {
+    if ($method !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['error' => 'POST required.']);
+        exit;
+    }
+    $token = getenv('PARKING_EXIT_EVENT_TOKEN');
+    if (!$token) {
+        $tokenFile = __DIR__ . '/../database/exit_camera_token';
+        $token = is_file($tokenFile) ? trim((string)file_get_contents($tokenFile)) : '';
+    }
+    $providedToken = $_SERVER['HTTP_X_EXIT_EVENT_TOKEN'] ?? '';
+    if (!is_string($token) || strlen($token) < 32 || !is_string($providedToken) ||
+        !hash_equals($token, $providedToken)) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Exit camera authorization failed.']);
+        exit;
+    }
+}
 
 // Default-deny API policy. Static pages are only a user interface; these checks
 // protect the data and operations even when callers bypass the browser.
@@ -72,6 +96,7 @@ $actionRoles = [
     'logout' => ['*'],
     'map' => ['DRIVER', 'ADMIN'],
     'reserve' => ['DRIVER', 'ADMIN'],
+    'local_checkout' => ['DRIVER', 'ADMIN'],
     'active_reservation' => ['DRIVER', 'ADMIN'],
     'violations' => ['DRIVER', 'ADMIN'],
     'vendor_lookup' => ['VENDOR', 'ADMIN'],
@@ -96,11 +121,11 @@ $actionRoles = [
     'cashier_lookup' => ['CASHIER', 'ADMIN'],
     'cashier_payment' => ['CASHIER', 'ADMIN'],
     'exit_barrier_clearance' => ['CASHIER', 'ADMIN'],
-    'confirm_vehicle_departure' => ['CASHIER', 'ADMIN'],
+    'confirm_vehicle_departure' => ['ADMIN'],
     'cashier_recent_transactions' => ['CASHIER', 'ADMIN']
 ];
 
-if (!in_array($action, $publicActions, true)) {
+if (!$cameraEvent && !in_array($action, $publicActions, true)) {
     if (!array_key_exists($action, $actionRoles)) {
         http_response_code(404);
         echo json_encode(['error' => 'Invalid API route requested.']);
@@ -177,6 +202,45 @@ function isExitPaymentCleared($paymentStatus, $vendorScanTime = null) {
     return $minutesSinceVendor >= 0 && $minutesSinceVendor <= (20 * 60);
 }
 
+// A trusted Channel 13 detection is the departure signal. The server still
+// checks the live session and its payment status before changing any records.
+if ($cameraEvent) {
+    $data = json_decode(file_get_contents('php://input'), true) ?: [];
+    $plate = normalizeLicensePlate($data['plate_number'] ?? '');
+    $observedAt = strtotime((string)($data['observed_at'] ?? ''));
+    if (!isValidLicensePlate($plate) || (int)($data['channel'] ?? 0) !== 13 ||
+        $observedAt === false || abs(time() - $observedAt) > 30) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'A recent Channel 13 plate detection is required.']);
+        exit;
+    }
+    try {
+        $find = $db->prepare("SELECT ps.session_id, ps.entry_time
+            FROM parking_sessions ps JOIN vehicles ve ON ve.vehicle_id = ps.vehicle_id
+            WHERE UPPER(REPLACE(REPLACE(ve.plate_number, ' ', ''), '-', '')) = ?
+              AND ps.exit_time IS NULL AND ps.location_status = 'PARKED'
+            ORDER BY ps.session_id DESC LIMIT 1");
+        $find->execute([$plate]);
+        $session = $find->fetch(PDO::FETCH_ASSOC);
+        if (!$session) throw new RuntimeException('No active parked session matches that plate.', 404);
+        $enteredAt = strtotime($session['entry_time'] . ' UTC');
+        if ($enteredAt === false || $observedAt < $enteredAt) {
+            throw new RuntimeException('The detection predates the active parking session.', 409);
+        }
+        echo json_encode(recordExitDeparture($db, (int)$session['session_id'], 'ALPR', 'EXIT_CAMERA_CHANNEL_13'));
+    } catch (PDOException $error) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => 'Unable to record exit detection.']);
+    } catch (RuntimeException $error) {
+        http_response_code(in_array($error->getCode(), [404, 409], true) ? $error->getCode() : 500);
+        echo json_encode(['success' => false, 'error' => $error->getMessage()]);
+    } catch (Throwable $error) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => 'Unable to record exit detection.']);
+    }
+    exit;
+}
+
 if ($action === 'session' && $method === 'GET') {
     echo json_encode([
         'success' => true,
@@ -201,6 +265,24 @@ if ($action === 'logout' && $method === 'POST') {
     }
     session_destroy();
     echo json_encode(['success' => true]);
+    exit;
+}
+
+
+if ($action === 'local_checkout' && in_array($method, ['GET','POST'], true)) {
+    if (!localPaymentsEnabled()) { http_response_code(403); echo json_encode(['error'=>'Local simulation is disabled.']); exit; }
+    localExpireHolds($db);
+    $input = $method === 'POST' ? json_decode(file_get_contents('php://input'), true) : $_GET;
+    $checkout = $input['session'] ?? '';
+    $q=$db->prepare("SELECT p.checkout_session_id,p.amount_centavos,p.status,p.payment_id,r.reservation_id,r.expiry_time,r.start_date,r.end_date,v.plate_number,s.slot_number,s.zone FROM reservation_payments p JOIN reservations r ON r.reservation_id=p.reservation_id JOIN vehicles v ON v.vehicle_id=r.vehicle_id JOIN parking_slots s ON s.slot_id=r.slot_id WHERE p.provider='LOCAL' AND p.checkout_session_id=?");
+    $q->execute([is_string($checkout) ? $checkout : '']); $record=$q->fetch(PDO::FETCH_ASSOC);
+    if (!$record || ($sessionUser['role'] !== 'ADMIN' && normalizeLicensePlate($record['plate_number']) !== normalizeLicensePlate($sessionUser['plate_number']))) {
+        http_response_code(404); echo json_encode(['error'=>'Checkout not found for this account.']); exit;
+    }
+    if ($method === 'POST') {
+        try { $state=localSettle($db,$checkout,(string)($input['outcome'] ?? ''),(string)($input['otp'] ?? '')); echo json_encode(['success'=>true,'status'=>$state]); }
+        catch (InvalidArgumentException $e) { http_response_code(400); echo json_encode(['error'=>$e->getMessage()]); }
+    } else { echo json_encode(['success'=>true,'checkout'=>$record,'server_time'=>gmdate('c')]); }
     exit;
 }
 
@@ -357,13 +439,12 @@ if ($method === 'POST' && $action === 'reserve') {
         echo json_encode(['error' => 'Cancel the existing booking through the staff review flow before making a new one.']);
         exit;
     }
-    if (!$adminExemption && (!xenditConfigured() || (getenv('XENDIT_CALLBACK_TOKEN') ?: '') === '' ||
-        !filter_var(getenv('APP_BASE_URL') ?: '', FILTER_VALIDATE_URL) ||
-        parse_url(getenv('APP_BASE_URL'), PHP_URL_SCHEME) !== 'https')) {
+    if (!$adminExemption && !localPaymentsEnabled()) {
         http_response_code(503);
-        echo json_encode(['error' => 'Sandbox checkout is not configured. Contact staff.']);
+        echo json_encode(['error'=>'Local demo checkout is disabled. Start PHP with LOCAL_PAYMENTS_ENABLED=1.']);
         exit;
     }
+    localExpireHolds($db);
     $start = is_string($startDate) && preg_match('/^\d{4}-\d{2}-\d{2}$/D', $startDate)
         ? DateTimeImmutable::createFromFormat('!Y-m-d', $startDate) : false;
     $end = is_string($endDate) && preg_match('/^\d{4}-\d{2}-\d{2}$/D', $endDate)
@@ -448,6 +529,8 @@ if ($method === 'POST' && $action === 'reserve') {
 
         $expiry = gmdate('Y-m-d H:i:s', time() + 600);
         $amountCentavos = (60 * $days + ($days >= 2 ? 100 : 0)) * 100;
+        $sessionId = $adminExemption ? null : 'local_' . bin2hex(random_bytes(24));
+        $checkoutUrl = $sessionId ? '/frontend/demo-checkout.html?session=' . $sessionId : null;
 
         $reserve = $db->prepare("
             INSERT INTO reservations(vehicle_id, slot_id, expiry_time, status, token_id, start_date, end_date, payment_state)
@@ -459,7 +542,8 @@ if ($method === 'POST' && $action === 'reserve') {
         if ($adminExemption) {
             $db->prepare('UPDATE reservations SET token_id=? WHERE reservation_id=?')->execute(['QR_' . bin2hex(random_bytes(16)), $reservationId]);
         } else {
-            $db->prepare("INSERT INTO reservation_payments(reservation_id,provider,amount_centavos) VALUES (?,'XENDIT',?)")->execute([$reservationId, $amountCentavos]);
+            $db->prepare("INSERT INTO reservation_payments(reservation_id,provider,amount_centavos,checkout_session_id,checkout_url,status) VALUES (?,'LOCAL',?,?,?,'PENDING')")
+                ->execute([$reservationId, $amountCentavos, $sessionId, $checkoutUrl]);
         }
         $actionType = $adminExemption ? 'ADMIN_PAYMENT_EXEMPTION' : 'RESERVATION_PAYMENT_HOLD';
         $details = "Reservation #{$reservationId} for {$plate}: Zone {$zone}, Slot {$slot['slot_number']}, {$startDate} to {$endDate}.";
@@ -467,51 +551,12 @@ if ($method === 'POST' && $action === 'reserve') {
         if ($isAdmin && $zone === 'E' && (!$account || !(int)$account['is_vip'])) $details .= ' Administrator overrode the VIP restriction.';
         $audit = $db->prepare('INSERT INTO audit_logs (admin_email, action_type, target_entity, target_id, details) VALUES (?, ?, ?, ?, ?)');
         $audit->execute([$actorEmail, $actionType, 'reservation', $reservationId, $details]);
-        $db->commit();
-
         $fee = $adminExemption ? 0.0 : $amountCentavos / 100;
-        if (!$adminExemption) {
-            try {
-                $returnUrl = rtrim(getenv('APP_BASE_URL'), '/') . '/frontend/reserve.html';
-                $checkout = xenditRequest('POST', '/sessions', [
-                    'reference_id' => 'RES-' . $reservationId,
-                    'session_type' => 'PAY', 'mode' => 'PAYMENT_LINK',
-                    'amount' => $amountCentavos / 100, 'currency' => 'PHP', 'country' => 'PH',
-                    'capture_method' => 'AUTOMATIC', 'allow_save_payment_method' => 'DISABLED',
-                    'allowed_payment_channels' => ['CARDS'],
-                    'description' => "Parking reservation {$zone}-{$slot['slot_number']}",
-                    'expires_at' => gmdate('Y-m-d\TH:i:s\Z', strtotime($expiry . ' UTC') + 60),
-                    'success_return_url' => $returnUrl . '?checkout=returned',
-                    'cancel_return_url' => $returnUrl . '?checkout=cancelled'
-                ]);
-                $sessionId = $checkout['payment_session_id'] ?? '';
-                $checkoutUrl = $checkout['payment_link_url'] ?? '';
-                if (!is_string($sessionId) || !str_starts_with($sessionId, 'ps-') ||
-                    ($checkout['status'] ?? '') !== 'ACTIVE' ||
-                    ($checkout['reference_id'] ?? '') !== 'RES-' . $reservationId ||
-                    (int)round((float)($checkout['amount'] ?? -1) * 100) !== $amountCentavos ||
-                    !is_string($checkoutUrl) || !xenditCheckoutUrlValid($checkoutUrl))
-                    throw new RuntimeException('Incomplete or non-sandbox Xendit session response');
-                $db->prepare("UPDATE reservation_payments SET checkout_session_id=?, checkout_url=?, status='PENDING', updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?")
-                    ->execute([$sessionId, $checkoutUrl, $reservationId]);
-            } catch (Throwable $e) {
-                // An HTTP validation error is definitive; a timeout or 5xx may have
-                // created a remote session. Keep that slot held for staff review.
-                $definitive = $e->getCode() >= 400 && $e->getCode() < 500 && $e->getCode() !== 429;
-                if ($definitive) $db->prepare("UPDATE reservations SET status='EXPIRED', payment_state='FAILED' WHERE reservation_id=?")->execute([$reservationId]);
-                $db->prepare("UPDATE reservation_payments SET status=?, updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?")
-                    ->execute([$definitive ? 'FAILED' : 'CHECKOUT_UNKNOWN', $reservationId]);
-                paymentAudit($db, 'SYSTEM', 'CHECKOUT_CREATION_ERROR', (int)$reservationId, $definitive ? 'Definitive checkout rejection; hold released.' : 'Outcome uncertain; hold retained for staff reconciliation.');
-                error_log('Xendit checkout creation failed: ' . $e->getMessage());
-                http_response_code(502);
-                echo json_encode(['error' => 'Checkout could not be created. Please try again.']);
-                exit;
-            }
-        }
+        $db->commit();
 
         echo json_encode([
             "success" => true,
-            "message" => $adminExemption ? 'Admin-exempt booking confirmed.' : 'Awaiting sandbox payment.',
+            "message" => $adminExemption ? 'Admin-exempt booking confirmed.' : 'Awaiting simulated payment.',
             "reservation_id" => $reservationId,
             "zone" => $zone,
             "slot" => $slot["slot_number"],
@@ -535,6 +580,7 @@ if ($method === 'POST' && $action === 'reserve') {
 
 // --- ROUTE: Check Active Reservation ---
 if ($method === 'GET' && $action === 'active_reservation') {
+    localExpireHolds($db);
     $requestedPlate = normalizeLicensePlate($_GET['plate'] ?? '');
     if (($_SESSION['auth_user']['role'] ?? '') === 'ADMIN' && $requestedPlate !== '') {
         $plate = $requestedPlate;
@@ -556,6 +602,10 @@ if ($method === 'GET' && $action === 'active_reservation') {
             r.status,
             r.payment_state,
             r.expiry_time,
+            v.plate_number,
+            p.provider,
+            p.status AS payment_record_status,
+            p.checkout_session_id,
             p.checkout_url,
             p.amount_centavos,
             s.zone,
@@ -592,6 +642,10 @@ if ($method === 'GET' && $action === 'active_reservation') {
         "status" => $reservation['status'],
         "payment_state" => $reservation['payment_state'],
         "hold_deadline" => $reservation['expiry_time'],
+        "plate" => $reservation['plate_number'],
+        "payment_provider" => $reservation['provider'],
+        "payment_record_status" => $reservation['payment_record_status'],
+        "checkout_session_exists" => !empty($reservation['checkout_session_id']),
         "checkout_url" => $reservation['status'] === 'PENDING_PAYMENT' && gmdate('Y-m-d H:i:s') < $reservation['expiry_time'] ? $reservation['checkout_url'] : null,
         "qr_token" => $confirmed ? $reservation['token_id'] : null,
         "zone" => $reservation['zone'],
@@ -751,7 +805,14 @@ if ($method === 'POST' && $action === 'vendor_validate') {
 // --- ROUTE: Commercial Tenant Recent Validations & Stats ---
 if ($method === 'GET' && $action === 'vendor_recent_validations') {
     try {
-        $stmt = $db->query("
+        $vendorFilter = $sessionUser['role'] === 'ADMIN' ? '' : "AND EXISTS (
+                SELECT 1 FROM audit_logs own_validation
+                WHERE own_validation.target_entity = 'parking_session'
+                  AND own_validation.target_id = ps.session_id
+                  AND own_validation.action_type = 'VENDOR_VALIDATION'
+                  AND own_validation.admin_email = ?
+            )";
+        $stmt = $db->prepare("
             SELECT ps.session_id, ps.entry_time, ps.vendor_scan_time, ps.exit_time,
                    ps.payment_status, ps.location_status,
                    ve.plate_number, sl.slot_number, sl.zone,
@@ -761,9 +822,11 @@ if ($method === 'GET' && $action === 'vendor_recent_validations') {
             JOIN vehicles ve ON ps.vehicle_id = ve.vehicle_id
             LEFT JOIN parking_slots sl ON ps.slot_id = sl.slot_id
             WHERE ps.vendor_scan_time IS NOT NULL
+            $vendorFilter
             ORDER BY ps.vendor_scan_time DESC
             LIMIT 25
         ");
+        $stmt->execute($sessionUser['role'] === 'ADMIN' ? [] : [$actorEmail]);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $now = time();
@@ -955,7 +1018,7 @@ if ($method === 'GET' && $action === 'admin_stats') {
         $sessionRevenue = (float)$db->query("SELECT COALESCE(SUM(total_fee), 0) FROM parking_sessions WHERE payment_status IN ('PAID', 'PAID_OVERNIGHT')")->fetchColumn();
 
         // Calculate Reservation revenue
-        $reservationRevenue = (float)$db->query("SELECT COALESCE(SUM(amount_centavos),0)/100.0 FROM reservation_payments WHERE status='PAID' AND COALESCE(refund_status,'') != 'SUCCEEDED'")->fetchColumn();
+        $reservationRevenue = (float)$db->query("SELECT COALESCE(SUM(amount_centavos),0)/100.0 FROM reservation_payments WHERE provider != 'LOCAL' AND status='PAID' AND COALESCE(refund_status,'') != 'SUCCEEDED'")->fetchColumn();
 
         // Calculate Paid Violations
         $violationRevenue = (float)$db->query("SELECT COALESCE(SUM(penalty_amount), 0) FROM violations WHERE status = 'PAID'")->fetchColumn();
@@ -964,7 +1027,7 @@ if ($method === 'GET' && $action === 'admin_stats') {
 
         // Today's revenue
         $todaySessionRev = (float)$db->query("SELECT COALESCE(SUM(total_fee), 0) FROM parking_sessions WHERE payment_status IN ('PAID', 'PAID_OVERNIGHT') AND DATE(entry_time, '+8 hours') = DATE('now', '+8 hours')")->fetchColumn();
-        $todayReservationRev = (float)$db->query("SELECT COALESCE(SUM(amount_centavos),0)/100.0 FROM reservation_payments WHERE status='PAID' AND COALESCE(refund_status,'') != 'SUCCEEDED' AND DATE(paid_at,'+8 hours')=DATE('now','+8 hours')")->fetchColumn();
+        $todayReservationRev = (float)$db->query("SELECT COALESCE(SUM(amount_centavos),0)/100.0 FROM reservation_payments WHERE provider != 'LOCAL' AND status='PAID' AND COALESCE(refund_status,'') != 'SUCCEEDED' AND DATE(paid_at,'+8 hours')=DATE('now','+8 hours')")->fetchColumn();
         $todayViolationRev = (float)$db->query("SELECT COALESCE(SUM(penalty_amount), 0) FROM violations WHERE status = 'PAID' AND DATE(issued_at, '+8 hours') = DATE('now', '+8 hours')")->fetchColumn();
         $todayRevenue = $todaySessionRev + $todayReservationRev + $todayViolationRev;
 
@@ -1005,8 +1068,8 @@ if ($method === 'GET' && $action === 'admin_analytics') {
         // Reservations Revenue
         $resQuery = $db->query("SELECT start_date, end_date, status, payment_state FROM reservations");
         $resAll = $resQuery->fetchAll(PDO::FETCH_ASSOC);
-        $resTotalRevenue = (float)$db->query("SELECT COALESCE(SUM(amount_centavos),0)/100.0 FROM reservation_payments WHERE status='PAID' AND COALESCE(refund_status,'') != 'SUCCEEDED'")->fetchColumn();
-        $resPaidCount = (int)$db->query("SELECT COUNT(*) FROM reservation_payments WHERE status='PAID' AND COALESCE(refund_status,'') != 'SUCCEEDED'")->fetchColumn();
+        $resTotalRevenue = (float)$db->query("SELECT COALESCE(SUM(amount_centavos),0)/100.0 FROM reservation_payments WHERE provider != 'LOCAL' AND status='PAID' AND COALESCE(refund_status,'') != 'SUCCEEDED'")->fetchColumn();
+        $resPaidCount = (int)$db->query("SELECT COUNT(*) FROM reservation_payments WHERE provider != 'LOCAL' AND status='PAID' AND COALESCE(refund_status,'') != 'SUCCEEDED'")->fetchColumn();
         $resActive = 0;
         $resCompleted = 0;
         $resCancelled = 0;
@@ -1054,9 +1117,9 @@ if ($method === 'GET' && $action === 'admin_analytics') {
         ")->fetchColumn();
 
         // Add confirmed reservation payments to periods (never booking estimates).
-        $todayRev += (float)$db->query("SELECT COALESCE(SUM(amount_centavos),0)/100.0 FROM reservation_payments WHERE status='PAID' AND COALESCE(refund_status,'') != 'SUCCEEDED' AND DATE(paid_at,'+8 hours')=DATE('now','+8 hours')")->fetchColumn();
-        $weekRev += (float)$db->query("SELECT COALESCE(SUM(amount_centavos),0)/100.0 FROM reservation_payments WHERE status='PAID' AND COALESCE(refund_status,'') != 'SUCCEEDED' AND paid_at>=datetime('now','-7 days')")->fetchColumn();
-        $monthRev += (float)$db->query("SELECT COALESCE(SUM(amount_centavos),0)/100.0 FROM reservation_payments WHERE status='PAID' AND COALESCE(refund_status,'') != 'SUCCEEDED' AND paid_at>=datetime('now','-30 days')")->fetchColumn();
+        $todayRev += (float)$db->query("SELECT COALESCE(SUM(amount_centavos),0)/100.0 FROM reservation_payments WHERE provider != 'LOCAL' AND status='PAID' AND COALESCE(refund_status,'') != 'SUCCEEDED' AND DATE(paid_at,'+8 hours')=DATE('now','+8 hours')")->fetchColumn();
+        $weekRev += (float)$db->query("SELECT COALESCE(SUM(amount_centavos),0)/100.0 FROM reservation_payments WHERE provider != 'LOCAL' AND status='PAID' AND COALESCE(refund_status,'') != 'SUCCEEDED' AND paid_at>=datetime('now','-7 days')")->fetchColumn();
+        $monthRev += (float)$db->query("SELECT COALESCE(SUM(amount_centavos),0)/100.0 FROM reservation_payments WHERE provider != 'LOCAL' AND status='PAID' AND COALESCE(refund_status,'') != 'SUCCEEDED' AND paid_at>=datetime('now','-30 days')")->fetchColumn();
         // Add violations to periods
         $todayRev += (float)$db->query("SELECT COALESCE(SUM(penalty_amount), 0) FROM violations WHERE status = 'PAID' AND DATE(issued_at, '+8 hours') = DATE('now', '+8 hours')")->fetchColumn();
         $weekRev += (float)$db->query("SELECT COALESCE(SUM(penalty_amount), 0) FROM violations WHERE status = 'PAID' AND issued_at >= datetime('now', '+8 hours', '-7 days', 'start of day', '-8 hours')")->fetchColumn();
@@ -1276,7 +1339,8 @@ if ($method === 'GET' && $action === 'admin_reservations') {
 
 // --- ROUTE: Admin - Override / Cancel a Reservation ---
 if ($method === 'GET' && $action === 'admin_refund_queue') {
-    $rows = $db->query("SELECT p.reservation_id, p.payment_id, p.amount_centavos,
+    $rows = $db->query("SELECT p.reservation_id, p.payment_id, p.amount_centavos, p.provider,
+        p.status AS payment_status, p.checkout_session_id, r.expiry_time, r.payment_state,
         COALESCE(p.refund_status,p.status) AS refund_status, p.refund_id, p.paid_at, r.status AS reservation_status,
         v.plate_number FROM reservation_payments p
         JOIN reservations r ON r.reservation_id=p.reservation_id
@@ -1299,19 +1363,24 @@ if ($method === 'POST' && $action === 'admin_request_refund') {
             WHERE p.reservation_id=? AND p.status='PAID'");
         $find->execute([$id]);
         $payment = $find->fetch(PDO::FETCH_ASSOC);
-        if (!$payment || $payment['provider'] !== 'XENDIT' || $payment['status'] !== 'CANCELLED' || $payment['refund_status'] !== 'STAFF_REVIEW') {
+        if (!$payment || !in_array($payment['provider'], ['MAYA','LOCAL'], true) || $payment['status'] !== 'CANCELLED' || $payment['refund_status'] !== 'STAFF_REVIEW') {
             $db->rollBack(); http_response_code(409); echo json_encode(['error'=>'This booking is not awaiting staff-reviewed refund.']); exit;
         }
         $db->prepare("UPDATE reservation_payments SET refund_status='REVIEWING',updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?")->execute([$id]);
         paymentAudit($db, $actorEmail, 'REFUND_APPROVED', $id, 'Staff approved full refund request.');
         $db->commit();
         try {
-            xenditRequestRefund($db, (int)$id, $payment['payment_id'], 'CANCELLATION');
-            echo json_encode(['success'=>true,'message'=>'Xendit sandbox refund requested. Reconcile its result in Xendit.']);
+            if ($payment['provider'] === 'LOCAL') {
+                $db->prepare("UPDATE reservation_payments SET refund_status='SUCCEEDED',refund_id=?,updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?")->execute(['SIM_REFUND_' . $id,$id]);
+                paymentAudit($db,$actorEmail,'SIMULATED_REFUND',(int)$id,'Demo refund completed; no funds moved.');
+                echo json_encode(['success'=>true,'message'=>'Simulated refund completed. No money moved.']); exit;
+            }
+            $db->prepare("UPDATE reservation_payments SET refund_status='STAFF_ATTENTION',updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?")->execute([$id]);
+            echo json_encode(['success'=>true,'message'=>'Refund approved for staff handling in Maya Manager. Record the void/refund there and reconcile before closing this case.']);
         } catch (Throwable $e) {
             $db->prepare("UPDATE reservation_payments SET refund_status='STAFF_ATTENTION',updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?")->execute([$id]);
             paymentAudit($db, 'SYSTEM', 'REFUND_FAILED', $id, substr($e->getMessage(),0,300));
-            http_response_code(502); echo json_encode(['error'=>'Refund request failed or is uncertain. Review in Xendit before retrying.']);
+            http_response_code(502); echo json_encode(['error'=>'Refund review failed. Review in Maya Manager.']);
         }
     } catch (Throwable $e) {
         if ($db->inTransaction()) $db->rollBack();
@@ -1434,13 +1503,20 @@ if ($method === 'POST' && $action === 'set_account_role') {
 
     try {
         $db->beginTransaction();
-        $lookup = $db->prepare('SELECT role FROM accounts WHERE account_id = ?');
+        $lookup = $db->prepare('SELECT role, plate_number FROM accounts WHERE account_id = ?');
         $lookup->execute([$accountId]);
         $existing = $lookup->fetch(PDO::FETCH_ASSOC);
         if (!$existing) {
             $db->rollBack();
             http_response_code(404);
             echo json_encode(['success' => false, 'error' => 'Account not found.']);
+            exit;
+        }
+
+        if ($newRole === 'DRIVER' && $existing['plate_number'] === null) {
+            $db->rollBack();
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Assign a vehicle plate before changing a staff account to Driver.']);
             exit;
         }
 
@@ -1482,7 +1558,7 @@ if ($method === 'POST' && $action === 'set_vip') {
     }
 
     try {
-        $stmt = $db->prepare("UPDATE accounts SET is_vip = ? WHERE account_id = ?");
+        $stmt = $db->prepare("UPDATE accounts SET is_vip = ? WHERE account_id = ? AND plate_number IS NOT NULL");
         $stmt->execute([$isVip, $accountId]);
 
         if ($stmt->rowCount() > 0) {
@@ -1673,7 +1749,7 @@ if ($method === 'GET' && $action === 'cashier_lookup') {
         if (empty($query)) {
             // Return all active parked vehicles for quick selection chips
             $stmt = $db->query("
-                SELECT ps.session_id, ps.entry_time, ps.payment_status, ps.location_status, ps.entry_token,
+                SELECT ps.session_id, ps.entry_time, ps.payment_status, ps.location_status,
                        ve.plate_number, ve.owner_name,
                        sl.slot_number, sl.zone
                 FROM parking_sessions ps
@@ -1689,7 +1765,7 @@ if ($method === 'GET' && $action === 'cashier_lookup') {
         // Search for specific active vehicle
         $stmt = $db->prepare("
             SELECT ps.session_id, ps.vehicle_id, ps.slot_id, ps.entry_time, ps.total_fee,
-                   ps.payment_status, ps.location_status, ps.entry_token, ps.vendor_scan_time, ps.staff_id,
+                   ps.payment_status, ps.location_status, ps.vendor_scan_time, ps.staff_id,
                    ve.plate_number, ve.owner_name,
                    sl.slot_number, sl.zone
             FROM parking_sessions ps
@@ -1707,80 +1783,8 @@ if ($method === 'GET' && $action === 'cashier_lookup') {
             exit;
         }
 
-        // Calculate stay duration
-        $entryTimestamp = strtotime($session['entry_time']);
-        $now = time();
-        $durationMinutes = max(1, round(($now - $entryTimestamp) / 60));
-        $durationHours = round($durationMinutes / 60, 1);
-
-        // Tariff computation according to Capstone Proposal Section 5.5.6:
-        // 1. Transient flat rate: ₱30.00
-        $isGracePeriod = ($durationMinutes <= 15);
-        $baseFee = $isGracePeriod ? 0.00 : 30.00;
-
-        // 2. Overnight surcharge: +₱100.00 if vehicle crosses 23:00 or duration > 12 hours
-        $manilaTimezone = new DateTimeZone('Asia/Manila');
-        $entryLocalTime = (new DateTimeImmutable('@' . $entryTimestamp))->setTimezone($manilaTimezone);
-        $currentLocalTime = (new DateTimeImmutable('@' . $now))->setTimezone($manilaTimezone);
-        $entryHour = (int)$entryLocalTime->format('H');
-        $currentHour = (int)$currentLocalTime->format('H');
-        $daysDiff = (int)floor(($now - $entryTimestamp) / 86400);
-        $crossedLocalDate = $entryLocalTime->format('Y-m-d') !== $currentLocalTime->format('Y-m-d');
-        $isOvernight = ($crossedLocalDate || ($entryHour < 23 && $currentHour >= 23) || $daysDiff > 0 || $durationMinutes > 720);
-        $overnightSurcharge = $isOvernight ? 100.00 : 0.00;
-
-        // 3. Vendor validation discount (e.g. Joey's Restaurant, 20 mins free)
-        $hasVendorCredit = !empty($session['vendor_scan_time']);
-        $vendorCreditAmount = $hasVendorCredit ? 30.00 : 0.00;
-
-        // 4. Prepaid online reservation
-        $isPrepaid = ($session['payment_status'] === 'PAID_RESERVATION');
-
-        // Net parking fee
-        if ($isPrepaid) {
-            $computedParkingFee = 0.00;
-        } elseif ($isGracePeriod) {
-            $computedParkingFee = 0.00;
-        } elseif ($hasVendorCredit) {
-            $computedParkingFee = max(0.00, $overnightSurcharge);
-        } else {
-            $computedParkingFee = $baseFee + $overnightSurcharge;
-        }
-
-        // 5. Query any unpaid violations for this vehicle
-        $vStmt = $db->prepare("
-            SELECT violation_id, violation_type, penalty_amount, issued_at
-            FROM violations
-            WHERE session_id = ? AND status = 'UNPAID'
-        ");
-        $vStmt->execute([$session['session_id']]);
-        $unpaidViolations = $vStmt->fetchAll(PDO::FETCH_ASSOC);
-        $violationsTotal = array_sum(array_column($unpaidViolations, 'penalty_amount'));
-
-        $totalDue = $computedParkingFee + $violationsTotal;
-
-        echo json_encode([
-            "success" => true,
-            "session" => $session,
-            "duration" => [
-                "minutes" => $durationMinutes,
-                "hours" => $durationHours,
-                "human" => ($durationMinutes < 60) ? "{$durationMinutes} mins" : floor($durationMinutes/60) . "h " . ($durationMinutes%60) . "m"
-            ],
-            "tariff" => [
-                "base_fee" => $baseFee,
-                "is_grace" => $isGracePeriod,
-                "is_overnight" => $isOvernight,
-                "overnight_surcharge" => $overnightSurcharge,
-                "has_vendor_credit" => $hasVendorCredit,
-                "vendor_credit" => $vendorCreditAmount,
-                "is_prepaid" => $isPrepaid,
-                "parking_fee" => $computedParkingFee,
-                "violations" => $unpaidViolations,
-                "violations_total" => $violationsTotal,
-                "total_due" => $totalDue
-            ]
-        ]);
+        $bill = cashierBill($db, $session);
+        echo json_encode(['success' => true, 'session' => $session] + $bill);
     } catch (PDOException $e) {
         echo json_encode(["success" => false, "error" => "Database error: " . $e->getMessage()]);
     }
@@ -1789,67 +1793,76 @@ if ($method === 'GET' && $action === 'cashier_lookup') {
 
 // --- ROUTE: Cashier Payment Processing ---
 if ($method === 'POST' && $action === 'cashier_payment') {
-    $data = json_decode(file_get_contents('php://input'), true);
-    $sessionId = $data['session_id'] ?? null;
-    $amountPaid = floatval($data['amount_paid'] ?? 0);
-    $staffId = $actorEmail;
-    $lostTicket = !empty($data['lost_ticket']);
-    $settleViolations = !empty($data['settle_violations']);
-    $paymentMethod = $data['payment_method'] ?? 'CASH';
-
-    if (!$sessionId) {
-        echo json_encode(["success" => false, "error" => "Session ID is required."]);
+    $data = json_decode(file_get_contents('php://input'), true) ?: [];
+    $sessionId = filter_var($data['session_id'] ?? null, FILTER_VALIDATE_INT);
+    $amount = $data['amount_paid'] ?? null;
+    $tendered = $data['cash_tendered'] ?? null;
+    if (!$sessionId || $sessionId < 1 || !is_numeric($amount) || !is_numeric($tendered)
+        || (float)$amount < 0 || (float)$tendered < 0 || ($data['payment_method'] ?? 'CASH') !== 'CASH') {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Valid session, cash amount, and cash tendered are required.']);
         exit;
     }
-
     try {
-        $stmt = $db->prepare("
-            SELECT ps.*, ve.plate_number
-            FROM parking_sessions ps
-            JOIN vehicles ve ON ps.vehicle_id = ve.vehicle_id
-            WHERE ps.session_id = ?
-        ");
+        $db->exec('BEGIN IMMEDIATE');
+        $stmt = $db->prepare("SELECT ps.*, ve.plate_number FROM parking_sessions ps
+                              JOIN vehicles ve ON ve.vehicle_id = ps.vehicle_id
+                              WHERE ps.session_id = ? AND ps.exit_time IS NULL AND ps.location_status = 'PARKED'");
         $stmt->execute([$sessionId]);
         $session = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$session) throw new RuntimeException('No active parked session was found.', 404);
 
-        if (!$session) {
-            echo json_encode(["success" => false, "error" => "Session not found."]);
+        if (!empty($data['lost_ticket']) && isExitPaymentCleared($session['payment_status'], $session['vendor_scan_time'])) {
+            throw new RuntimeException('A lost ticket charge cannot be added to an already cleared session.', 409);
+        }
+
+        $bill = cashierBill($db, $session);
+        $parkingCents = (int)round($bill['tariff']['parking_fee'] * 100);
+        $finesCents = (int)round($bill['tariff']['violations_total'] * 100);
+        $lostCents = !empty($data['lost_ticket']) ? 10000 : 0;
+        $dueCents = $parkingCents + $finesCents + $lostCents;
+        if ((int)round((float)$amount * 100) !== $dueCents) {
+            throw new RuntimeException('The bill changed. Refresh the vehicle invoice before collecting payment.', 409);
+        }
+        if ((int)round((float)$tendered * 100) < $dueCents) {
+            throw new RuntimeException('Cash received is less than the amount due.', 400);
+        }
+        if ($dueCents === 0 && isExitPaymentCleared($session['payment_status'], $session['vendor_scan_time'])) {
+            $db->commit();
+            echo json_encode(['success' => true, 'session_id' => $sessionId, 'plate_number' => $session['plate_number'],
+                              'status' => 'CLEARED', 'message' => 'This session is already cleared.']);
             exit;
         }
 
-        $newTotal = $amountPaid;
-        $newStatus = ($amountPaid > 0) ? 'PAID' : ($session['payment_status'] === 'PAID_RESERVATION' ? 'PAID_RESERVATION' : 'BYPASSED');
-
-        $up = $db->prepare("
-            UPDATE parking_sessions
-            SET total_fee = ?, payment_status = ?, staff_id = ?
-            WHERE session_id = ?
-        ");
-        $up->execute([$newTotal, $newStatus, $staffId, $sessionId]);
-
-        if ($settleViolations) {
-            $vUp = $db->prepare("UPDATE violations SET status = 'PAID' WHERE session_id = ? AND status = 'UNPAID'");
-            $vUp->execute([$sessionId]);
+        $status = $session['payment_status'];
+        if (!isExitPaymentCleared($status, $session['vendor_scan_time'])) {
+            $status = $parkingCents > 0 ? ($bill['tariff']['is_overnight'] ? 'PAID_OVERNIGHT' : 'PAID') :
+                ($status === 'PAID_RESERVATION' ? 'PAID_RESERVATION' : 'BYPASSED');
         }
-
-        // Write to audit trail
-        $audit = $db->prepare("
-            INSERT INTO audit_logs (admin_email, action_type, target_entity, target_id, details)
-            VALUES (?, 'CASHIER_PAYMENT', 'parking_session', ?, ?)
-        ");
-        $details = "Payment of ₱" . number_format($amountPaid, 2) . " received via {$paymentMethod} by Staff {$staffId}. Vehicle plate: {$session['plate_number']}. Financial status: CLEARED.";
-        $audit->execute([$staffId, $sessionId, $details]);
-
-        echo json_encode([
-            "success" => true,
-            "session_id" => $sessionId,
-            "plate_number" => $session['plate_number'],
-            "entry_token" => $session['entry_token'],
-            "status" => "CLEARED",
-            "message" => "Payment cleared successfully. Vehicle authorized for exit barrier."
-        ]);
-    } catch (PDOException $e) {
-        echo json_encode(["success" => false, "error" => "Database error: " . $e->getMessage()]);
+        $parkingTotal = (float)$session['total_fee'] + ($parkingCents + $lostCents) / 100;
+        $up = $db->prepare('UPDATE parking_sessions SET total_fee = ?, payment_status = ?, staff_id = ? WHERE session_id = ?');
+        $up->execute([$parkingTotal, $status, $actorEmail, $sessionId]);
+        $fineUpdate = $db->prepare("UPDATE violations SET status = 'PAID' WHERE violation_id = ? AND status = 'UNPAID'");
+        foreach ($bill['tariff']['violations'] as $violation) {
+            $fineUpdate->execute([$violation['violation_id']]);
+            if ($fineUpdate->rowCount() !== 1) throw new RuntimeException('A citation changed before payment was recorded.', 409);
+        }
+        $audit = $db->prepare("INSERT INTO audit_logs (admin_email, action_type, target_entity, target_id, details)
+                               VALUES (?, 'CASHIER_PAYMENT', 'parking_session', ?, ?)");
+        $details = 'Cash received: PHP ' . number_format($dueCents / 100, 2) .
+            '; parking: PHP ' . number_format($parkingCents / 100, 2) .
+            '; citations: PHP ' . number_format($finesCents / 100, 2) .
+            '; lost ticket: PHP ' . number_format($lostCents / 100, 2) .
+            '; plate: ' . $session['plate_number'];
+        $audit->execute([$actorEmail, $sessionId, $details]);
+        $db->commit();
+        echo json_encode(['success' => true, 'session_id' => $sessionId, 'plate_number' => $session['plate_number'],
+                          'status' => 'CLEARED', 'amount_paid' => $dueCents / 100,
+                          'message' => 'Payment cleared. The exit camera or issued QR can record departure.']);
+    } catch (Throwable $error) {
+        if ($db->inTransaction()) $db->rollBack();
+        http_response_code(in_array($error->getCode(), [400, 404, 409], true) ? $error->getCode() : 500);
+        echo json_encode(['success' => false, 'error' => $error->getCode() ? $error->getMessage() : 'Unable to record payment.']);
     }
     exit;
 }
@@ -1891,7 +1904,7 @@ if ($method === 'POST' && $action === 'exit_barrier_clearance') {
 
             // Match the exact plate to a vehicle with a currently parked session.
             $stmt = $db->prepare("
-                SELECT ps.session_id, ps.slot_id, ps.total_fee, ps.payment_status, ps.entry_token,
+                SELECT ps.session_id, ps.vehicle_id, ps.slot_id, ps.total_fee, ps.payment_status, ps.entry_token,
                        ps.vendor_scan_time, ps.location_status,
                        ve.plate_number, sl.slot_number, sl.zone
                 FROM parking_sessions ps
@@ -1924,7 +1937,7 @@ if ($method === 'POST' && $action === 'exit_barrier_clearance') {
             // A QR fallback is accepted only when it matches the issued entry token.
             // Session IDs and plate numbers are not credentials for this path.
             $stmt = $db->prepare("
-                SELECT ps.session_id, ps.slot_id, ps.total_fee, ps.payment_status, ps.entry_token,
+                SELECT ps.session_id, ps.vehicle_id, ps.slot_id, ps.total_fee, ps.payment_status, ps.entry_token,
                        ps.vendor_scan_time, ps.location_status,
                        ve.plate_number, sl.slot_number, sl.zone
                 FROM parking_sessions ps
@@ -1955,6 +1968,13 @@ if ($method === 'POST' && $action === 'exit_barrier_clearance') {
         }
 
         $isCleared = isExitPaymentCleared($session['payment_status'], $session['vendor_scan_time']);
+        if ($isCleared && hasOutstandingVehicleViolations($db, (int)$session['vehicle_id'])) {
+            $logClearanceAttempt('NOT_CLEARED', $session['payment_status'], 'outstanding_violation_fees', $session['session_id']);
+            http_response_code(409);
+            echo json_encode(['success' => false, 'clearance_allowed' => false, 'decision' => 'NOT_CLEARED',
+                              'error' => 'Outstanding violation fees must be settled at the cashier before exit.']);
+            exit;
+        }
 
         if (!$isCleared) {
             $denialReason = $session['payment_status'] === 'PAID_VENDOR'
@@ -1973,8 +1993,17 @@ if ($method === 'POST' && $action === 'exit_barrier_clearance') {
             exit;
         }
 
-        // Record the decision only. The guard operates the physical barrier;
-        // this check does not confirm that the vehicle actually departed.
+        if ($clearanceMode === 'QR_FALLBACK') {
+            $departure = recordExitDeparture($db, (int)$session['session_id'], 'QR_FALLBACK', $staffId);
+            echo json_encode(array_merge($departure, [
+                'clearance_allowed' => true, 'decision' => 'DEPARTURE_RECORDED',
+                'clearance_mode' => 'QR_FALLBACK',
+            ]));
+            exit;
+        }
+
+        // The cashier's typed plate is a status lookup. Only a confirmed exit
+        // camera detection, or an issued QR scan, closes the session.
         $logClearanceAttempt('CLEARED_TO_EXIT', $session['payment_status'], 'eligible_status_and_active_session', $session['session_id']);
 
         echo json_encode([
@@ -1987,10 +2016,15 @@ if ($method === 'POST' && $action === 'exit_barrier_clearance') {
             "payment_status" => $session['payment_status'],
             "slot_number" => $session['slot_number'],
             "zone" => $session['zone'],
-            "message" => "Cleared to exit. Guard may operate the barrier manually; departure has not yet been recorded."
+            "departure_recorded" => false,
+            "message" => "Payment status is valid. Waiting for exit camera detection or an issued QR scan to record departure."
         ]);
     } catch (PDOException $e) {
-        echo json_encode(["success" => false, "clearance_allowed" => false, "decision" => "NOT_CLEARED", "error" => "Database error: " . $e->getMessage()]);
+        http_response_code(500);
+        echo json_encode(["success" => false, "clearance_allowed" => false, "decision" => "NOT_CLEARED", "error" => "Unable to check exit clearance."]);
+    } catch (RuntimeException $e) {
+        http_response_code(in_array($e->getCode(), [404, 409], true) ? $e->getCode() : 500);
+        echo json_encode(['success' => false, 'clearance_allowed' => false, 'decision' => 'NOT_CLEARED', 'error' => $e->getMessage()]);
     }
     exit;
 }
@@ -2011,7 +2045,7 @@ if ($method === 'POST' && $action === 'confirm_vehicle_departure') {
         $db->beginTransaction();
 
         $sessionStmt = $db->prepare("
-            SELECT ps.session_id, ps.slot_id, ps.payment_status, ps.vendor_scan_time,
+            SELECT ps.session_id, ps.vehicle_id, ps.slot_id, ps.payment_status, ps.vendor_scan_time,
                    ve.plate_number, sl.slot_number, sl.zone, sl.is_occupied
             FROM parking_sessions ps
             JOIN vehicles ve ON ve.vehicle_id = ps.vehicle_id
@@ -2050,6 +2084,12 @@ if ($method === 'POST' && $action === 'confirm_vehicle_departure') {
             $db->rollBack();
             http_response_code(409);
             echo json_encode(['success' => false, 'error' => 'Payment status is no longer valid for exit clearance.']);
+            exit;
+        }
+        if (hasOutstandingVehicleViolations($db, (int)$session['vehicle_id'])) {
+            $db->rollBack();
+            http_response_code(409);
+            echo json_encode(['success' => false, 'error' => 'Outstanding violation fees must be settled before exit.']);
             exit;
         }
 

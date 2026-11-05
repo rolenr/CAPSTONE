@@ -106,6 +106,8 @@
                         <strong id="invViolationsAmount" style="color: var(--danger-text);">₱0.00</strong>
                     </div>
 
+                    <div id="invViolationItems" style="display: none; padding: 0.3rem 0 0.6rem 0.8rem; border-left: 2px solid var(--danger-text); font-size: 0.78rem;"></div>
+
                     <!-- Lost Ticket Penalty Toggle -->
                     <div style="margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--slate-200); display: flex; align-items: center; justify-content: space-between;">
                         <label for="lostTicketCheck" style="margin: 0; font-size: 0.78rem; cursor: pointer; display: flex; align-items: center; gap: 6px;">
@@ -113,14 +115,6 @@
                             <span>Customer Lost Physical Entry Ticket (+₱100.00 Penalty)</span>
                         </label>
                         <span id="lostTicketFeeLabel" style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted);">+₱0.00</span>
-                    </div>
-
-                    <!-- Settle Violations Checkbox (If any exist) -->
-                    <div id="settleViolationsBox" style="display: none; margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--slate-200); align-items: center; justify-content: space-between;">
-                        <label for="settleViolationsCheck" style="margin: 0; font-size: 0.78rem; cursor: pointer; display: flex; align-items: center; gap: 6px;">
-                            <input type="checkbox" id="settleViolationsCheck" checked style="width: auto;">
-                            <span>Settle Outstanding Fines at Cashier Booth</span>
-                        </label>
                     </div>
 
                     <!-- Total Amount Due -->
@@ -134,7 +128,7 @@
                 <div class="tender-calc-box">
                     <div>
                         <label for="cashTendered" style="font-size: 0.72rem; text-transform: uppercase;">Cash Received (₱)</label>
-                        <input type="number" id="cashTendered" placeholder="0.00" min="0" step="10" style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums;">
+                        <input type="number" id="cashTendered" placeholder="0.00" min="0" step="0.01" style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums;">
                     </div>
                     <div>
                         <label style="font-size: 0.72rem; text-transform: uppercase;">Change Due (₱)</label>
@@ -170,12 +164,12 @@
                         <div style="font-size: 0.7rem; color: var(--slate-400);">The guard operates the existing barrier controls.</div>
                     </div>
                     <span id="barrierStatusPill" class="barrier-state-pill" style="background: #e2e8f0; color: #334155;">
-                        WAITING FOR CHECK
+                        WATCHING EXIT CAMERA
                     </span>
                 </div>
 
                 <div style="font-size: 0.85rem; color: var(--slate-300); padding-top: 0.75rem;">
-                    <span id="barrierFeedbackMsg">Check the active session. A cleared result authorizes manual opening; it does not operate the barrier.</span>
+                    <span id="barrierFeedbackMsg">A confirmed exit-camera plate with valid payment automatically closes its session and releases its slot. The guard still operates the physical barrier.</span>
                 </div>
             </div>
 
@@ -210,19 +204,9 @@
                 <div class="form-row">
                     <input type="text" id="qrFallbackInput" placeholder="Scan issued entry QR token" style="font-family: var(--font-mono); font-size: 0.78rem;">
                     <button type="button" id="triggerQrFallbackBtn" class="btn btn-outline" style="width: auto; padding: 0.5rem 1rem; white-space: nowrap; font-weight: 600;">
-                        Validate QR
+                        Validate QR &amp; Record Exit
                     </button>
                 </div>
-            </div>
-
-            <div id="departureConfirmBox" class="fallback-box" hidden style="margin-top: 1rem; border-color: #86efac;">
-                <strong style="font-size: 0.8125rem; color: var(--text-primary);">Record the vehicle's departure</strong>
-                <p style="font-size: 0.75rem; color: var(--text-secondary); margin: 0.4rem 0 0.75rem;">
-                    After the guard confirms the vehicle has passed, record the departure to close the session and release its slot.
-                </p>
-                <button type="button" id="confirmDepartureBtn" class="btn btn-primary" style="width: 100%;">
-                    Confirm Vehicle Passed
-                </button>
             </div>
 
         </div>
@@ -267,7 +251,6 @@
 <script>
     // --- CASHIER INTERFACE CONTROLLER ---
     let currentSession = null;
-    let pendingDepartureSessionId = null;
 
     // Load active parked vehicles for quick selection chips
     async function loadActiveParkedChips() {
@@ -312,8 +295,6 @@
     // Query stay and compute invoice
     document.getElementById('cashierLookupForm')?.addEventListener('submit', async (e) => {
         e.preventDefault();
-        pendingDepartureSessionId = null;
-        document.getElementById('departureConfirmBox').hidden = true;
         const query = normalizePlateOrTokenInput(document.getElementById('lookupQuery').value);
         if (!query) return;
 
@@ -343,7 +324,7 @@
         document.getElementById('invoiceDetailsCard').style.display = 'block';
 
         document.getElementById('invPlate').textContent = s.plate_number;
-        document.getElementById('invSlot').textContent = `Zone ${s.zone} &bull; Slot ${s.slot_number}`;
+        document.getElementById('invSlot').textContent = `Zone ${s.zone} · Slot ${s.slot_number}`;
         document.getElementById('invEntryTime').textContent = formatPhtDateTime(s.entry_time);
         document.getElementById('invDuration').textContent = `${d.human} (${d.minutes} mins)`;
 
@@ -358,7 +339,21 @@
         // Violations
         const hasViolations = t.violations && t.violations.length > 0;
         document.getElementById('invViolationsRow').style.display = hasViolations ? 'flex' : 'none';
-        document.getElementById('settleViolationsBox').style.display = hasViolations ? 'flex' : 'none';
+        const violationItems = document.getElementById('invViolationItems');
+        violationItems.replaceChildren();
+        violationItems.style.display = hasViolations ? 'block' : 'none';
+        if (hasViolations) {
+            t.violations.forEach(v => {
+                const row = document.createElement('div');
+                row.className = 'invoice-row';
+                const label = document.createElement('span');
+                label.textContent = `${v.violation_type} · ${formatPhtDateTime(v.issued_at)} · Session ${v.source_session_id}`;
+                const amount = document.createElement('strong');
+                amount.textContent = `₱${Number(v.penalty_amount).toFixed(2)}`;
+                row.append(label, amount);
+                violationItems.append(row);
+            });
+        }
         if (hasViolations) {
             document.getElementById('invViolationsAmount').textContent = `+₱${Number(t.violations_total).toFixed(2)} (${t.violations.length} citations)`;
         }
@@ -369,21 +364,18 @@
 
         updateTotalDue();
 
-        // Stage the plate and issued QR token for exit clearance.
+        // Stage the plate for a status check. The QR must be scanned separately.
         document.getElementById('alprLivePlate').textContent = s.plate_number;
-        document.getElementById('qrFallbackInput').value = s.entry_token || '';
+        document.getElementById('qrFallbackInput').value = '';
     }
 
     function updateTotalDue() {
         if (!currentSession) return;
         const t = currentSession.tariff;
-        let total = t.parking_fee;
+        let total = Number(t.parking_fee) + Number(t.violations_total);
 
         const isLostTicket = document.getElementById('lostTicketCheck')?.checked;
         if (isLostTicket) total += 100.00;
-
-        const isSettleViolations = document.getElementById('settleViolationsCheck')?.checked;
-        if (isSettleViolations && t.violations_total) total += t.violations_total;
 
         document.getElementById('invTotalDue').textContent = Number(total).toFixed(2);
         calculateChange();
@@ -394,7 +386,6 @@
         updateTotalDue();
     });
 
-    document.getElementById('settleViolationsCheck')?.addEventListener('change', updateTotalDue);
 
     // Cash tender & change calculation
     function calculateChange() {
@@ -413,13 +404,12 @@
         const tendered = parseFloat(document.getElementById('cashTendered').value) || 0;
 
         if (totalDue > 0 && tendered < totalDue) {
-            if (!confirm(`Cash tendered (₱${tendered.toFixed(2)}) is less than total due (₱${totalDue.toFixed(2)}). Complete transaction anyway?`)) {
-                return;
-            }
+            alert(`Cash received must cover the full amount due of ₱${totalDue.toFixed(2)}.`);
+            document.getElementById('cashTendered').focus();
+            return;
         }
 
         const isLost = document.getElementById('lostTicketCheck')?.checked;
-        const isSettleV = document.getElementById('settleViolationsCheck')?.checked;
 
         try {
             const response = await apiFetch(`${API_BASE}?action=cashier_payment`, {
@@ -428,18 +418,19 @@
                 body: JSON.stringify({
                     session_id: currentSession.session.session_id,
                     amount_paid: totalDue,
-
+                    cash_tendered: tendered,
                     lost_ticket: isLost,
-                    settle_violations: isSettleV,
                     payment_method: 'CASH'
                 })
             });
             const data = await response.json();
 
             if (data.success) {
-                alert(`Payment recorded for ${data.plate_number}. Check exit clearance before the guard opens the barrier.`);
+                alert(`Payment recorded for ${data.plate_number}. The exit camera will record departure when it confirms this plate.`);
                 loadActiveParkedChips();
                 loadRecentExits();
+                document.getElementById('cashTendered').value = '';
+                document.getElementById('cashierLookupForm').dispatchEvent(new Event('submit'));
 
                 // Stage the plate for a separate exit clearance check.
                 document.getElementById('alprLivePlate').textContent = data.plate_number;
@@ -447,6 +438,7 @@
                 document.getElementById('barrierFeedbackMsg').textContent = `Payment recorded for ${data.plate_number}. Check the active session before the guard operates the barrier.`;
             } else {
                 alert(data.error || 'Payment failed.');
+                if (response.status === 409) document.getElementById('cashierLookupForm').dispatchEvent(new Event('submit'));
             }
         } catch (err) {
             alert('Server communication error.');
@@ -457,8 +449,6 @@
 
     // Primary exit clearance lookup by plate
     document.getElementById('triggerAlprBtn')?.addEventListener('click', async () => {
-        pendingDepartureSessionId = null;
-        document.getElementById('departureConfirmBox').hidden = true;
         const plate = normalizeLicensePlateInput(document.getElementById('alprLivePlate').textContent);
         if (!plate || plate === 'READY') {
             alert('No vehicle staged at Exit Lane. Please select or query a vehicle first.');
@@ -481,6 +471,10 @@
 
             if (data.success && data.clearance_allowed) {
                 showClearanceDecision(data, true);
+                if (data.departure_recorded) {
+                    loadActiveParkedChips();
+                    loadRecentExits();
+                }
             } else {
                 showClearanceDecision(data, false);
             }
@@ -491,8 +485,6 @@
 
     // Fallback clearance lookup by issued entry QR token
     document.getElementById('triggerQrFallbackBtn')?.addEventListener('click', async () => {
-        pendingDepartureSessionId = null;
-        document.getElementById('departureConfirmBox').hidden = true;
         const token = document.getElementById('qrFallbackInput').value.trim();
         if (!token) {
             alert('Please scan the issued entry QR token.');
@@ -514,6 +506,10 @@
 
             if (data.success && data.clearance_allowed) {
                 showClearanceDecision(data, true);
+                if (data.departure_recorded) {
+                    loadActiveParkedChips();
+                    loadRecentExits();
+                }
             } else {
                 showClearanceDecision(data, false);
             }
@@ -525,14 +521,9 @@
     function showClearanceDecision(data, allowed) {
         const pill = document.getElementById('barrierStatusPill');
         const msg = document.getElementById('barrierFeedbackMsg');
-        const confirmBox = document.getElementById('departureConfirmBox');
-        const confirmButton = document.getElementById('confirmDepartureBtn');
-        pendingDepartureSessionId = allowed && data.session_id ? Number(data.session_id) : null;
-        if (confirmBox) confirmBox.hidden = !pendingDepartureSessionId;
-        if (confirmButton) confirmButton.disabled = false;
         if (pill) {
             pill.className = 'barrier-state-pill';
-            pill.textContent = allowed ? 'CLEARED TO EXIT' : 'NOT CLEARED';
+            pill.textContent = data.departure_recorded ? 'DEPARTURE RECORDED' : allowed ? 'PAYMENT VALID' : 'NOT CLEARED';
             pill.style.background = allowed ? '#dcfce7' : '#fee2e2';
             pill.style.color = allowed ? '#166534' : '#991b1b';
         }
@@ -543,40 +534,6 @@
             msg.textContent = detail;
         }
     }
-
-    document.getElementById('confirmDepartureBtn')?.addEventListener('click', async (event) => {
-        if (!pendingDepartureSessionId) return;
-        if (!confirm('Has the guard confirmed that this vehicle physically passed the exit?')) return;
-
-        const button = event.currentTarget;
-        button.disabled = true;
-        try {
-            const response = await apiFetch(`${API_BASE}?action=confirm_vehicle_departure`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ session_id: pendingDepartureSessionId })
-            });
-            const data = await response.json();
-            if (!response.ok || !data.success) {
-                document.getElementById('barrierFeedbackMsg').textContent = data.error || 'Departure could not be recorded.';
-                button.disabled = false;
-                return;
-            }
-
-            pendingDepartureSessionId = null;
-            document.getElementById('departureConfirmBox').hidden = true;
-            const pill = document.getElementById('barrierStatusPill');
-            pill.textContent = 'DEPARTURE RECORDED';
-            pill.style.background = '#dbeafe';
-            pill.style.color = '#1e40af';
-            document.getElementById('barrierFeedbackMsg').textContent = data.message;
-            loadActiveParkedChips();
-            loadRecentExits();
-        } catch (err) {
-            document.getElementById('barrierFeedbackMsg').textContent = 'Could not reach the departure service.';
-            button.disabled = false;
-        }
-    });
 
     // Load recent gatehouse transactions
     async function loadRecentExits() {
@@ -590,6 +547,18 @@
             if (!data.success || !data.transactions || data.transactions.length === 0) {
                 table.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 15px;">No exit transactions logged yet.</td></tr>';
                 return;
+            }
+
+            const stagedId = Number(currentSession?.session?.session_id || 0);
+            const departed = data.transactions.find(t => Number(t.session_id) === stagedId && stagedId > 0);
+            if (departed) {
+                showClearanceDecision({
+                    departure_recorded: true,
+                    payment_status: departed.payment_status,
+                    message: `Exit ${departed.exit_method === 'ALPR' ? 'camera' : 'QR'} verified ${departed.plate_number}; session closed and slot released.`,
+                }, true);
+                currentSession = null;
+                loadActiveParkedChips();
             }
 
             table.innerHTML = data.transactions.map(t => {
@@ -622,6 +591,10 @@
     // Bootstrap
     loadActiveParkedChips();
     loadRecentExits();
+    setInterval(() => {
+        loadActiveParkedChips();
+        loadRecentExits();
+    }, 5000);
 </script>
 </body>
 </html>
