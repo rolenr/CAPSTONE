@@ -84,8 +84,8 @@
                             License Plate or Entry Token (QR)
                         </label>
                         <div style="display: flex; gap: 8px; align-items: center;">
-                            <input type="text" id="vendor-query-input" 
-                                   placeholder="e.g. ABC-1234 or QR_ACT_02" 
+                            <input type="text" id="vendor-query-input" data-license-plate-or-token
+                                   placeholder="e.g. ABC1234 or QR_ACT_02"
                                    style="flex: 1; height: 42px; font-family: var(--font-mono); font-size: 1.15rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; padding: 0.5rem 0.85rem;"
                                    autofocus autocomplete="off">
                             <button type="button" class="btn btn-secondary" id="btn-lookup-session" style="height: 42px; padding: 0 1.25rem;">
@@ -93,7 +93,7 @@
                             </button>
                         </div>
                         <span style="font-size: 0.72rem; color: var(--text-muted); margin-top: 4px; display: block;">
-                            Scan handheld barcode scanner or type license plate and press Enter.
+                            For plates, enter letters and numbers only, without spaces or hyphens. QR tokens can be scanned as issued.
                         </span>
                     </div>
 
@@ -315,7 +315,7 @@
 
             // Lookup Vehicle Session
             async function lookupSession(queryValue) {
-                const query = queryValue || document.getElementById('vendor-query-input').value.trim();
+                const query = normalizePlateOrTokenInput(queryValue || document.getElementById('vendor-query-input').value);
                 if (!query) {
                     showAlert('Please enter a license plate number or scan an entry QR token.', 'warning');
                     return;
@@ -346,7 +346,7 @@
 
                 document.getElementById('preview-plate').textContent = currentSession.plate_number;
                 document.getElementById('preview-slot').textContent = `${currentSession.slot_number} (Zone ${currentSession.zone})`;
-                document.getElementById('preview-entry-time').textContent = currentSession.entry_time;
+                document.getElementById('preview-entry-time').textContent = formatPhtDateTime(currentSession.entry_time);
                 document.getElementById('preview-duration').textContent = data.duration.human;
                 document.getElementById('preview-net-fee').textContent = '₱0.00';
 
@@ -355,7 +355,7 @@
                     statusBadge.className = 'badge badge-success';
                     statusBadge.textContent = 'Validation Active';
                     startCountdown(v.remaining_grace_minutes * 60);
-                    showAlert(`Vehicle ${currentSession.plate_number} was already validated at ${v.vendor_scan_time}. Exemption is active.`, 'success');
+                    showAlert(`Vehicle ${currentSession.plate_number} was already validated at ${formatPhtDateTime(v.vendor_scan_time)}. Exemption is active.`, 'success');
                 } else {
                     statusBadge.className = 'badge badge-warning';
                     statusBadge.textContent = 'Eligible for 20m Grace';
@@ -435,7 +435,7 @@
 
             // Submit Commercial Validation
             async function submitValidation() {
-                const query = document.getElementById('vendor-query-input').value.trim();
+                const query = normalizePlateOrTokenInput(document.getElementById('vendor-query-input').value);
                 const receipt = document.getElementById('vendor-receipt-input').value.trim() || 'RCP-STORE';
 
 
@@ -537,7 +537,7 @@
 
                     return `
                         <tr>
-                            <td style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-secondary);">${item.vendor_scan_time || item.entry_time}</td>
+                            <td style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-secondary);">${formatPhtDateTime(item.vendor_scan_time || item.entry_time)}</td>
                             <td><strong style="font-family: var(--font-mono); font-size: 0.875rem;">${item.plate_number}</strong></td>
                             <td>${item.slot_number} <span style="color: var(--text-muted); font-size: 0.75rem;">(Zone ${item.zone})</span></td>
                             <td><code style="font-size: 0.75rem;">${item.receipt_number}</code></td>

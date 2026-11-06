@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://parking-ltd.local/schemas/detection-event-1.0.schema.json",
+  "title": "Parking Ltd. Detection Event",
+  "description": "A normalized detection produced while processing a recorded video. This schema describes event data; it does not authorize database changes.",
+  "oneOf": [
+    { "$ref": "#/$defs/plateDetection" },
+    { "$ref": "#/$defs/occupancyDetection" }
+  ],
+  "$defs": {
+    "common": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "event_id",
+        "event_type",
+        "timestamp",
+        "confidence",
+        "source"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "description": "Version of this event contract."
+        },
+        "event_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique identifier for this emitted event."
+        },
+        "event_type": {
+          "type": "string",
+          "enum": [
+            "vehicle.entry.detected",
+            "vehicle.exit.detected",
+            "parking.occupancy.detected"
+          ]
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Time the detection was observed, in RFC 3339 format with an explicit timezone."
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Confidence for the reported plate or occupancy state, expressed from 0 to 1."
+        },
+        "source": {
+          "type": "object",
+          "required": ["video", "frame_index"],
+          "properties": {
+            "video": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Video path or URI. Prefer a repository-relative path for local demo files."
+            },
+            "frame_index": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Zero-based frame number in the source video."
+            }
+          },
+          "additionalProperties": false
+        },
+        "plate_number": {
+          "type": "string"
+        },
+        "slot_number": {
+          "type": "string"
+        },
+        "occupancy_state": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "plateDetection": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["plate_number"],
+          "properties": {
+            "event_type": {
+              "enum": ["vehicle.entry.detected", "vehicle.exit.detected"]
+            },
+            "plate_number": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 16,
+              "pattern": "^[A-Z0-9]+$",
+              "description": "Normalized plate text in uppercase with spaces and punctuation removed."
+            }
+          }
+        }
+      ]
+    },
+    "occupancyDetection": {
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "type": "object",
+          "required": ["slot_number", "occupancy_state"],
+          "properties": {
+            "event_type": {
+              "const": "parking.occupancy.detected"
+            },
+            "slot_number": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32,
+              "description": "Registered parking slot identifier, such as A-01."
+            },
+            "occupancy_state": {
+              "type": "string",
+              "enum": ["OCCUPIED", "VACANT"]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

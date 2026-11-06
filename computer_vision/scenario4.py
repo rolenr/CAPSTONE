@@ -1,22 +1,32 @@
 import sqlite3
-import cv2
-import easyocr
 import re
 from collections import Counter, defaultdict
-from ultralytics import YOLO
 
 import os
-
-# Dynamic path resolution (cross-platform compatible with fallback)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(SCRIPT_DIR)
-DB_PATH = os.path.join(BASE_DIR, "backend", "database", "parking.db")
-if not os.path.exists(DB_PATH):
-    DB_PATH = os.path.join(BASE_DIR, "parking.db")
-    if not os.path.exists(DB_PATH):
-        DB_PATH = r"D:\xampp\htdocs\CAPSTONE\parking.db"
+
+try:
+    from .video_args import parse_video_args
+except ImportError:
+    from video_args import parse_video_args
+
+try:
+    from .plate_utils import normalize_license_plate
+except ImportError:
+    from plate_utils import normalize_license_plate
+
+try:
+    from .scenario5 import is_exit_payment_cleared
+except ImportError:
+    from scenario5 import is_exit_payment_cleared
+
+DB_PATH = os.path.join(os.path.dirname(SCRIPT_DIR), "backend", "database", "parking.db")
 
 def process_video_feed(video_path, model_path, window_name, feed_type="exit"):
+    import cv2
+    import easyocr
+    from ultralytics import YOLO
+
     print(f"[VISION PIPELINE]: Initializing YOLOv8 and EasyOCR on {video_path}...")
     model = YOLO(model_path)
     reader = easyocr.Reader(['en'])
@@ -74,7 +84,7 @@ def process_video_feed(video_path, model_path, window_name, feed_type="exit"):
 
                             ocr_results = reader.readtext(contrast)
                             for bbox, text, prob in ocr_results:
-                                cleaned_text = re.sub(r'[^A-Z0-9]', '', text.upper())
+                                cleaned_text = normalize_license_plate(text)
                                 
                                 # Validate string format
                                 if re.match(r'^[A-Z]{3}\d{3,4}$', cleaned_text):
@@ -100,7 +110,19 @@ def process_video_feed(video_path, model_path, window_name, feed_type="exit"):
     cv2.destroyAllWindows()
     return None
 
-def run_scenario_4():
+def run_scenario_4(exit_video=None):
+    if exit_video is None:
+        video_dir = os.path.join(SCRIPT_DIR, "simulation_videos")
+        exit_video = parse_video_args(
+            "Scenario 4: exit plate recognition and payment clearance.",
+            {
+                "exit_video": (
+                    "Recorded video of a vehicle approaching the exit.",
+                    os.path.join(video_dir, "nissanExit.mp4"),
+                )
+            },
+        )["exit_video"]
+
     print("=================================================================")
     print("      RUNNING SCENARIO 4: EXIT CAMERA & PAYMENT CLEARANCE        ")
     print("=================================================================\n")
@@ -110,11 +132,8 @@ def run_scenario_4():
     if not os.path.exists(model_weights):
         model_weights = r"R:\Capstone\best.pt"
     
-    video_dir = os.path.join(SCRIPT_DIR, "simulation_videos")
-    exit_video = os.path.join(video_dir, "nissanExit.mp4")
-    if not os.path.exists(exit_video):
-        exit_video = r"R:\Capstone\nissanExit.mp4"
-    
+    if not os.path.isfile(DB_PATH):
+        raise FileNotFoundError(f"Project database not found: {DB_PATH}")
     conn = sqlite3.connect(DB_PATH, timeout=10)
     cursor = conn.cursor()
     
@@ -129,9 +148,9 @@ def run_scenario_4():
         
         if session_input:
             cursor.execute('''
-                SELECT session_id, slot_id, total_fee, vehicle_id 
+                SELECT session_id, slot_id, payment_status, vehicle_id, vendor_scan_time
                 FROM parking_sessions 
-                WHERE session_id = ? AND exit_time IS NULL
+                WHERE session_id = ? AND exit_time IS NULL AND location_status = 'PARKED'
             ''', (session_input,))
             active_session = cursor.fetchone()
             if not active_session:
@@ -144,45 +163,62 @@ def run_scenario_4():
             return
     else:
         # --- VISION SYSTEM SUCCESSFUL ---
-        cursor.execute("SELECT vehicle_id FROM vehicles WHERE plate_number = ?", (exit_plate,))
+        cursor.execute("SELECT vehicle_id FROM vehicles WHERE UPPER(REPLACE(REPLACE(plate_number, ' ', ''), '-', '')) = ?", (exit_plate,))
         exit_vehicle = cursor.fetchone()
         if exit_vehicle:
             cursor.execute('''
-                SELECT session_id, slot_id, total_fee, vehicle_id 
+                SELECT session_id, slot_id, payment_status, vehicle_id, vendor_scan_time
                 FROM parking_sessions 
-                WHERE vehicle_id = ? AND exit_time IS NULL
+                WHERE vehicle_id = ? AND exit_time IS NULL AND location_status = 'PARKED'
                 ORDER BY session_id DESC LIMIT 1
             ''', (exit_vehicle[0],))
             active_session = cursor.fetchone()
 
     # --- PROCESS FINAL CLEARANCE ---
     if active_session:
-        active_session_id, active_slot_id, total_fee, exit_vehicle_id = active_session
-        
+        active_session_id, active_slot_id, payment_status, exit_vehicle_id, vendor_scan_time = active_session
+
         print("\n[DECISION MATRIX EVALUATION]:")
         if exit_plate:
             print(f"  • Extracted Plate  : {exit_plate}")
         print(f"  • Session ID       : {active_session_id}")
-        print(f"  • Financial Status : {'CLEARED' if total_fee > 0 else 'UNPAID'}")
-        
-        if total_fee > 0:
-            print("  • Verification     : MATCH CONFIRMED (PASSED)")
-            
-            cursor.execute("UPDATE parking_sessions SET exit_time = CURRENT_TIMESTAMP WHERE session_id = ?", (active_session_id,))
-            cursor.execute("UPDATE parking_slots SET is_occupied = 0 WHERE slot_id = ?", (active_slot_id,))
-            cursor.execute('''
-                UPDATE spatial_allocation 
-                SET active_parked_count = active_parked_count - 1 
-                WHERE zone_id = (SELECT zone FROM parking_slots WHERE slot_id = ?)
-            ''', (active_slot_id,))
-            conn.commit()
-            
-            print(f"  • Database State   : Closed Session #{active_session_id} and freed spatial allocations.")
-            print("\n>>> SUCCESS: EXIT CLEARED <<<")
-            print("[MICROCONTROLLER RELAY]: Signal sent. EXIT BARRIER OPEN.")
+        print(f"  • Payment Status   : {payment_status or 'UNPAID'}")
+
+        if is_exit_payment_cleared(payment_status, vendor_scan_time):
+            print("  • Verification     : EXIT CLEARED")
+            print("The guard may open the barrier. Confirm only after the vehicle has fully exited.")
+            confirmation = input("[GUARD CONFIRMATION]: Type DEPARTED after the vehicle has exited: ").strip().upper()
+            if confirmation == "DEPARTED":
+                cursor.execute(
+                    "UPDATE parking_sessions "
+                    "SET exit_time = CURRENT_TIMESTAMP, location_status = 'EXITED', exit_method = ? "
+                    "WHERE session_id = ? AND exit_time IS NULL AND location_status = 'PARKED'",
+                    ("ALPR" if exit_plate else "SESSION_ID", active_session_id),
+                )
+                if cursor.rowcount != 1:
+                    conn.rollback()
+                    print("[DEPARTURE NOT RECORDED]: Session is no longer active.")
+                else:
+                    cursor.execute(
+                        "UPDATE parking_slots SET is_occupied = 0 WHERE slot_id = ? AND is_occupied = 1",
+                        (active_slot_id,),
+                    )
+                    if cursor.rowcount != 1:
+                        conn.rollback()
+                        print("[DEPARTURE NOT RECORDED]: Slot state changed; database changes were rolled back.")
+                    else:
+                        cursor.execute('''
+                            UPDATE spatial_allocation
+                            SET active_parked_count = MAX(0, active_parked_count - 1)
+                            WHERE zone_id = (SELECT zone FROM parking_slots WHERE slot_id = ?)
+                        ''', (active_slot_id,))
+                        conn.commit()
+                        print(f"[DEPARTURE RECORDED]: Closed Session #{active_session_id} and freed its slot.")
+            else:
+                print("[DEPARTURE NOT RECORDED]: Session remains parked and slot remains occupied.")
         else:
-            print("  • Verification     : REJECTED (Unpaid fixed fee).")
-            print("FAILED: Fixed parking fee has not been cleared.")
+            print("  • Verification     : EXIT DENIED")
+            print("Payment has not been cleared; session and slot remain active.")
     else:
         if exit_plate:
             print(f"\n[DECISION MATRIX]: Unregistered vehicle '{exit_plate}' or no active session found. Barrier CLOSED.")

@@ -31,9 +31,10 @@
             <div class="form-group">
                 <label for="searchPlate">Vehicle License Plate</label>
                 <div class="form-row">
-                    <input type="text" id="searchPlate" placeholder="e.g. ABC-1234" required style="text-transform: uppercase; font-family: var(--font-mono); font-weight: 600;">
+                    <input type="text" id="searchPlate" data-license-plate-input minlength="6" maxlength="7" pattern="[A-Za-z]{3}[0-9]{3,4}" placeholder="e.g. ABC1234" autocapitalize="characters" required style="text-transform: uppercase; font-family: var(--font-mono); font-weight: 600;">
                     <button type="submit" class="btn btn-primary" style="width: auto; padding: 0.55rem 1.25rem; white-space: nowrap;">Search Records</button>
                 </div>
+                <small class="field-help">Enter three letters followed by three or four digits, without spaces or hyphens.</small>
             </div>
         </form>
 

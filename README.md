@@ -21,7 +21,9 @@ The system is organized into modular tiers for clear separation of concerns:
 ### 1. Launch Web Server
 From the project root directory, run the built-in PHP development server:
 ```bash
-php -S 127.0.0.1:8080
+php backend/database/seed_demo_accounts.php
+export LOCAL_PAYMENTS_ENABLED=1
+php -S 127.0.0.1:8080 backend/router.php
 ```
 Open **`http://127.0.0.1:8080`** in any web browser. You will be automatically directed to the sign-in portal.
 
@@ -33,7 +35,21 @@ Open **`http://127.0.0.1:8080`** in any web browser. You will be automatically d
 * **Customer Driver Portal**:
   * Email: `driver1@gmail.com`
   * Password: `password123`
-  * Features: Live 78-slot map availability, digital QR pass wallet, and prepaid booking.
+  * Features: Live 69-slot map availability, digital QR pass wallet, and prepaid booking.
+* **Cashier Portal**:
+  * Email: `cashier@parking.test`
+  * Password: `cashier123`
+  * Features: Session lookup and parking payment.
+* **Tenant Vendor Portal (Joey's Restaurant)**:
+  * Email: `vendor@joeys.test`
+  * Password: `vendor123`
+  * Features: Customer parking validation and departure grace.
+
+These credentials are for the local demo quick-fill controls. The PHP router and API enforce role access; administrators can open all portals, while other accounts are limited to their assigned portal and actions.
+
+The live map uses `frontend/images/parking-lot-mapv2.png`. Active slot counts are A=9, B=7, C=6, D=7, E=10, and F=30. For an existing database created before map v2, run `python3 backend/database/update_map_v2_slots.py`. The migration preserves historical sessions by retiring nine old slot rows and moves active assignments from A-10 to A-09 and B-09 to B-07. It can be run again safely when the map inventory changes.
+
+Reservation checkout currently uses a **local payment simulator**. It holds a slot for 10 minutes and issues a demo pass only after the server records the successful simulation. No payment provider, real card, OTP SMS, or funds are involved. Follow [Local Simulated Payments](docs/LOCAL_SIMULATED_PAYMENTS.md) for setup, test scenarios, and expected output. Maya remains available as an alternative sandbox integration. Xendit remains only to reconcile an unresolved historical checkout.
 
 ### 3. Run Computer Vision Simulations
 Ensure Python 3.9+ is installed with the required dependencies (`opencv-python`, `easyocr`, `ultralytics`):
@@ -47,6 +63,12 @@ python3 computer_vision/scenario4.py
 # Scenario 5: Full closed-loop cycle simulation
 python3 computer_vision/scenario5.py
 ```
+
+The scenarios use `backend/database/parking.db` and change live parking records. For video selection, expected outcomes, and limitations, see **[Recorded-Video Guide](docs/RECORDED_VIDEO_DEMO.md)**.
+
+For reusable Scenario 5 entrance/exit clip commands and live VIGI NVR setup, see **[Scenario 5 and Live VIGI Camera Setup](docs/SCENARIO5_AND_LIVE_VIGI_SETUP.md)**.
+
+For the separate sectional bay and 10-minute no-parking monitor, see **[Sectional Occupancy Setup](docs/SECTIONAL_OCCUPANCY_SETUP.md)**.
 
 ---
 

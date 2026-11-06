@@ -1,7 +1,7 @@
 # Project Implementation & Architecture Tracker
 **Automated Parking Management System (Parking Ltd.)**  
 *Capstone Reference: CAP-2520-IT (Computer Vision, Spatial Telemetry & Transaction Ledger)*  
-*Last Updated: 2026-10-02 (Attendant Cashier POS & Priority ALPR Exit Clearance Implemented)*
+*Last Updated: 2026-11-03 (Xendit sandbox reservation checkout migration)*
 
 ---
 
@@ -35,7 +35,7 @@ CAPSTONE/
 │   ├── js/
 │   │   └── main.js             # Client controller, API client, live refresh & charts
 │   └── images/
-│       ├── parking-lot-map.png # Calibrated 78-slot aerial zone layout
+│       ├── parking-lot-mapv2.png # Current aerial map used by the live map
 │       └── parking-lot.jpg     # Facility reference photo
 │
 ├── backend/                    # Server-side business logic & persistence
@@ -71,9 +71,10 @@ CAPSTONE/
 | **Lost Ticket Handling** | Checkbox penalty option (+₱100.00) when physical entry token is lost | `COMPLETED` | Section 5.4.1 Exception Handling |
 | **Fine Settlement at Gate** | Itemized display of outstanding citations with 1-click cash fine settlement | `COMPLETED` | Section 5.4.1 Compliance Tracking |
 | **Cash Tender & Change** | Live cash tender calculator computing change due to driver | `COMPLETED` | Cashier POS functionality |
-| **Priority 1: ALPR Exit Scan**| Automated exit gate camera scan to verify financial clearance and actuate barrier | `COMPLETED` | Core Proposal Specification |
-| **Priority 2: QR Fallback** | Manual QR code / Token scanner fallback when optical OCR camera is unreadable | `COMPLETED` | Core Proposal Specification |
-| **Visual Barrier Actuator** | Animated barrier arm visualizer with auto-close countdown timer (5s) | `COMPLETED` | Hardware relay simulation |
+| **Exit Clearance by Plate** | Match a plate to an active session and check payment status; guard operates the physical barrier manually | `IMPLEMENTED` | Exit eligibility check |
+| **Issued QR Token Fallback** | Check the issued entry QR token when a plate cannot be matched; session IDs and plates are not accepted as fallback credentials | `IMPLEMENTED` | Token fallback verification |
+| **Manual Barrier Operation** | Cashier screen states that the guard operates the existing barrier controls; no hardware command or opening animation is sent | `IMPLEMENTED` | Current project scope |
+| **Staff Departure Confirmation** | After the guard confirms the vehicle passed, cashier/admin records exit and releases its slot | `IMPLEMENTED` | Manual gate operation workflow |
 | **Cashier Exit Audit Feed** | Real-time table logging recent departures, payment amounts, and verification mode | `COMPLETED` | Section 5.4.2 System Auditability |
 
 ---
@@ -90,7 +91,7 @@ CAPSTONE/
 | **Sectional Heatmap** | Overhead vision telemetry across Zones A–E (paved) & Zone F (overflow) | `COMPLETED` | Section 5.5.6 Spatial Allocations |
 | **24-Hour Traffic Influx** | Bar chart showing hourly arrival volume and morning/evening peak demand | `COMPLETED` | Traffic influx analysis |
 | **Violations Management** | Enforcement table with 1-click cash fine settlement or dismissal | `COMPLETED` | Section 5.4.1 Compliance Tracking |
-| **ALPR Hardware Telemetry** | Live plate detection logs, OCR confidence scores, gate barrier states | `COMPLETED` | Section 5.3 ALPR Gatehouse Feed |
+| **Exit Clearance Status** | Cashier can check eligibility by plate or issued QR token; this does not report a physical barrier state | `IMPLEMENTED` | Exit verification |
 | **Slot Overrides & Filters** | Force-occupy or force-free individual slots with Zone A–F filtering | `COMPLETED` | Facility exception handling |
 | **Prepaid Bookings Table** | Manage active reservations with emergency override/cancellation | `COMPLETED` | Reservation clearance |
 | **User Directory & Privileges**| Search registered vehicles, toggle VIP / PWD priority privileges | `COMPLETED` | Section 5.5.6 Rule 2 Access Rights |
@@ -116,15 +117,16 @@ CAPSTONE/
 | :--- | :---: | :---: | :--- |
 | `cashier_lookup` | `GET` | `COMPLETED` | Queries active stays, computes elapsed duration, and evaluates full tariff breakdown |
 | `cashier_payment` | `POST` | `COMPLETED` | Processes cashier fee settlement, logs Staff ID, clears fines, writes audit log |
-| `exit_barrier_clearance`| `POST` | `COMPLETED` | **Priority ALPR** or **QR Fallback** exit verification; actuates barrier & frees slot |
+| `exit_barrier_clearance`| `POST` | `IMPLEMENTED` | Plate or issued QR-token clearance decision; does not actuate the barrier or mark the vehicle departed |
+| `confirm_vehicle_departure` | `POST` | `IMPLEMENTED` | CASHIER/ADMIN-only confirmation requiring the latest approved clearance and a still-valid payment status; records exit, frees slot, updates zone count, and audits the action |
 | `cashier_recent_transactions`| `GET` | `COMPLETED` | Returns recent gatehouse departures with clearance mode and amount collected |
 | `login` | `POST` | `COMPLETED` | Validates credentials against hashed passwords, returns role/plate |
 | `register` | `POST` | `COMPLETED` | Creates account with vehicle plate linkage |
 | `session` / `logout` | `GET` / `POST` | `IMPLEMENTED` | Restores the authenticated principal and CSRF token; invalidates the server session |
 | `set_account_role` | `POST` | `IMPLEMENTED` | ADMIN-only role assignment for ADMIN, DRIVER, CASHIER, and VENDOR |
-| `map` | `GET` | `COMPLETED` | Returns 78 slots with occupancy, zone, and license plate data |
+| `map` | `GET` | `COMPLETED` | Returns 69 active slots with occupancy, zone, and license plate data |
 | `active_reservation` | `GET` | `COMPLETED` | Returns current active booking for a vehicle with QR payload |
-| `reserve` | `POST` | `COMPLETED` | Allocates slot, creates reservation, and marks slot occupied |
+| `reserve` | `POST` | `IMPLEMENTED` | Holds a slot for 10 minutes, creates a local demo checkout, and issues no pass until the simulated payment succeeds; audited admin exemption is available |
 | `violations` | `GET` | `COMPLETED` | Queries citation records for a specific license plate |
 | `admin_stats` | `GET` | `COMPLETED` | Computes live capacity, occupancy %, gross revenue, and pending fines |
 | `admin_analytics` | `GET` | `COMPLETED` | Generates 30-day timeline, tariff streams, and 24h hourly distribution |
@@ -148,7 +150,7 @@ CAPSTONE/
 | Table Name | Records | Purpose |
 | :--- | :---: | :--- |
 | `accounts` | 8 | Administrator and driver accounts with password hashes & VIP flags |
-| `parking_slots` | 78 | Spatial slot registry across Zones A, B, C, D, E, and F |
+| `parking_slots` | 69 active, 9 retired | Spatial slot registry across Zones A, B, C, D, E, and F; retired rows preserve session history |
 | `spatial_allocation` | 6 | Zone-level capacity counters (max capacity, active parked, reserved) |
 | `vehicles` | 20 | Registered vehicle license plates and owner information |
 | `parking_sessions` | 84 | Stays, payment status, duration, staff ID, and exit method (`ALPR` / `QR_FALLBACK`) |
@@ -162,13 +164,13 @@ CAPSTONE/
 | Component / Pipeline | Description | Status | Target Deliverable / Proposal Alignment |
 | :--- | :--- | :---: | :--- |
 | **Sectional Occupancy Detection Model** | Custom YOLOv8n model trained across 40 physical parking bays (Zones A–E) achieving 98.89% mAP@0.5 and 0.96 peak F1 score | `COMPLETED (content/runs/detect/train/)` | Section 5.5.6 Spatial Allocation & Overhead Telemetry |
-| **Sectional Occupancy Rules Engine** | Business logic enforcing Rule 1 (transient fill B–E), Rule 2 (Zone A VIP/PWD priority), and Rule 3 (Zone F overflow threshold) | `PENDING IMPLEMENTATION` | Page 87, Section 5.5.6 Spatial Allocations |
-| **Automated Infraction Enforcement** | Real-time optical verification detecting unauthorized parking, slot mismatches, and overstays; auto-logs fines into `violations` | `PENDING IMPLEMENTATION` | Section 5.4.1 Compliance & Enforcement Matrix |
+| **Sectional Occupancy Rules Engine** | Standalone `sectional_occupancy.py` observes calibrated bays; allocation policy and database integration remain pending | `PARTIAL` | Section 5.5.6 Spatial Allocations |
+| **Automated Infraction Enforcement** | Standalone monitor emits evidence-backed review alerts after a vehicle remains in a mapped no-parking area for more than 10 minutes; identity matching and fines remain pending | `PARTIAL` | Section 5.4.1 Compliance & Enforcement Matrix |
 | **Entrance ALPR Accuracy Optimization** | Preprocessing, CLAHE contrast adjustment, multi-frame confidence aggregation, and glare reduction for entrance camera | `OPTIMIZATION REQUIRED` | Section 5.3 Gatehouse Optical Recognition |
 | **Exit ALPR Optical & OCR Tuning** | Fine-tuning plate localization, OCR character ambiguity resolution (0/O, 1/I, 8/B), regex validation, and angle perspective correction | `OPTIMIZATION REQUIRED` | Section 5.3 & Cashier Exit Gate Clearance |
-| **Scenario 3 Gate Entrance Simulation** | Script simulating vehicle approach, OCR capture, slot assignment, and barrier trigger | `COMPLETED (CROSS-PLATFORM)` | Core Demonstration Pipeline |
-| **Scenario 4 Exit Verification Simulation** | Script simulating exit plate detection, database clearance check, and barrier release | `COMPLETED (CROSS-PLATFORM)` | Core Demonstration Pipeline |
-| **Scenario 5 Closed-Loop Cycle Simulation**| Integrated end-to-end simulation covering entry, parking, cashier payment, and ALPR exit release | `READY FOR TESTING` | Core Demonstration Pipeline |
+| **Scenario 3 Gate Entrance Simulation** | Script simulating vehicle approach, OCR capture, slot assignment, and software workflow | `COMPLETED (CROSS-PLATFORM)` | Recorded-video demo pipeline |
+| **Scenario 4 Exit Verification Simulation** | Script simulating exit plate detection and payment clearance decision | `COMPLETED (CROSS-PLATFORM)` | Recorded-video demo pipeline |
+| **Scenario 5 Closed-Loop Cycle Simulation**| Integrated demo covering entry, parking, cashier payment, and exit clearance decision; physical barrier remains manual | `READY FOR TESTING` | Recorded-video demo pipeline |
 
 ---
 
@@ -230,7 +232,7 @@ gantt
    - Harmonize `frontend/reserve.html`, `frontend/dashboard.html`, and `backend/api/endpoints.php` so Zone A is the official VIP/PWD zone.
 2. **Train Custom YOLOv8 Sectional Occupancy Model**:
    - Annotate parking slot bounding boxes from overhead camera test footage.
-   - Train custom YOLOv8 model to accurately predict vacant vs occupied status for all 78 physical slots across Zones A–F.
+   - Train custom YOLOv8 model to accurately predict vacant vs occupied status for all 69 active slots across Zones A–F.
 3. **Implement Sectional Occupancy Rules & Automated Violation Enforcement**:
    - Implement Rule 1 (Transient fills Zones B–E first).
    - Implement Rule 2 (Zone A restricted to validated VIP/PWD drivers).
@@ -240,11 +242,13 @@ gantt
    - **Entrance Camera**: Dynamic exposure/lighting compensation (daylight glare vs night shadow), plate localization fine-tuning.
    - **Exit Camera**: Enhanced OCR post-processing, character ambiguity correction (0 vs O, 1 vs I, 8 vs B), Philippine plate regex validation (`[A-Z]{3}\s?[0-9]{3,4}`), and multi-frame vote aggregation.
 5. **End-to-End System Simulation & Defense Dry-Run**:
-   - Run `computer_vision/scenario5.py` against active SQLite database and web UI to demonstrate closed-loop real-time integration.
+   - Run `computer_vision/scenario5.py` against the project database and web UI to demonstrate the recorded-video workflow and exit clearance decision. Physical cameras and barrier control are outside the current implementation scope.
 
 ---
 
 ## 4. Revision History
+* **2026-11-03 (Xendit sandbox reservations)**: New prepaid bookings create a 10-minute hold and a Xendit Test Mode Payment Session. A callback token plus server-to-server session and payment verification gates paid passes; the expiry worker cancels/observes remote sessions before releasing slots, and late paid bookings request a full refund. Added Xendit reconciliation, staff-reviewed refunds, provider-tagged payment rows, sandbox tests, and a setup guide with expected outputs. Legacy PayMongo rows remain tagged and are not converted to paid Xendit records. A pre-existing PayMongo `CREATING` hold requires staff reconciliation. Live keys are rejected; a real Xendit end-to-end test awaits user-owned test credentials and webhook configuration.
+* **2026-10-27 (Update 11)**: Changed exit handling to a clearance decision for manual guard operation. The API now checks active parked sessions, allows `PAID`, `BYPASSED`, `PAID_OVERNIGHT`, and `PAID_RESERVATION`, and allows `PAID_VENDOR` only within its 20-minute window. QR fallback accepts only the issued entry token. Approved and denied checks record the authenticated operator, timestamp, method, outcome, and status/reason in the audit trail without storing raw QR tokens. Ten isolated API checks passed for allowed/denied statuses, plate mismatch, unknown token, and session-ID-as-QR rejection; sessions remained parked. A cashier/admin departure-confirmation route now requires the latest approved clearance, rechecks payment eligibility, records the physical departure, frees the slot, updates zone occupancy, and audits the confirmation. Removed the simulated barrier actuation and emergency override from the cashier screen.
 * **2026-10-23 (Update 10)**: Evaluated and ingested custom YOLOv8n Sectional Occupancy detection model artifacts (`content/runs/detect/train/`). Model features 40 discrete bay classes (`A-01` through `E-07`), achieving **98.89% mAP@0.5**, **89.73% mAP@0.5:0.95**, and **0.96 peak F1 score** at 0.784 confidence threshold. Validated zero-overfitting loss curves and prepared pipeline for live sectional rules testing.
 * **2026-10-20 (Update 9)**: Refined Admin console navigation hierarchy & brand accents in `frontend/admin.html` and `frontend/css/style.css`:
   - Removed station identifier (`PARK-MNL-01`) and `Online Port 8080` status indicator from the left sidebar for a minimalist corporate aesthetic.

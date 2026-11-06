@@ -94,6 +94,7 @@
                     </button>
                     <div class="group-dropdown-list">
                         <a href="#reservations" class="dropdown-item">Active Bookings</a>
+                        <a href="#refunds" class="dropdown-item">Refund Review</a>
                         <a href="#violations" class="dropdown-item">Violations Log</a>
                         <a href="#audit-trail" class="dropdown-item">Audit Trail</a>
                     </div>
@@ -360,22 +361,28 @@
             <span class="section-tag">Facility Controls</span>
         </div>
 
-        <div class="toolbar-wrap">
-            <div class="zone-filter-buttons" id="zoneFilterButtons">
-                <button type="button" class="zone-filter-btn active" data-filter="ALL">All Zones</button>
-                <button type="button" class="zone-filter-btn" data-filter="A">Zone A</button>
-                <button type="button" class="zone-filter-btn" data-filter="B">Zone B</button>
-                <button type="button" class="zone-filter-btn" data-filter="C">Zone C</button>
-                <button type="button" class="zone-filter-btn" data-filter="D">Zone D</button>
-                <button type="button" class="zone-filter-btn" data-filter="E">Zone E</button>
-                <button type="button" class="zone-filter-btn" data-filter="F">Zone F (Overflow)</button>
+        <p class="section-description slot-controls-description">Review availability by zone. Manual status changes are recorded in the audit trail.</p>
+
+        <div class="toolbar-wrap slot-controls-toolbar">
+            <div class="zone-filter-buttons" id="zoneFilterButtons" role="group" aria-label="Filter parking spaces by zone">
+                <button type="button" class="zone-filter-btn active" data-filter="ALL" aria-pressed="true">All zones</button>
+                <button type="button" class="zone-filter-btn" data-filter="A" aria-pressed="false">Zone A</button>
+                <button type="button" class="zone-filter-btn" data-filter="B" aria-pressed="false">Zone B</button>
+                <button type="button" class="zone-filter-btn" data-filter="C" aria-pressed="false">Zone C</button>
+                <button type="button" class="zone-filter-btn" data-filter="D" aria-pressed="false">Zone D</button>
+                <button type="button" class="zone-filter-btn" data-filter="E" aria-pressed="false">Zone E</button>
+                <button type="button" class="zone-filter-btn" data-filter="F" aria-pressed="false">Zone F · Overflow</button>
             </div>
-            <div>
-                <span id="filteredSlotsCount" class="counter-label">Showing 78 slots</span>
+            <div class="slot-controls-meta">
+                <span id="filteredSlotsCount" class="counter-label" aria-live="polite">Loading spaces…</span>
+                <div class="slot-status-legend" aria-label="Space status legend">
+                    <span><i class="slot-legend-dot available" aria-hidden="true"></i>Available</span>
+                    <span><i class="slot-legend-dot occupied" aria-hidden="true"></i>Occupied</span>
+                </div>
             </div>
         </div>
 
-        <div id="adminMapControls" class="admin-grid">
+        <div id="adminMapControls" class="admin-slot-zones" aria-live="polite">
             Loading parking slots...
         </div>
     </section>
@@ -404,6 +411,15 @@
             </tbody>
         </table>
 </div>
+    </section>
+
+    <section id="refunds" class="card">
+        <div class="section-title-wrap"><h2>Reservation Refund Review</h2><span class="section-tag">Staff action</span></div>
+        <p class="section-description">Cancelled paid bookings need refund review. Local demo payments move no real money.</p>
+        <div class="table-scroll" role="region" aria-label="Refund review queue" tabindex="0">
+            <table class="admin-table"><thead><tr><th>Booking</th><th>Plate</th><th>Amount</th><th>Refund status</th><th>Payment reference</th><th>Action</th></tr></thead>
+                <tbody id="adminRefundQueue"><tr><td colspan="6">Loading refund queue...</td></tr></tbody></table>
+        </div>
     </section>
 
     <!-- 9. USER ACCOUNTS & PRIVILEGE MANAGEMENT -->

@@ -20,15 +20,20 @@
         <a href="reserve.html" class="btn btn-primary">Reserve a slot</a>
     </div>
     <!-- LIVE PARKING MAP AVAILABILITY -->
-    <div class="card">
+    <div class="card live-map-card">
         <div class="card-header-clean">
-            <h2>Live Zone Map Availability</h2>
-            <span class="section-tag">Interactive Map</span>
+            <h2>Parking availability</h2>
+            <span class="section-tag">Live map</span>
         </div>
-        <p class="section-description">Select any zone on the facility layout to inspect individual slot status.</p>
+        <p class="section-description">Choose a zone to see its available spaces. Green markers are free; red markers are occupied.</p>
 
-        <div id="liveMap">Loading capacity data...</div>
-        <div class="zone-detail-panel" id="zoneDetailPanel" style="display: none;"></div>
+        <div class="live-map-layout">
+            <div id="liveMap">Loading capacity data...</div>
+            <aside class="map-sidebar" aria-label="Zone availability and slot details">
+                <div id="mapZoneList" class="map-zone-list"></div>
+                <div class="zone-detail-panel" id="zoneDetailPanel"></div>
+            </aside>
+        </div>
     </div>
 
 </main>

@@ -41,6 +41,8 @@
             <div class="demo-buttons-row">
                 <button type="button" id="quickAdminBtn" class="btn-demo-quick">Admin (Operations)</button>
                 <button type="button" id="quickDriverBtn" class="btn-demo-quick">Driver (Customer)</button>
+                <button type="button" id="quickCashierBtn" class="btn-demo-quick">Cashier</button>
+                <button type="button" id="quickVendorBtn" class="btn-demo-quick">Tenant Vendor (Joey's)</button>
             </div>
         </div>
     </div>
@@ -58,6 +60,14 @@
     document.getElementById('quickDriverBtn')?.addEventListener('click', () => {
         document.getElementById('email').value = 'driver1@gmail.com';
         document.getElementById('password').value = 'password123';
+    });
+    document.getElementById('quickCashierBtn')?.addEventListener('click', () => {
+        document.getElementById('email').value = 'cashier@parking.test';
+        document.getElementById('password').value = 'cashier123';
+    });
+    document.getElementById('quickVendorBtn')?.addEventListener('click', () => {
+        document.getElementById('email').value = 'vendor@joeys.test';
+        document.getElementById('password').value = 'vendor123';
     });
 </script>
 </body>

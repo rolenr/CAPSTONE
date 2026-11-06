@@ -6,6 +6,47 @@ const API_BASE = (function() {
     return 'backend/api/endpoints.php';
 })();
 
+function normalizeLicensePlateInput(value) {
+    return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function normalizePlateOrTokenInput(value) {
+    const input = String(value || '').trim();
+    if (/^QR_/i.test(input)) return input.toUpperCase().replace(/\s+/g, '');
+    return normalizeLicensePlateInput(input);
+}
+
+function formatPhtDateTime(value) {
+    if (!value) return '—';
+    const raw = String(value).trim();
+    const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T');
+    const withTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized)
+        ? normalized
+        : `${normalized}Z`;
+    const date = new Date(withTimezone);
+    if (Number.isNaN(date.getTime())) return raw;
+
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Manila',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hourCycle: 'h23'
+    }).formatToParts(date).map(part => [part.type, part.value]));
+    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} PHT`;
+}
+
+document.querySelectorAll('[data-license-plate-input]').forEach((input) => {
+    const normalize = () => { input.value = normalizeLicensePlateInput(input.value); };
+    input.addEventListener('input', normalize);
+    normalize();
+});
+
+document.querySelectorAll('[data-license-plate-or-token]').forEach((input) => {
+    const normalize = () => { input.value = normalizePlateOrTokenInput(input.value); };
+    input.addEventListener('input', normalize);
+    normalize();
+});
+
 let csrfToken = sessionStorage.getItem('csrfToken') || '';
 
 // Centralize same-origin credentials and CSRF handling for all API requests.
@@ -58,6 +99,7 @@ async function enforcePageRole() {
 
         const sessionData = await response.json();
         const user = sessionData.user || {};
+        user.plate_number = normalizeLicensePlateInput(user.plate_number);
         csrfToken = sessionData.csrf_token || '';
         currentUser.licensePlate = user.plate_number || '';
         currentUser.isVIP = Boolean(user.is_vip);
@@ -87,6 +129,9 @@ async function enforcePageRole() {
         return user;
     } catch (error) {
         console.error('Unable to verify the current session.', error);
+        sessionStorage.clear();
+        window.location.replace('login.html');
+        return null;
     }
 }
 
@@ -104,6 +149,12 @@ function adaptAdminPersona(user, page) {
     link.textContent = 'Return to Administration';
     banner.append(identity, link);
     container.prepend(banner);
+}
+
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, character => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[character]);
 }
 
 // --- DOM Elements ---
@@ -146,7 +197,7 @@ if (authForm) {
             const data = await response.json();
 
             if (data.success) {
-                sessionStorage.setItem('licensePlate', data.license_plate);
+                sessionStorage.setItem('licensePlate', normalizeLicensePlateInput(data.license_plate));
                 sessionStorage.setItem('isVIP', data.is_vip);
                 sessionStorage.setItem('isAdmin', data.is_admin);
                 sessionStorage.setItem('adminEmail', data.email || '');
@@ -177,7 +228,7 @@ if (registerForm) {
         e.preventDefault();
         const email = document.getElementById('regEmail').value;
         const password = document.getElementById('regPassword').value;
-        const plate = document.getElementById('regPlate').value;
+        const plate = normalizeLicensePlateInput(document.getElementById('regPlate').value);
 
         try {
             const response = await apiFetch(`${API_BASE}?action=register`, {
@@ -223,42 +274,32 @@ document.querySelectorAll('[data-signout]').forEach(button => button.addEventLis
 
 // ---------------- MAP ----------------
 const zonePositions = {
-    'E': { top: 34, left: 30.6 },
-    'D': { top: 34, left: 43.5 },
-    'B': { top: 34, left: 53.6 },
-    'A': { top: 34, left: 67.8 },
-    'C': { top: 8,  left: 51.3 },
-    'F': { top: 30, left: 85.9 }
+    'E': { top: 41, left: 11 },
+    'D': { top: 76, left: 40 },
+    'B': { top: 76, left: 60 },
+    'A': { top: 37, left: 88 },
+    'C': { top: 32, left: 50.5 },
+    'F': { top: 14, left: 10 }
 };
 
-const zoneStrips = {
-    'E': { axis: 'vertical',   fixed: 30.6, from: 40, to: 95 },
-    'D': { axis: 'vertical',   fixed: 43.5, from: 40, to: 95 },
-    'B': { axis: 'vertical',   fixed: 53.6, from: 40, to: 95 },
-    'A': { axis: 'vertical',   fixed: 67.8, from: 40, to: 95 },
-    'C': { axis: 'horizontal', fixed: 21,   from: 40, to: 62 },
-    'F': { axis: 'horizontal', fixed: 34,   from: 75, to: 98 }
+// Bay centers measured against parking-lot-mapv2.png (686 × 992).
+// Each dot sits within a painted bay; the zone letter sits outside the row.
+const zoneBayCenters = {
+    'A': [[88, 41.6], [88, 46.3], [88, 50.9], [88, 55.5], [88, 60.2], [88, 64.8], [88, 69.5], [88, 74.1], [88, 78.7]],
+    'B': [[60, 42.6], [60, 47.1], [60, 51.7], [60, 56.2], [60, 60.7], [60, 65.3], [60, 69.8]],
+    'C': [[33, 22], [40, 23], [47, 24], [54, 25], [61, 26], [68, 27]],
+    'D': [[40, 42.6], [40, 47.1], [40, 51.7], [40, 56.2], [40, 60.7], [40, 65.3], [40, 69.8]],
+    'E': [[11, 44.5], [11, 49.1], [11, 53.6], [11, 58.3], [11, 62.9], [11, 67.5], [11, 72.2], [11, 76.8], [11, 81.6], [11, 85.7]]
 };
 
 function getSlotDotPositions(zone, count) {
-    const strip = zoneStrips[zone];
-    if (!strip || count <= 0) return [];
-
-    const positions = [];
-    for (let i = 0; i < count; i++) {
-        const ratio = count === 1 ? 0.5 : i / (count - 1);
-        const along = strip.from + (strip.to - strip.from) * ratio;
-
-        if (strip.axis === 'vertical') {
-            positions.push({ top: along, left: strip.fixed });
-        } else {
-            positions.push({ top: strip.fixed, left: along });
-        }
-    }
-    return positions;
+    const centers = zoneBayCenters[zone] || [];
+    if (centers.length !== count) return [];
+    return centers.map(([left, top]) => ({ left, top }));
 }
 
 let zonesCache = {};
+let selectedMapZone = null;
 
 async function fetchLiveMap() {
     if (!liveMap) return;
@@ -277,33 +318,37 @@ async function fetchLiveMap() {
         });
 
         zonesCache = zones;
+        const zoneList = document.getElementById('mapZoneList');
+        let markersHTML = `<img src="images/parking-lot-mapv2.png" alt="Aerial view of the parking area, with bay markers showing availability" class="lot-photo">`;
+        let zoneCards = '';
 
-        let markersHTML = `<img src="images/parking-lot-map.png" alt="Parking Lot Zone Map" class="lot-photo">`;
-        let fallbackHTML = "";
-
-        Object.keys(zones).forEach(zone => {
+        Object.keys(zones).sort().forEach(zone => {
             const slots = zones[zone];
             const total = slots.length;
             const free = slots.filter(s => s.is_occupied != 1).length;
             const pos = zonePositions[zone];
+            const isOverflow = zone === 'F';
+
+            zoneCards += `
+                <button type="button" class="map-zone-card" data-zone="${zone}"
+                    aria-label="Zone ${zone}, ${free} of ${total} spaces free">
+                    <span class="map-zone-letter">${zone}</span>
+                    <span class="map-zone-copy"><strong>Zone ${zone}</strong><small>${isOverflow ? 'Rough-road overflow' : `${free} of ${total} free`}</small></span>
+                    <span class="map-zone-availability ${free > 0 ? 'available' : 'full'}">${free}/${total}</span>
+                </button>`;
 
             if (pos) {
-                markersHTML += `
-                    <button type="button" class="zone-marker ${free > 0 ? 'available' : 'full'}"
-                        style="top:${pos.top}%; left:${pos.left}%;"
-                        data-zone="${zone}">
-                        <span class="zone-marker-label">Zone ${zone}</span>
-                        <span class="zone-marker-count">${free}/${total} free</span>
-                    </button>
-                `;
+                markersHTML += `<button type="button" class="zone-marker"
+                    style="top:${pos.top}%; left:${pos.left}%;" data-zone="${zone}"
+                    title="Zone ${zone}" aria-label="Show Zone ${zone}">Zone ${zone}</button>`;
 
-                if (zone !== 'F') {
+                if (!isOverflow) {
                     const dotPositions = getSlotDotPositions(zone, slots.length);
                     slots.forEach((slot, i) => {
                         const dp = dotPositions[i];
                         if (!dp) return;
                         const isOccupied = slot.is_occupied == 1;
-                        const label = `Zone ${zone} - ${slot.slot_number}: ${isOccupied ? 'Occupied' : 'Free'}`;
+                        const label = `Zone ${zone} - ${slot.slot_number}: ${slot.availability_status || (isOccupied ? 'Occupied' : 'Free')}`;
 
                         markersHTML += `
                             <button type="button" class="slot-dot ${isOccupied ? 'occupied' : 'free'}"
@@ -315,28 +360,16 @@ async function fetchLiveMap() {
                         `;
                     });
                 }
-            } else {
-                fallbackHTML += `
-                    <div class="zone-card">
-                        <h3>Zone ${zone}</h3>
-                        ${slots.map(slot => `
-                            <div class="slot-row">
-                                <span>${slot.slot_number}</span>
-                                <span class="${slot.is_occupied == 1 ? 'occupied' : 'free'}"></span>
-                                <span>${slot.is_occupied == 1 ? 'Occupied' : 'Free'}</span>
-                            </div>
-                        `).join('')}
-                    </div>
-                `;
             }
         });
 
-        liveMap.innerHTML = `<div class="lot-photo-wrap">${markersHTML}</div>` +
-            (fallbackHTML ? `<div class="map-grid">${fallbackHTML}</div>` : '');
+        liveMap.innerHTML = `<div class="lot-photo-wrap">${markersHTML}</div>`;
+        if (zoneList) zoneList.innerHTML = zoneCards;
 
-        liveMap.querySelectorAll('.zone-marker, .slot-dot').forEach(btn => {
+        document.querySelectorAll('#liveMap .zone-marker, #liveMap .slot-dot, #mapZoneList .map-zone-card').forEach(btn => {
             btn.addEventListener('click', () => showZoneDetail(btn.dataset.zone));
         });
+        showZoneDetail(zones[selectedMapZone] ? selectedMapZone : (zones.A ? 'A' : Object.keys(zones)[0]));
 
     } catch (error) {
         console.error(error);
@@ -348,22 +381,32 @@ function showZoneDetail(zone) {
     const panel = document.getElementById('zoneDetailPanel');
     if (!panel || !zonesCache[zone]) return;
 
+    selectedMapZone = zone;
     const slots = zonesCache[zone];
+    const free = slots.filter(slot => slot.is_occupied != 1).length;
 
     panel.innerHTML = `
-        <h3>Zone ${zone} — Slot Details</h3>
+        <div class="zone-detail-heading">
+            <div><span class="map-detail-eyebrow">Selected area</span><h3>Zone ${zone}</h3></div>
+            <strong>${free}/${slots.length} free</strong>
+        </div>
         <div class="zone-detail-slots">
             ${slots.map(slot => `
                 <div class="slot-row">
                     <span>${slot.slot_number}</span>
                     <span class="${slot.is_occupied == 1 ? 'occupied' : 'free'}"></span>
-                    <span>${slot.is_occupied == 1 ? `Occupied${slot.plate_number ? ' &ndash; ' + slot.plate_number : ''}` : 'Free'}</span>
+                    <span>${slot.availability_status || (slot.is_occupied == 1 ? 'Occupied' : 'Free')}${slot.plate_number ? ' &ndash; ' + slot.plate_number : ''}</span>
                 </div>
             `).join('')}
         </div>
     `;
-    panel.style.display = 'block';
-    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    document.querySelectorAll('#mapZoneList .map-zone-card, #liveMap .zone-marker').forEach(marker => {
+        const selected = marker.dataset.zone === zone;
+        marker.classList.toggle('selected', selected);
+        if (marker.classList.contains('map-zone-card') || marker.classList.contains('zone-marker')) {
+            marker.setAttribute('aria-pressed', String(selected));
+        }
+    });
 }
 
 if (liveMap) {
@@ -375,7 +418,7 @@ const startDate = document.getElementById('startDate');
 const endDate = document.getElementById('endDate');
 
 if (startDate && endDate) {
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = formatPhtDateTime(new Date().toISOString()).slice(0, 10);
     startDate.min = todayStr;
     endDate.min = todayStr;
     if (!startDate.value) startDate.value = todayStr;
@@ -414,17 +457,18 @@ if (startDate && endDate) {
 
 // ---------------- RESERVATION DETAILS / QR RENDERING ----------------
 function renderReservationDetails(data, plate) {
-    if (!qrWalletSection) return;
+    if (!qrWalletSection || !data.qr_token || !['PAID', 'ADMIN_EXEMPT'].includes(data.payment_state)) return;
+    const pending = document.getElementById('paymentPendingSection');
+    if (pending) pending.style.display = 'none';
 
-    const qrPayload = JSON.stringify({
-        reservation_id: data.reservation_id,
-        plate: plate
-    });
+    const qrPayload = data.qr_token;
 
     if (qrCodeImage) {
         qrCodeImage.src = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(qrPayload)}`;
     }
 
+    const passTitle = document.querySelector('.pass-ticket-header strong');
+    if (passTitle) passTitle.textContent = data.payment_provider === 'LOCAL' ? 'DEMO RESERVATION PASS' : 'ACTIVE RESERVATION PASS';
     if (qrZone) qrZone.textContent = data.zone || '';
     if (qrSlotNumber) qrSlotNumber.textContent = data.slot || '';
     if (qrDates) qrDates.textContent = `${data.start_date} to ${data.end_date}`;
@@ -438,11 +482,46 @@ function renderReservationDetails(data, plate) {
     if (reservationFormContainer) reservationFormContainer.style.display = currentUser.role === 'ADMIN' ? 'block' : 'none';
 }
 
+function renderPaymentPending(data) {
+    if (qrWalletSection) qrWalletSection.style.display = 'none';
+    if (reservationFormContainer) reservationFormContainer.style.display = 'none';
+    const pending = document.getElementById('paymentPendingSection');
+    if (!pending) return;
+    pending.style.display = 'block';
+    const deadline = new Date(`${String(data.hold_deadline).replace(' ', 'T')}Z`);
+    const expired = !Number.isNaN(deadline.getTime()) && deadline <= new Date();
+    const legacyUnresolved = expired && data.payment_provider && data.payment_provider !== 'LOCAL';
+    document.getElementById('paymentPendingTitle').textContent = data.payment_state === 'UNVERIFIED'
+        ? 'Payment verification required'
+        : legacyUnresolved ? 'Expired hold · provider review' : 'Awaiting payment';
+    document.getElementById('paymentPendingTag').textContent = data.payment_state === 'UNVERIFIED' || legacyUnresolved ? 'Staff review' : '10-minute hold';
+    document.getElementById('paymentPendingDescription').hidden = data.payment_state === 'UNVERIFIED';
+    if (data.payment_state !== 'UNVERIFIED') {
+        document.getElementById('paymentPendingDescription').innerHTML = data.payment_provider === 'LOCAL'
+            ? 'Your slot is held until <strong id="paymentHoldDeadline">—</strong>. Your pass appears only after the local demo payment succeeds. Returning from checkout does not confirm it.'
+            : 'Your slot is held until <strong id="paymentHoldDeadline">—</strong>. Your pass appears only after the payment provider confirms payment. Returning from checkout does not confirm it.';
+    }
+    document.getElementById('paymentHoldDeadline').textContent = data.payment_state === 'UNVERIFIED' ? 'staff review' : formatPhtDateTime(data.hold_deadline);
+    document.getElementById('pendingSlotDetails').textContent = data.payment_state === 'UNVERIFIED'
+        ? 'This older booking has no verified payment. No pass is available; contact staff.'
+        : legacyUnresolved
+        ? `This expired ${data.payment_provider} hold is still unresolved${data.payment_record_status ? ` (record: ${data.payment_record_status})` : ''}${data.checkout_session_exists ? '' : ' and has no stored checkout session'}. No pass was issued. The local simulator cannot verify or release this old provider hold. Use another plate for a local demo booking; staff should reconcile this record before reusing ${data.plate || 'the vehicle'}.`
+        : expired
+        ? 'The hold deadline has passed. Payment or checkout expiry is still being reconciled; no pass has been issued.'
+        : `Zone ${data.zone}, slot ${data.slot} · ₱${Number(data.fee).toFixed(2)} · ${data.start_date} to ${data.end_date}`;
+    if (reservationFormContainer) reservationFormContainer.style.display = currentUser.role === 'ADMIN' && legacyUnresolved ? 'block' : 'none';
+    const link = document.getElementById('resumeCheckoutLink');
+    if (data.checkout_url && (/^\/frontend\/demo-checkout\.html\?session=local_[a-f0-9]{48}$/.test(data.checkout_url) || /^https:\/\/payments-web-sandbox\.paymaya\.com\//.test(data.checkout_url))) {
+        link.href = data.checkout_url;
+        link.hidden = false;
+    } else link.hidden = true;
+}
+
 function reservationPlate() {
     const target = document.getElementById('bookingPlate');
     return currentUser.role === 'ADMIN' && target
-        ? target.value.trim().toUpperCase()
-        : currentUser.licensePlate;
+        ? normalizeLicensePlateInput(target.value)
+        : normalizeLicensePlateInput(currentUser.licensePlate);
 }
 
 async function checkActiveReservation() {
@@ -468,8 +547,11 @@ async function checkActiveReservation() {
         if (loading) loading.hidden = true;
 
         if (data.success && data.active) {
-            renderReservationDetails(data, plate);
+            if (data.status === 'PENDING_PAYMENT' || data.payment_state === 'UNVERIFIED') renderPaymentPending(data);
+            else renderReservationDetails(data, plate);
         } else if (data.success) {
+            const pending = document.getElementById('paymentPendingSection');
+            if (pending) pending.style.display = 'none';
             if (empty) empty.hidden = false;
             if (qrWalletSection) qrWalletSection.style.display = 'none';
             if (reservationFormContainer) reservationFormContainer.style.display = 'block';
@@ -487,6 +569,7 @@ async function checkActiveReservation() {
 
 document.getElementById('bookingPlate')?.addEventListener('change', checkActiveReservation);
 document.getElementById('retryWallet')?.addEventListener('click', checkActiveReservation);
+document.getElementById('refreshPaymentStatus')?.addEventListener('click', checkActiveReservation);
 
 // ---------------- RESERVATION ----------------
 if (reservationForm) {
@@ -512,8 +595,7 @@ if (reservationForm) {
         const days = calculateDays();
         const sDate = document.getElementById('startDate').value;
         const eDate = document.getElementById('endDate').value;
-        const replaceExisting = currentUser.role === 'ADMIN' && Boolean(document.getElementById('replaceExistingReservation')?.checked);
-        if (replaceExisting && !confirm(`Replace the active reservation for ${plate}? The existing booking is cancelled only if the new booking succeeds.`)) return;
+        const adminPaymentExemption = currentUser.role === 'ADMIN' && Boolean(document.getElementById('adminPaymentExemption')?.checked);
 
         try {
             const response = await apiFetch(`${API_BASE}?action=reserve`, {
@@ -525,14 +607,19 @@ if (reservationForm) {
                     days: days,
                     startDate: sDate,
                     endDate: eDate,
-                    replace_existing: replaceExisting
+                    admin_payment_exemption: adminPaymentExemption
                 })
             });
             const data = await response.json();
 
             if (data.success) {
-                alert(`Reservation saved. Tariff: ₱${data.fee.toFixed(2)}.`);
-                renderReservationDetails(data, plate);
+                if (data.status === 'PENDING_PAYMENT') {
+                    renderPaymentPending(data);
+                    if (data.checkout_url) window.location.assign(data.checkout_url);
+                } else {
+                    data.payment_state = 'ADMIN_EXEMPT';
+                    renderReservationDetails(data, plate);
+                }
             } else {
                 alert(data.error || 'Reservation failed.');
             }
@@ -546,7 +633,7 @@ if (reservationForm) {
 if (violationForm) {
     violationForm.addEventListener("submit", async function (e) {
         e.preventDefault();
-        const plate = document.getElementById("searchPlate").value.trim().toUpperCase();
+        const plate = normalizeLicensePlateInput(document.getElementById("searchPlate").value);
 
         try {
             const response = await apiFetch(`${API_BASE}?action=violations&plate=${encodeURIComponent(plate)}`);
@@ -577,7 +664,7 @@ if (violationForm) {
                     <div class="violation-card-item">
                         <div class="violation-card-info">
                             <h4>${v.violation_type}</h4>
-                            <p>Location: Zone ${v.zone || '—'} &bull; Slot ${v.slot_number || 'Driveway/Perimeter'} &bull; Issued: ${v.issued_at}</p>
+                            <p>Location: Zone ${v.zone || '—'} &bull; Slot ${v.slot_number || 'Driveway/Perimeter'} &bull; Issued: ${formatPhtDateTime(v.issued_at)}</p>
                         </div>
                         <div class="violation-card-meta">
                             <div class="violation-fine-amount">₱${parseFloat(v.penalty_amount || 0).toFixed(2)}</div>
@@ -812,7 +899,7 @@ async function loadAdminViolations() {
                     <td>${v.violation_type}</td>
                     <td><strong>₱${Number(v.penalty_amount).toFixed(2)}</strong></td>
                     <td>${statusBadge}</td>
-                    <td style="font-size: 0.78rem; color: var(--text-muted);">${v.issued_at}</td>
+                    <td style="font-size: 0.78rem; color: var(--text-muted);">${formatPhtDateTime(v.issued_at)}</td>
                     <td>${actionCell}</td>
                 </tr>
             `;
@@ -875,7 +962,7 @@ async function loadAdminAuditLogs() {
             const actionClass = `audit-action-${l.action_type}`;
             return `
                 <tr>
-                    <td style="white-space: nowrap; font-size: 0.78rem; color: var(--text-muted);">${l.created_at}</td>
+                    <td style="white-space: nowrap; font-size: 0.78rem; color: var(--text-muted);">${formatPhtDateTime(l.created_at)}</td>
                     <td><strong>${l.admin_email}</strong></td>
                     <td><span class="audit-action-tag ${actionClass}">${l.action_type}</span></td>
                     <td><code>${l.target_entity} #${l.target_id || ''}</code></td>
@@ -929,6 +1016,37 @@ async function loadAdminReservations() {
     }
 }
 
+async function loadAdminRefundQueue() {
+    const table = document.getElementById('adminRefundQueue');
+    if (!table) return;
+    try {
+        const response = await apiFetch(`${API_BASE}?action=admin_refund_queue`);
+        const data = await response.json();
+        if (!response.ok || !data.success) throw new Error(data.error || 'Refund queue unavailable');
+        const escape = value => String(value ?? '—').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        table.innerHTML = data.refunds.length ? data.refunds.map(r => {
+            return `<tr>
+            <td>#${Number(r.reservation_id)}</td><td>${escape(r.plate_number)}</td>
+            <td>₱${(Number(r.amount_centavos) / 100).toFixed(2)}</td>
+            <td>${escape(r.refund_status)}</td><td><code>${escape(r.payment_id)}</code></td>
+            <td>${r.refund_status === 'STAFF_REVIEW' && r.reservation_status === 'CANCELLED' ? `<button class="btn btn-sm btn-outline" onclick="requestReservationRefund(${Number(r.reservation_id)})">Approve refund</button>` : 'Review payment provider'}</td>
+        </tr>`;
+        }).join('') : '<tr><td colspan="6">No refunds awaiting review.</td></tr>';
+    } catch (error) { table.innerHTML = '<tr><td colspan="6">Refund queue unavailable.</td></tr>'; }
+}
+
+async function requestReservationRefund(reservationId) {
+    if (!confirm(`Approve a full demo/sandbox refund review for booking #${reservationId}?`)) return;
+    const response = await apiFetch(`${API_BASE}?action=admin_request_refund`, {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({reservation_id: reservationId})
+    });
+    const data = await response.json();
+    alert(data.message || data.error || 'Refund status unavailable.');
+    loadAdminRefundQueue();
+    loadAdminAnalytics();
+}
+
 async function overrideReservation(reservationId) {
     if (!confirm('Override this reservation? This will cancel it, free the assigned slot, and log the action in the audit trail.')) return;
 
@@ -946,6 +1064,7 @@ async function overrideReservation(reservationId) {
 
         if (data.success) {
             loadAdminReservations();
+            loadAdminRefundQueue();
             loadAdminStats();
             loadAdminAnalytics();
             loadAdminMap();
@@ -985,17 +1104,17 @@ async function loadAdminAccounts(search = '') {
             const role = String(a.role || (Number(a.is_admin) === 1 ? 'ADMIN' : 'DRIVER')).toUpperCase();
             return `
                 <tr>
-                    <td><strong>${a.email}</strong></td>
-                    <td><code>${a.plate_number}</code></td>
-                    <td>${isVip ? '<span class="badge badge-vip">VIP / PWD PRIORITY</span>' : '<span class="badge badge-bypassed">STANDARD</span>'}</td>
+                    <td><strong>${escapeHtml(a.email)}</strong></td>
+                    <td><code>${escapeHtml(a.plate_number || 'No linked vehicle')}</code></td>
+                    <td>${a.plate_number ? (isVip ? '<span class="badge badge-vip">VIP / PWD PRIORITY</span>' : '<span class="badge badge-bypassed">STANDARD</span>') : 'Staff account'}</td>
                     <td>
-                        <select id="accountRole-${a.account_id}" aria-label="Role for ${a.email}">
-                            ${['ADMIN', 'DRIVER', 'CASHIER', 'VENDOR'].map(option => `<option value="${option}" ${role === option ? 'selected' : ''}>${option}</option>`).join('')}
+                        <select id="accountRole-${Number(a.account_id)}" aria-label="Role for ${escapeHtml(a.email)}">
+                            ${['ADMIN', 'DRIVER', 'CASHIER', 'VENDOR'].map(option => `<option value="${option}" ${role === option ? 'selected' : ''} ${option === 'DRIVER' && !a.plate_number ? 'disabled' : ''}>${option}</option>`).join('')}
                         </select>
                         <button class="btn btn-sm btn-outline" onclick="setAccountRole(${a.account_id})">Save Role</button>
                     </td>
                     <td>
-                        <button class="btn btn-sm ${isVip ? 'btn-outline' : 'btn-primary'}" onclick="setVip(${a.account_id}, ${isVip ? 0 : 1})">
+                        <button class="btn btn-sm ${isVip ? 'btn-outline' : 'btn-primary'}" onclick="setVip(${a.account_id}, ${isVip ? 0 : 1})" ${a.plate_number ? '' : 'disabled title="Staff account has no vehicle"'}>
                             ${isVip ? 'Revoke VIP Status' : 'Grant VIP / PWD'}
                         </button>
                     </td>
@@ -1084,7 +1203,7 @@ async function loadAlprLogs() {
 
             return `
                 <tr>
-                    <td style="white-space: nowrap; font-size: 0.78rem; color: var(--text-muted);">${log.timestamp || 'N/A'}</td>
+                    <td style="white-space: nowrap; font-size: 0.78rem; color: var(--text-muted);">${formatPhtDateTime(log.timestamp)}</td>
                     <td><code>${log.plate_number}</code></td>
                     <td>${log.zone ? 'Zone ' + log.zone + ' &bull; ' : ''}Slot ${log.slot_number || 'Unassigned'}</td>
                     <td><span style="font-weight: 600; color: var(--primary);">98.5%</span></td>
@@ -1131,7 +1250,9 @@ function renderFilteredSlots() {
 
     const countLabel = document.getElementById('filteredSlotsCount');
     if (countLabel) {
-        countLabel.textContent = `Showing ${filteredSlots.length} of ${adminSlotsCache.length} slots (Zone ${adminCurrentZoneFilter})`;
+        countLabel.textContent = adminCurrentZoneFilter === 'ALL'
+            ? `Showing all ${filteredSlots.length} spaces`
+            : `Showing ${filteredSlots.length} spaces in Zone ${adminCurrentZoneFilter}`;
     }
 
     // Group filtered slots by zone
@@ -1158,8 +1279,8 @@ function renderFilteredSlots() {
                     <p class="status-text ${statusClass}">
                         ${isOccupied ? 'Occupied' : 'Available'}
                     </p>
-                    <button class="btn-action" onclick="toggleSlotOverride(${slot.slot_id}, ${isOccupied ? 0 : 1})">
-                        ${isOccupied ? 'Force Free' : 'Force Occupied'}
+                    <button type="button" class="btn-action slot-override-button" aria-label="Mark ${slot.slot_number} ${isOccupied ? 'available' : 'occupied'}" onclick="toggleSlotOverride(${slot.slot_id}, ${isOccupied ? 0 : 1})">
+                        Mark ${isOccupied ? 'available' : 'occupied'}
                     </button>
                 </div>
             `;
@@ -1169,7 +1290,7 @@ function renderFilteredSlots() {
             <div class="zone-section">
                 <div class="zone-header">
                     <h3>Zone ${zone}</h3>
-                    <span class="zone-badge">${totalCount - occupiedCount} / ${totalCount} available</span>
+                    <span class="zone-badge"><strong>${totalCount - occupiedCount}</strong> available <span aria-hidden="true">·</span> ${occupiedCount} occupied</span>
                 </div>
                 <div class="admin-grid">
                     ${cards}
@@ -1180,8 +1301,8 @@ function renderFilteredSlots() {
 }
 
 async function toggleSlotOverride(slotId, newOccupiedState) {
-    const stateName = newOccupiedState ? 'OCCUPIED' : 'AVAILABLE';
-    if (!confirm(`Force Slot status to ${stateName}? This manual override will be recorded in the audit trail.`)) return;
+    const stateName = newOccupiedState ? 'occupied' : 'available';
+    if (!confirm(`Mark this space as ${stateName}? This manual override will be recorded in the audit trail.`)) return;
 
     try {
         const response = await apiFetch(`${API_BASE}?action=toggle_slot`, {
@@ -1212,8 +1333,12 @@ const filterButtonsContainer = document.getElementById('zoneFilterButtons');
 if (filterButtonsContainer) {
     filterButtonsContainer.addEventListener('click', (e) => {
         if (e.target.classList.contains('zone-filter-btn')) {
-            filterButtonsContainer.querySelectorAll('.zone-filter-btn').forEach(btn => btn.classList.remove('active'));
+            filterButtonsContainer.querySelectorAll('.zone-filter-btn').forEach(btn => {
+                btn.classList.remove('active');
+                btn.setAttribute('aria-pressed', 'false');
+            });
             e.target.classList.add('active');
+            e.target.setAttribute('aria-pressed', 'true');
             adminCurrentZoneFilter = e.target.dataset.filter || 'ALL';
             renderFilteredSlots();
         }
@@ -1355,6 +1480,7 @@ pageSessionReady.then(user => {
     loadAlprLogs();
     loadAdminMap();
     loadAdminReservations();
+    loadAdminRefundQueue();
     loadAdminAccounts();
     loadAdminAuditLogs();
 

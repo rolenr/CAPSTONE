@@ -16,11 +16,20 @@
     <div class="page-title-banner">
         <div>
             <h1 class="page-title-main">Prepaid Slot Reservation</h1>
+            <p>Demo payments only · No real money is charged.</p>
             <p class="page-title-sub">Guarantee an assigned parking bay with automated contactless entry</p>
         </div>
     </div>
 
-    <!-- Active Pass (Shown if user already has an active reservation) -->
+    <div id="paymentPendingSection" class="card" style="display:none; margin-bottom:1rem" aria-live="polite">
+        <div class="card-header-clean"><h2 id="paymentPendingTitle">Awaiting payment</h2><span id="paymentPendingTag" class="section-tag">10-minute hold</span></div>
+        <p id="paymentPendingDescription">Your slot is held until <strong id="paymentHoldDeadline">—</strong>. Your pass appears only after the payment is confirmed. Returning from checkout does not confirm it.</p>
+        <p id="pendingSlotDetails"></p>
+        <a id="resumeCheckoutLink" class="btn-primary-block" href="#" rel="noopener" style="display:inline-block; width:auto; text-decoration:none; margin-right:.5rem">Return to demo checkout</a>
+        <button id="refreshPaymentStatus" type="button" class="btn btn-secondary">Refresh payment status</button>
+    </div>
+
+    <!-- Active Pass (Shown only after payment or audited admin exemption) -->
     <div id="qrWalletSection" class="pass-ticket-card" style="display: none;">
         <div class="pass-ticket-header">
             <div>
@@ -68,14 +77,14 @@
             <div class="admin-booking-controls" data-role-only="ADMIN" hidden>
                 <div class="form-group">
                     <label for="bookingPlate">Vehicle plate to reserve for</label>
-                    <input type="text" id="bookingPlate" maxlength="20" pattern="[A-Za-z0-9][A-Za-z0-9 -]{1,19}" placeholder="e.g. ABC-1234" aria-describedby="bookingPlateHelp">
-                    <small class="field-help" id="bookingPlateHelp">Book for your linked vehicle or enter another vehicle's plate.</small>
+                    <input type="text" id="bookingPlate" data-license-plate-input minlength="6" maxlength="7" pattern="[A-Za-z]{3}[0-9]{3,4}" placeholder="e.g. ABC1234" autocapitalize="characters" aria-describedby="bookingPlateHelp">
+                    <small class="field-help" id="bookingPlateHelp">Book for your linked vehicle or enter another plate: three letters followed by three or four digits, without spaces or hyphens.</small>
                 </div>
-                <label class="checkbox-label" for="replaceExistingReservation">
-                    <input type="checkbox" id="replaceExistingReservation">
-                    Replace this vehicle's active reservation
+                <label class="checkbox-label" for="adminPaymentExemption">
+                    <input type="checkbox" id="adminPaymentExemption">
+                    Explicit admin payment exemption (audited)
                 </label>
-                <small class="field-help">The existing booking is kept if the replacement cannot be completed. Replacements are recorded in the audit trail.</small>
+                <small class="field-help">Cancel any existing paid booking through staff review first. An exemption confirms a booking without online payment and is written to the audit trail.</small>
             </div>
             <div class="form-group">
                 <label for="zoneSelect">Destination Zone</label>
@@ -112,7 +121,7 @@
                 </div>
             </div>
 
-            <button type="submit" class="btn-primary-block">Confirm Reservation &amp; Generate Pass</button>
+            <button type="submit" class="btn-primary-block">Hold Slot &amp; Continue to Demo Checkout</button>
         </form>
     </div>
 

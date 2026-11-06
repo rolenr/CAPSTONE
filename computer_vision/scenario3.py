@@ -1,107 +1,35 @@
-import sqlite3
-import random
-import uuid
-import time
-import cv2
-import easyocr
-import re
-from collections import Counter, defaultdict
-from ultralytics import YOLO
+import argparse
 import os
+import re
+import sqlite3
+import time
+import uuid
+from collections import defaultdict
 
-# =====================================================================
-# VIDEO SOURCE CONFIGURATION
-# =====================================================================
-# True  -> use a live camera (webcam / USB cam / IP cam)
-# False -> use the pre-recorded mp4 file (handy for testing)
-USE_LIVE_CAMERA = True
+try:
+    from .plate_utils import normalize_license_plate, prompt_for_license_plate
+except ImportError:
+    from plate_utils import normalize_license_plate, prompt_for_license_plate
 
-# 0 = default webcam, 1 = second camera, 2 = third, etc.
-# For an IP / phone camera, use a stream URL string instead, e.g.:
-#   CAMERA_SOURCE = "http://192.168.1.50:8080/video"
+# Recorded-video playback is the default for repeatable demos. Set this to True
+# to use a camera unless --recorded-video or --entry-video is supplied.
+USE_LIVE_CAMERA = False
 CAMERA_SOURCE = 0
-
-# Live feeds never end, so give up after this many seconds with no confirmed plate
-# and fall back to the manual override.
 LIVE_TIMEOUT_SEC = 60
-
-# Run OCR only on every Nth frame (reduces lag on live feeds, especially on CPU)
 OCR_EVERY_N_FRAMES = 3
-
-# Set to True if you have an NVIDIA GPU with CUDA set up
 USE_GPU = False
 
-# Dynamic path resolution (cross-platform compatible with fallback)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(SCRIPT_DIR)
-DB_PATH = os.path.join(BASE_DIR, "backend", "database", "parking.db")
-if not os.path.exists(DB_PATH):
-    DB_PATH = r"C:\xampp\htdocs\campstone\CAPSTONE\backend\database\parking.db"
+DB_PATH = os.path.join(os.path.dirname(SCRIPT_DIR), "backend", "database", "parking.db")
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    cursor = conn.cursor()
-    
-    # Initialize new schema tables including reservations
-    cursor.executescript('''
-        CREATE TABLE IF NOT EXISTS vehicles (
-            vehicle_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            plate_number TEXT NOT NULL UNIQUE,
-            owner_name TEXT,
-            vehicle_type TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS spatial_allocation (
-            zone_id TEXT PRIMARY KEY,
-            max_capacity INTEGER NOT NULL,
-            active_parked_count INTEGER DEFAULT 0,
-            active_reservation_count INTEGER DEFAULT 0
-        );
-        CREATE TABLE IF NOT EXISTS parking_slots (
-            slot_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            slot_number TEXT NOT NULL UNIQUE,
-            zone TEXT NOT NULL,
-            is_occupied INTEGER DEFAULT 0
-        );
-        CREATE TABLE IF NOT EXISTS reservations (
-            reservation_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            vehicle_id INTEGER,
-            slot_id INTEGER,
-            reservation_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-            expiry_time DATETIME,
-            status TEXT DEFAULT 'ACTIVE',
-            token_id INTEGER, 
-            start_date datetime, 
-            end_date datetime,
-            FOREIGN KEY(vehicle_id) REFERENCES vehicles(vehicle_id),
-            FOREIGN KEY(slot_id) REFERENCES parking_slots(slot_id)
-        );
-        CREATE TABLE IF NOT EXISTS parking_sessions (
-            session_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            vehicle_id INTEGER,
-            slot_id INTEGER,
-            entry_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-            exit_time DATETIME,
-            total_fee REAL DEFAULT 0,
-            FOREIGN KEY(vehicle_id) REFERENCES vehicles(vehicle_id),
-            FOREIGN KEY(slot_id) REFERENCES parking_slots(slot_id)
-        );
-    ''')
-    
-    # Seed spatial zones and slots if the database is completely empty
-    cursor.execute("SELECT COUNT(*) FROM spatial_allocation")
-    if cursor.fetchone()[0] == 0:
-        zones = ['A', 'B', 'C', 'D', 'E']
-        for zone in zones:
-            cursor.execute("INSERT INTO spatial_allocation (zone_id, max_capacity) VALUES (?, 10)", (zone,))
-            for i in range(1, 4):
-                cursor.execute("INSERT INTO parking_slots (slot_number, zone, is_occupied) VALUES (?, ?, 0)", (f"{zone}-0{i}", zone))
-    
-    conn.commit()
-    conn.close()
+    if not os.path.isfile(DB_PATH):
+        raise FileNotFoundError(f"Project database not found: {DB_PATH}")
 
 def open_capture(source):
     """Opens a video file path, a camera index, or an IP camera URL."""
+    import cv2
+
     is_camera_index = isinstance(source, int)
 
     # CAP_DSHOW avoids slow startup / black frames on Windows webcams
@@ -121,6 +49,10 @@ def open_capture(source):
 
 def process_video_feed(source, model_path, window_name, feed_type="entrance",
                        is_live=False, timeout_sec=LIVE_TIMEOUT_SEC):
+    import cv2
+    import easyocr
+    from ultralytics import YOLO
+
     print(f"[VISION PIPELINE]: Initializing YOLOv8 and EasyOCR on source: {source}...")
     model = YOLO(model_path)
     reader = easyocr.Reader(['en'], gpu=USE_GPU)
@@ -163,16 +95,16 @@ def process_video_feed(source, model_path, window_name, feed_type="entrance",
         frame_count += 1
 
         height, width, _ = frame.shape
-        
+
         # --- DYNAMIC ROI LOGIC ---
         if feed_type == "entrance":
             # Adjusted to match the specific entrance camera framing
             ymin, ymax = int(height * 0.10), int(height * 0.95)
-            xmin, xmax = int(width * 0.20), int(width * 0.70) 
+            xmin, xmax = int(width * 0.20), int(width * 0.70)
         else:
             ymin, ymax = int(height * 0.05), int(height * 0.70)
             xmin, xmax = int(width * 0.40), int(width * 0.95)
-            
+
         cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
 
         results = model.track(
@@ -199,7 +131,7 @@ def process_video_feed(source, model_path, window_name, feed_type="entrance",
 
                     previous_positions[track_id] = cy
 
-                    # Only run the (expensive) OCR on every Nth frame
+                    # OCR is expensive, so sample frames in both live and file modes.
                     if frame_count % OCR_EVERY_N_FRAMES != 0:
                         continue
 
@@ -212,20 +144,20 @@ def process_video_feed(source, model_path, window_name, feed_type="entrance",
 
                             ocr_results = reader.readtext(contrast)
                             for bbox, text, prob in ocr_results:
-                                cleaned_text = re.sub(r'[^A-Z0-9]', '', text.upper())
-                                
+                                cleaned_text = normalize_license_plate(text)
+
                                 # Validate string format
                                 if re.match(r'^[A-Z]{3}\d{3,4}$', cleaned_text):
                                     plate_history[track_id].append(cleaned_text)
-                                    
+
                                     # --- CONSECUTIVE CHECK LOGIC ---
                                     if len(plate_history[track_id]) >= 3:
                                         last_three = plate_history[track_id][-3:]
-                                        
+
                                         if last_three[0] == last_three[1] == last_three[2]:
                                             confirmed_plate = last_three[0]
                                             print(f"[VISION PIPELINE]: Extracted Plate '{confirmed_plate}' (3 Consecutive Matches)")
-                                            
+
                                             cap.release()
                                             cv2.destroyAllWindows()
                                             return confirmed_plate
@@ -242,59 +174,93 @@ def process_video_feed(source, model_path, window_name, feed_type="entrance",
 def check_and_assign_slot(cursor, vehicle_id):
     """
     Checks if the vehicle has an active reservation.
-    Returns: (slot_id, slot_number, zone, is_reserved_boolean)
+    Returns: (slot_id, slot_number, zone, verified_payment_state).
     """
     cursor.execute('''
-        SELECT r.reservation_id, r.slot_id, p.slot_number, p.zone 
+        SELECT r.reservation_id, r.slot_id, p.slot_number, p.zone, r.payment_state
         FROM reservations r
         JOIN parking_slots p ON r.slot_id = p.slot_id
         WHERE r.vehicle_id = ? AND r.status = 'ACTIVE'
+          AND r.payment_state IN ('PAID', 'ADMIN_EXEMPT') AND p.is_active = 1
     ''', (vehicle_id,))
-    
+
     reservation = cursor.fetchone()
 
     if reservation:
-        res_id, slot_id, slot_number, zone = reservation
+        res_id, slot_id, slot_number, zone, payment_state = reservation
         print(f"\n[SYSTEM]: Prior reservation recognized! Assigning reserved slot.")
         cursor.execute("UPDATE reservations SET status = 'FULFILLED' WHERE reservation_id = ?", (res_id,))
-        return slot_id, slot_number, zone, True
+        return slot_id, slot_number, zone, payment_state
     else:
+        cursor.execute("SELECT 1 FROM reservations WHERE vehicle_id=? AND status IN ('PENDING_PAYMENT','ACTIVE') AND payment_state NOT IN ('PAID','ADMIN_EXEMPT') LIMIT 1", (vehicle_id,))
+        if cursor.fetchone():
+            return None, None, None, 'UNPAID_BOOKING'
         print("\n[SYSTEM]: No prior reservation found. Walk-in detected. Finding available slot...")
-        cursor.execute("SELECT slot_id, slot_number, zone FROM parking_slots WHERE is_occupied = 0 LIMIT 1")
+        cursor.execute("""SELECT s.slot_id, s.slot_number, s.zone FROM parking_slots s
+            WHERE s.is_active = 1 AND s.is_occupied = 0 AND NOT EXISTS (
+              SELECT 1 FROM reservations r WHERE r.slot_id=s.slot_id
+              AND r.status IN ('ACTIVE','PENDING_PAYMENT')) LIMIT 1""")
         slot = cursor.fetchone()
-        
-        if not slot:
-            return None, None, None, False
-            
-        slot_id, slot_number, zone = slot
-        return slot_id, slot_number, zone, False
 
-def run_scenario_3():
+        if not slot:
+            return None, None, None, None
+
+        slot_id, slot_number, zone = slot
+        return slot_id, slot_number, zone, None
+
+def run_scenario_3(entrance_video=None, live_camera=None, camera_source=None,
+                   live_timeout=LIVE_TIMEOUT_SEC):
+    if entrance_video is None and live_camera is None and camera_source is None:
+        video_dir = os.path.join(SCRIPT_DIR, "simulation_videos")
+        parser = argparse.ArgumentParser(
+            description="Scenario 3: entrance plate recognition and walk-in slot assignment."
+        )
+        mode = parser.add_mutually_exclusive_group()
+        mode.add_argument("--live-camera", action="store_true", help="Use a live camera or stream.")
+        mode.add_argument("--recorded-video", action="store_true", help="Use a recorded video (the default).")
+        parser.add_argument("--entry-video", help="Recorded entrance video path.")
+        parser.add_argument("--camera-source", default=str(CAMERA_SOURCE), help="Camera index or stream URL.")
+        parser.add_argument("--live-timeout", type=int, default=LIVE_TIMEOUT_SEC)
+        args = parser.parse_args()
+
+        if args.live_camera and args.entry_video:
+            parser.error("--entry-video cannot be used with --live-camera")
+        entrance_video = args.entry_video or os.path.join(
+            video_dir, "Entry Fortuner - Day (walk-in).mp4"
+        )
+        live_camera = args.live_camera or (
+            USE_LIVE_CAMERA and not args.recorded_video and args.entry_video is None
+        )
+        camera_source = args.camera_source
+        live_timeout = args.live_timeout
+    elif live_camera is None:
+        live_camera = USE_LIVE_CAMERA if entrance_video is None else False
+
+    if live_camera:
+        source = camera_source if camera_source is not None else CAMERA_SOURCE
+        if isinstance(source, str) and source.isdecimal():
+            source = int(source)
+    else:
+        source = entrance_video
+        if not source or not os.path.isfile(source):
+            raise FileNotFoundError(f"Recorded entrance video not found: {source}")
+
     print("=================================================================")
     print("      RUNNING SCENARIO 3: ENTRANCE CAMERA & SLOT ASSIGNMENT      ")
     print("=================================================================\n")
-    
+
     init_db()
-    
+
     # Model weights with dynamic resolution and fallback
     model_weights = os.path.join(SCRIPT_DIR, "entrance-feed-best1.pt")
     if not os.path.exists(model_weights):
         model_weights = r"C:\xampp\htdocs\campstone\CAPSTONE\computer_vision\entrance-feed-best1.pt"
-    
-    # Choose live camera or pre-recorded video
-    if USE_LIVE_CAMERA:
-        source = CAMERA_SOURCE
-    else:
-        video_dir = os.path.join(SCRIPT_DIR, "simulation_videos")
-        source = os.path.join(video_dir, "Entry Fortuner - Day (walk-in).mp4")
-        if not os.path.exists(source):
-            source = r"R:\Capstone\fortunerEntry.mp4"
-    
+
     entry_plate = process_video_feed(
-        source, model_weights, 'Scenario 3: Entrance Feed',
-        feed_type="entrance", is_live=USE_LIVE_CAMERA
+        source, model_weights, 'Scenario 3: Entrance Feed', feed_type="entrance",
+        is_live=live_camera, timeout_sec=live_timeout
     )
-    
+
     conn = sqlite3.connect(DB_PATH, timeout=10)
     cursor = conn.cursor()
 
@@ -302,46 +268,50 @@ def run_scenario_3():
         print("\n[SYSTEM]: Vision system failed to detect plate at entrance.")
         print("Attendant switching to manual validation via QR code scanning...")
         token_input = input("[MANUAL OVERRIDE]: Enter Reservation Token ID (or leave blank for Walk-in): ").strip()
-        
+
         if token_input:
             cursor.execute('''
-                SELECT v.plate_number 
+                SELECT v.plate_number
                 FROM reservations r
                 JOIN vehicles v ON r.vehicle_id = v.vehicle_id
                 WHERE r.token_id = ? AND r.status = 'ACTIVE'
+                  AND r.payment_state IN ('PAID', 'ADMIN_EXEMPT')
             ''', (token_input,))
             res = cursor.fetchone()
             if res:
-                entry_plate = res[0]
+                entry_plate = normalize_license_plate(res[0])
                 print(f"[SYSTEM]: Reservation confirmed via token. Plate linked: {entry_plate}")
             else:
                 print("[ERROR]: Invalid or expired Reservation Token.")
                 conn.close()
                 return
         else:
-            entry_plate = input("[MANUAL OVERRIDE]: Enter License Plate manually for Walk-in: ").strip().upper()
+            entry_plate = prompt_for_license_plate(
+                "[MANUAL OVERRIDE]: Enter License Plate for Walk-in (no spaces, e.g. ABC1234): "
+            )
             if not entry_plate:
-                print("[ERROR]: No plate provided.")
+                print("[ERROR]: No valid plate provided.")
                 conn.close()
                 return
 
     # 1. Register or fetch vehicle
-    cursor.execute("SELECT vehicle_id FROM vehicles WHERE plate_number = ?", (entry_plate,))
+    cursor.execute("SELECT vehicle_id FROM vehicles WHERE UPPER(REPLACE(REPLACE(plate_number, ' ', ''), '-', '')) = ?", (entry_plate,))
     vehicle = cursor.fetchone()
     if not vehicle:
         cursor.execute("INSERT INTO vehicles (plate_number, vehicle_type) VALUES (?, 'Transient')", (entry_plate,))
         vehicle_id = cursor.lastrowid
     else:
         vehicle_id = vehicle[0]
-        
+
     # 2. Call the Slot Assignment Function
-    slot_id, slot_number, zone, is_reserved = check_and_assign_slot(cursor, vehicle_id)
-    
+    slot_id, slot_number, zone, payment_state = check_and_assign_slot(cursor, vehicle_id)
+    is_reserved = payment_state is not None
+
     if not slot_id:
-        print("[ERROR]: Public parking lot is completely full.")
+        print("[ERROR]: Booking payment is unconfirmed; entry denied." if payment_state == 'UNPAID_BOOKING' else "[ERROR]: Public parking lot is completely full.")
         conn.close()
         return
-        
+
     qr_token = f"QR_{uuid.uuid4().hex[:12].upper()}"
 
     # Print Terminal QR / Slot Dispenser
@@ -350,21 +320,22 @@ def run_scenario_3():
         print("      [ RESERVATION CONFIRMED ]        ")
     else:
         print("          [ TICKET DISPENSED ]         ")
-        
+
     print(f"      QR TOKEN : {qr_token}")
     print(f"      SLOT     : {slot_number}")
     print("="*40 + "\n")
-    
+
     # 3. Create session and update spatial constraints
-    cursor.execute("INSERT INTO parking_sessions (vehicle_id, slot_id) VALUES (?, ?)", (vehicle_id, slot_id))
+    initial_payment = 'PAID_RESERVATION' if payment_state == 'PAID' else ('BYPASSED' if payment_state == 'ADMIN_EXEMPT' else 'UNPAID')
+    cursor.execute("INSERT INTO parking_sessions (vehicle_id, slot_id, payment_status) VALUES (?, ?, ?)", (vehicle_id, slot_id, initial_payment))
     session_id = cursor.lastrowid
-    
+
     cursor.execute("UPDATE parking_slots SET is_occupied = 1 WHERE slot_id = ?", (slot_id,))
     cursor.execute("UPDATE spatial_allocation SET active_parked_count = active_parked_count + 1 WHERE zone_id = ?", (zone,))
-    
+
     conn.commit()
     conn.close()
-    
+
     print(f"Public Lot Entry logged into DB (Session ID: {session_id}).")
     print("\n[MICROCONTROLLER RELAY]: Signal sent. ENTRANCE BARRIER OPEN.")
 
