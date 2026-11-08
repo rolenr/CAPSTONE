@@ -305,6 +305,10 @@ def main(argv=None):
     parser.add_argument("--target-slot", help="Assigned bay to confirm during parking replay")
     parser.add_argument("--stop-after-occupied-seconds", type=float,
                         help="Stop after this many continuous video seconds of vehicle occupancy in the target bay")
+    parser.add_argument("--stop-on-vacant", action="store_true",
+                        help="Stop after the target bay is observed occupied, then vacant")
+    parser.add_argument("--frame-offset", type=int, default=0,
+                        help="Offset published frame indexes for later clips in one scenario")
     parser.add_argument("--imgsz", type=int, default=960,
                         help="Detector input size; default 960 for wide sectional views")
     parser.add_argument("--grace-seconds", type=float, default=GRACE_SECONDS,
@@ -329,6 +333,12 @@ def main(argv=None):
         parser.error("--sample-seconds, --grace-seconds, and --imgsz must be positive")
     if args.stop_after_occupied_seconds is not None and (not args.target_slot or args.stop_after_occupied_seconds <= 0):
         parser.error("--stop-after-occupied-seconds needs --target-slot and a positive duration")
+    if args.stop_on_vacant and not args.target_slot:
+        parser.error("--stop-on-vacant needs --target-slot")
+    if args.stop_on_vacant and args.stop_after_occupied_seconds is not None:
+        parser.error("use only one sectional stop condition")
+    if args.frame_offset < 0:
+        parser.error("--frame-offset cannot be negative")
     if args.save_reference_frame:
         import cv2
         capture = cv2.VideoCapture(args.source)
@@ -382,6 +392,8 @@ def main(argv=None):
     count = 0
     target_occupied_since = None
     parking_confirmed = False
+    target_was_occupied = False
+    departure_confirmed = False
     window = f"Sectional Occupancy - {args.camera_id}"
     if args.preview:
         cv2.namedWindow(window, cv2.WINDOW_NORMAL)
@@ -423,7 +435,7 @@ def main(argv=None):
                         target_occupied_since = None
                 for event in events:
                     event.update({"scenario_id": args.scenario_id, "session_id": args.session_id,
-                                  "camera_id": args.camera_id, "frame_index": frame_index,
+                                  "camera_id": args.camera_id, "frame_index": frame_index + args.frame_offset,
                                   "clip_plate": args.clip_plate, "clip_slot": args.clip_slot})
                     if event["event_type"] == "sectional.slot.observed":
                         # The bay checkpoint reports localization quality only;
@@ -448,6 +460,14 @@ def main(argv=None):
                     if args.event_url:
                         publish_event(event, args.event_url, event_token)
                     count += 1
+                if args.stop_on_vacant:
+                    state = monitor.slot_state.get(args.target_slot)
+                    if state == "OCCUPIED":
+                        target_was_occupied = True
+                    elif target_was_occupied and state == "VACANT":
+                        departure_confirmed = True
+                        print(f"Bay departure confirmed: {args.target_slot} became vacant "
+                              f"at frame {frame_index}.", flush=True)
                 if (args.stop_after_occupied_seconds is not None and target_occupied_since is not None
                         and monitor.slot_state.get(args.target_slot) == "OCCUPIED"
                         and when - target_occupied_since >= args.stop_after_occupied_seconds):
@@ -460,7 +480,7 @@ def main(argv=None):
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         raise KeyboardInterrupt("Sectional preview stopped by operator")
                 frame_index += 1
-                if parking_confirmed:
+                if parking_confirmed or departure_confirmed:
                     break
     finally:
         capture.release()
@@ -469,6 +489,9 @@ def main(argv=None):
     print(f"Processed {frame_index} frames; emitted {count} events to {output}.", file=sys.stderr)
     if args.stop_after_occupied_seconds is not None and not parking_confirmed:
         print(f"Parking was not confirmed in {args.target_slot} before the clip ended.", file=sys.stderr)
+        return 3
+    if args.stop_on_vacant and not departure_confirmed:
+        print(f"Bay departure was not confirmed in {args.target_slot} before the clip ended.", file=sys.stderr)
         return 3
     return 0
 

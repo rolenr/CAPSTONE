@@ -135,32 +135,55 @@ def wait_for_entry(plate, since_id, timeout, scenario, process=None):
     raise TimeoutError(f"No new entry session for {plate} within {timeout} seconds")
 
 
-def replay_sectional(args, scenario, session_id, assigned_slot, token):
+def replay_sectional(args, scenario, session_id, assigned_slot, token, phase="parking"):
     run_dir = ROOT / "backend/database/simulation_runs" / scenario
     run_dir.mkdir(parents=True, exist_ok=True)
+    source = (args.departure_video if phase == "departure" else
+              args.parking_video if args.five_clips else args.sectional_video)
+    output_name = "departure_events.jsonl" if phase == "departure" else "sectional_events.jsonl"
+    evidence_name = "departure_evidence" if phase == "departure" else "evidence"
+    with sqlite3.connect(f"file:{DB}?mode=ro", uri=True) as db:
+        last_frame = db.execute("SELECT COALESCE(MAX(frame_index), -1) FROM sectional_events "
+                                "WHERE scenario_id=? AND camera_id=?", (scenario, args.camera_id)).fetchone()[0]
+    frame_offset = int(last_frame) + 1
     command = [sys.executable, str(ROOT / "computer_vision/sectional_occupancy.py"),
-               "--source", str(args.sectional_video), "--camera-id", args.camera_id,
+               "--source", str(source), "--camera-id", args.camera_id,
                "--config", str(args.regions), "--vehicle-model", str(args.vehicle_model),
                "--scenario-id", scenario, "--session-id", str(session_id),
                "--clip-plate", args.clip_plate or "", "--clip-slot", args.clip_slot or "",
                "--event-url", f"{args.api_url}?action=sectional_event", "--event-token", token,
-               "--output", str(run_dir / "sectional_events.jsonl"),
-               "--evidence-dir", str(run_dir / "evidence"),
+               "--output", str(run_dir / output_name),
+               "--evidence-dir", str(run_dir / evidence_name),
                "--sample-seconds", str(args.sample_seconds),
-               "--start-seconds", str(args.baseline_seconds),
+               "--start-seconds", str(0 if args.five_clips else args.baseline_seconds),
+               "--frame-offset", str(frame_offset),
                "--target-slot", assigned_slot,
-               "--stop-after-occupied-seconds", str(args.parked_seconds),
-               "--preview-label", "PARKING REPLAY"]
+               "--preview-label", "BAY DEPARTURE" if phase == "departure" else "PARKING REPLAY"]
+    if phase == "departure":
+        command.append("--stop-on-vacant")
+    else:
+        command += ["--stop-after-occupied-seconds", str(args.parked_seconds)]
     if not args.no_preview:
         command.append("--preview")
     if args.sectional_plate_model:
         command += ["--plate-model", str(args.sectional_plate_model)]
-    print(f"Replaying sectional clip ({args.camera_id}) for session {session_id}: assigned bay {assigned_slot}; "
+    print(f"Replaying {phase} clip ({args.camera_id}) for session {session_id}: assigned bay {assigned_slot}; "
           f"clip label {args.clip_plate or 'unknown plate'} at {args.clip_slot or 'unknown bay'}.", flush=True)
     result = subprocess.run(command, cwd=ROOT)
     if result.returncode:
-        raise RuntimeError(f"Parking was not confirmed in {assigned_slot} for {args.parked_seconds:g} "
-                           f"continuous video seconds; see {run_dir / 'sectional_events.jsonl'}")
+        expected = ("occupied then vacant" if phase == "departure" else
+                    f"occupied for {args.parked_seconds:g} continuous video seconds")
+        raise RuntimeError(f"{phase.capitalize()} clip did not confirm {assigned_slot} {expected}; "
+                           f"see {run_dir / output_name}")
+    expected_state = "VACANT" if phase == "departure" else "OCCUPIED"
+    with sqlite3.connect(f"file:{DB}?mode=ro", uri=True) as db:
+        observed = db.execute("""SELECT o.occupancy_state FROM slot_observations o
+            JOIN parking_slots s ON s.slot_id=o.slot_id
+            WHERE o.scenario_id=? AND o.camera_id=? AND s.slot_number=?""",
+            (scenario, args.camera_id, assigned_slot)).fetchone()
+    if not observed or observed[0] != expected_state:
+        raise RuntimeError(f"{phase.capitalize()} clip finished, but API has no {expected_state} "
+                           f"observation for {assigned_slot}")
     return run_dir
 
 
@@ -173,7 +196,8 @@ def capture_baseline(args, scenario, token):
         raise RuntimeError(f"Scenario {scenario} already has sectional observations; use a new --scenario-id")
     run_dir.mkdir(parents=True, exist_ok=True)
     command = [sys.executable, str(ROOT / "computer_vision/sectional_occupancy.py"),
-               "--source", str(args.sectional_video), "--camera-id", args.camera_id,
+               "--source", str(args.baseline_video if args.five_clips else args.sectional_video),
+               "--camera-id", args.camera_id,
                "--config", str(args.regions), "--vehicle-model", str(args.vehicle_model),
                "--scenario-id", scenario, "--max-seconds", str(args.baseline_seconds),
                "--sample-seconds", str(args.sample_seconds),
@@ -225,6 +249,11 @@ def recorded(args, scenario, token):
     stage(args, "Entry allocated. Begin the parking portion of the sectional clip.")
     run_dir = replay_sectional(args, scenario, session_id, entry["slot_number"], token)
     print(f"Sectional events and evidence: {run_dir}", flush=True)
+    if args.five_clips:
+        stage(args, "Parking confirmed. Begin the clip showing the vehicle leaving its bay.")
+        replay_sectional(args, scenario, session_id, entry["slot_number"], token,
+                         phase="departure")
+        print(f"Bay departure confirmed: {entry['slot_number']} is vacant.", flush=True)
     if entry["payment_status"] in ("PAID", "PAID_RESERVATION", "PAID_OVERNIGHT", "BYPASSED"):
         print("Entry is already cleared for exit. Press Enter to replay the exit clip.", flush=True)
     else:
@@ -300,6 +329,9 @@ def main(argv=None):
     parser.add_argument("--clip-slot", default="E-05", help="Labeled bay in sectional recording; blank means unknown")
     parser.add_argument("--entry-video", type=Path, default=VIDEO / "RegularCustomer - Reservation (Entry and Exit).mp4")
     parser.add_argument("--sectional-video", type=Path, default=VIDEO / "SectOcc_Sample1.mp4")
+    parser.add_argument("--baseline-video", type=Path, help="Pre-entry sectional snapshot clip")
+    parser.add_argument("--parking-video", type=Path, help="Clip showing the vehicle parking in its assigned bay")
+    parser.add_argument("--departure-video", type=Path, help="Clip showing that bay occupied, then vacant")
     parser.add_argument("--exit-video", type=Path, default=VIDEO / "nissanExit.mp4")
     parser.add_argument("--regions", type=Path, default=ROOT / "computer_vision/sectocc_sample1_regions.json")
     parser.add_argument("--camera-id", default="section_e_sample1")
@@ -317,6 +349,12 @@ def main(argv=None):
     parser.add_argument("--entry-timeout", type=int, default=600)
     parser.add_argument("--exit-timeout", type=int, default=1800)
     args = parser.parse_args(argv)
+    five_clip_paths = (args.baseline_video, args.parking_video, args.departure_video)
+    args.five_clips = all(path is not None for path in five_clip_paths)
+    if any(path is not None for path in five_clip_paths) and not args.five_clips:
+        parser.error("five-clip mode needs --baseline-video, --parking-video, and --departure-video together")
+    if args.five_clips and args.mode != "recorded":
+        parser.error("five-clip mode currently requires recorded entrance and exit feeds")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", args.scenario_id):
         parser.error("scenario ID must be 1-64 letters, digits, underscores, or hyphens")
     for field in ("plate", "clip_plate"):
@@ -327,7 +365,10 @@ def main(argv=None):
         parser.error("--plate is required for live gates")
     if args.preferred_slot and not re.fullmatch(r"[A-F]-[0-9]{2}", args.preferred_slot):
         parser.error("--preferred-slot must look like E-05")
-    for path in (args.sectional_video, args.regions, args.vehicle_model):
+    for path in (args.sectional_video, args.baseline_video, args.parking_video,
+                 args.departure_video, args.regions, args.vehicle_model):
+        if path is None:
+            continue
         if not path.is_file():
             parser.error(f"missing file: {path}")
     if args.mode == "recorded":

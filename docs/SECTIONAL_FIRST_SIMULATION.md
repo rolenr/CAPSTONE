@@ -52,6 +52,25 @@ With a desktop display, the pre-entry baseline and parking replay each open a **
 
 `--preferred-slot E-05` explicitly chooses a vacant bay. Without it, `--clip-slot` is used as the preferred bay. Pass `--clip-slot ""` and omit `--preferred-slot` to allocate the first eligible vacant bay in the observed section. `--baseline-seconds` controls how much of the clip establishes the initial snapshot (default 3); `--parked-seconds` controls the 10-second hold; `--auto-advance` skips the first two stage prompts.
 
+## Five recorded clips
+
+Pass three separate sectional clips alongside the entrance and exit clips. All three sectional options must be supplied together:
+
+```sh
+python computer_vision/full_simulation.py recorded \
+  --scenario-id white_pickup_five_clips_01 \
+  --baseline-video path/to/section_e_before_entry.mp4 \
+  --entry-video path/to/entrance.mp4 \
+  --parking-video path/to/section_e_parking.mp4 \
+  --departure-video path/to/section_e_leaving_bay.mp4 \
+  --exit-video path/to/exit_camera.mp4 \
+  --plate LAC7863 --clip-plate LAC7863 --clip-slot E-05
+```
+
+The runner displays the opening `--baseline-seconds` of the first clip, reads the entrance plate, then plays the parking clip from its first frame until E-05 has been continuously occupied for 10 video seconds. The departure clip also starts from its first frame and must show E-05 occupied before it becomes vacant. Its first confirmed vacant observation ends that feed. The exit camera clip then confirms the same plate and requests payment clearance. Manual Enter controls separate the video stages; `--auto-advance` skips those stage prompts but the payment/validation pause remains. If parking or departure is not confirmed, the run stops with the session open for staff review or admin simulation recovery.
+
+The three sectional clips must show the same physical bay from the configured `--camera-id` and `--regions` view. The supplied `--clip-plate` is a test label, not independent sectional plate OCR. Event indexes advance between clips so the later vacant observation replaces the earlier occupied observation; evidence retains each clip's source frame index. This five-clip mode currently uses recorded entrance and exit feeds. The existing `--sectional-video` command remains the simpler one-clip mode.
+
 Use `http://127.0.0.1:8080/frontend/cashier.html` for payment or grace handling and `http://127.0.0.1:8080/frontend/admin.html` for enforcement review. The runner waits before exit. An unpaid exit remains denied until the session is cleared; it offers a retry.
 
 The sample sectional recording ends with E-05 occupied; it does not show that vehicle leaving the bay. The exit camera can close the parking session, but the last physical observation will still say occupied until a later sectional feed shows vacancy. The `--clip-plate` label is a test binding, not plate OCR evidence.
