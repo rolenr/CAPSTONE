@@ -56,6 +56,7 @@
                         <a href="#analytics" class="dropdown-item">Financial Analytics</a>
                         <a href="#peak-hours" class="dropdown-item">24h Traffic Influx</a>
                         <a href="#slot-controls" class="dropdown-item">Slot Overrides</a>
+                        <a href="#simulation-recovery" class="dropdown-item">Simulation Sessions</a>
                     </div>
                 </div>
 
@@ -286,6 +287,15 @@
             <span class="section-tag">Enforcement</span>
         </div>
 
+        <h3>Sectional observations awaiting staff review</h3>
+        <p>Confirm a five-minute obstruction only after checking the timed evidence and matching the vehicle session. A ₱300 fine is issued on confirmation.</p>
+        <div class="table-scroll" role="region" aria-label="Sectional alerts" tabindex="0">
+            <table class="admin-table">
+                <thead><tr><th>Alert</th><th>Scenario / region</th><th>Finding</th><th>Session</th><th>Evidence</th><th>Decision</th></tr></thead>
+                <tbody id="sectionalAlertsTable"><tr><td colspan="6">Loading sectional alerts...</td></tr></tbody>
+            </table>
+        </div>
+
         <!-- Violation Summary Metrics -->
         <div class="metrics-row" style="margin-bottom: 1rem;">
             <div class="metric-box alert-box">
@@ -384,6 +394,20 @@
 
         <div id="adminMapControls" class="admin-slot-zones" aria-live="polite">
             Loading parking slots...
+        </div>
+    </section>
+
+    <section id="simulation-recovery" class="card">
+        <div class="section-title-wrap">
+            <h2>Open Simulation Sessions</h2>
+            <span class="section-tag">Admin Recovery</span>
+        </div>
+        <p>Use recovery only when a simulation ended before its exit feed. Payment or validation and violation fees must be cleared. Recovery closes the session, reconciles its slot and zone count, and records that no exit-camera detection was observed.</p>
+        <div class="table-scroll" tabindex="0">
+            <table class="admin-table">
+                <thead><tr><th>Session</th><th>Scenario</th><th>Plate</th><th>Bay</th><th>Payment</th><th>Action</th></tr></thead>
+                <tbody id="simulationSessionsBody"><tr><td colspan="6">Loading…</td></tr></tbody>
+            </table>
         </div>
     </section>
 

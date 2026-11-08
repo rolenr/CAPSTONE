@@ -17,3 +17,6 @@ Thumbs.db
 
 # Shared local secret for authenticated exit-camera events
 backend/database/exit_camera_token
+
+# Per-run sectional evidence and event logs are generated locally
+backend/database/simulation_runs/

@@ -48,6 +48,7 @@ try {
     $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     require_once __DIR__ . '/exit_departure.php';
     require_once __DIR__ . '/cashier_billing.php';
+    require_once __DIR__ . '/simulation_integration.php';
     require_once __DIR__ . '/maya_reservation_payments.php';
     require_once __DIR__ . '/local_reservation_payments.php';
     paymentDb($db);
@@ -66,7 +67,7 @@ try {
 // 3. Define method and action BEFORE running the IF statements
 $method = $_SERVER['REQUEST_METHOD'];
 $action = $_GET['action'] ?? '';
-$cameraEvent = $action === 'exit_camera_event';
+$cameraEvent = in_array($action, ['exit_camera_event','camera_entry_event','sectional_event'], true);
 
 if ($cameraEvent) {
     if ($method !== 'POST') {
@@ -115,9 +116,14 @@ $actionRoles = [
     'set_account_role' => ['ADMIN'],
     'alpr_logs' => ['ADMIN'],
     'toggle_slot' => ['ADMIN'],
+    'admin_simulation_sessions' => ['ADMIN'],
+    'admin_close_simulation_session' => ['ADMIN'],
     'admin_audit_logs' => ['ADMIN'],
     'admin_violations_list' => ['ADMIN'],
     'admin_resolve_violation' => ['ADMIN'],
+    'sectional_alerts' => ['ADMIN'],
+    'sectional_evidence' => ['ADMIN'],
+    'review_sectional_alert' => ['ADMIN'],
     'cashier_lookup' => ['CASHIER', 'ADMIN'],
     'cashier_payment' => ['CASHIER', 'ADMIN'],
     'exit_barrier_clearance' => ['CASHIER', 'ADMIN'],
@@ -200,6 +206,40 @@ function isExitPaymentCleared($paymentStatus, $vendorScanTime = null) {
     if ($vendorTimestamp === false) return false;
     $minutesSinceVendor = time() - $vendorTimestamp;
     return $minutesSinceVendor >= 0 && $minutesSinceVendor <= (20 * 60);
+}
+
+if ($cameraEvent && $action === 'camera_entry_event') {
+    $data = json_decode(file_get_contents('php://input'), true) ?: [];
+    $plate = normalizeLicensePlate($data['plate_number'] ?? '');
+    $observedAt = strtotime((string)($data['observed_at'] ?? ''));
+    $scenarioId = (string)($data['scenario_id'] ?? '');
+    if ((int)($data['channel'] ?? 0) !== 1 || !isValidLicensePlate($plate)
+        || $observedAt === false || abs(time() - $observedAt) > 30
+        || !preg_match('/^[A-Za-z0-9_-]{1,64}$/', $scenarioId)) {
+        http_response_code(400);
+        echo json_encode(['success'=>false,'error'=>'A recent Channel 1 plate detection and scenario ID are required.']);
+        exit;
+    }
+    try {
+        echo json_encode(simulationEntry($db,$plate,$scenarioId,'ENTRANCE_CAMERA_CHANNEL_1',
+            (string)($data['preferred_slot'] ?? '')));
+    } catch (Throwable $error) {
+        http_response_code(in_array($error->getCode(),[400,404,409],true) ? $error->getCode() : 500);
+        echo json_encode(['success'=>false,'error'=>$error->getCode() ? $error->getMessage() : 'Unable to record entry.']);
+    }
+    exit;
+}
+
+if ($cameraEvent && $action === 'sectional_event') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    try {
+        if (!is_array($data)) throw new InvalidArgumentException('A JSON event is required.',400);
+        echo json_encode(simulationSectionalEvent($db,$data));
+    } catch (Throwable $error) {
+        http_response_code(in_array($error->getCode(),[400,404,409],true) ? $error->getCode() : 500);
+        echo json_encode(['success'=>false,'error'=>$error->getCode() ? $error->getMessage() : 'Unable to record sectional event.']);
+    }
+    exit;
 }
 
 // A trusted Channel 13 detection is the departure signal. The server still
@@ -369,6 +409,7 @@ if ($method === 'POST' && $action === 'login') {
 
 // --- ROUTE: Live Map True Availability ---
 if ($method === 'GET' && $action === 'map') {
+    ensureSimulationSchema($db);
 
     $stmt = $db->query("
         SELECT
@@ -384,7 +425,15 @@ if ($method === 'GET' && $action === 'map') {
                  WHEN EXISTS (SELECT 1 FROM reservations r WHERE r.slot_id=s.slot_id AND r.status='ACTIVE') THEN 'RESERVED'
                  ELSE 'FREE' END AS availability_status,
             v.plate_number
+            ,CASE WHEN s.zone='F' THEN 'ALLOCATION_ONLY'
+                  ELSE COALESCE((SELECT o.occupancy_state FROM slot_observations o
+                    WHERE o.slot_id=s.slot_id ORDER BY o.observed_at DESC LIMIT 1),'NOT_OBSERVED') END AS observed_state
+            ,CASE WHEN s.zone='F' THEN 'ZONE_ALLOCATION'
+                  ELSE (SELECT o.observed_at FROM slot_observations o
+                    WHERE o.slot_id=s.slot_id ORDER BY o.observed_at DESC LIMIT 1) END AS observed_at
+            ,a.active_parked_count AS zone_allocated_count
         FROM parking_slots s
+        LEFT JOIN spatial_allocation a ON a.zone_id=s.zone
         LEFT JOIN parking_sessions ps
             ON s.slot_id = ps.slot_id AND ps.exit_time IS NULL
         LEFT JOIN vehicles v
@@ -399,6 +448,49 @@ if ($method === 'GET' && $action === 'map') {
         unset($slot);
     }
     echo json_encode($slots);
+    exit;
+}
+
+if ($method === 'GET' && $action === 'sectional_alerts') {
+    ensureSimulationSchema($db);
+    $rows = $db->query("SELECT alert_id,scenario_id,session_id,camera_id,violation_type,region,track_id,
+        evidence,details,status,reviewed_by,reviewed_at,violation_id,created_at
+        FROM sectional_alerts ORDER BY alert_id DESC LIMIT 100")->fetchAll(PDO::FETCH_ASSOC);
+    echo json_encode(['success'=>true,'alerts'=>$rows]);
+    exit;
+}
+
+if ($method === 'GET' && $action === 'sectional_evidence') {
+    ensureSimulationSchema($db);
+    $id = filter_var($_GET['alert_id'] ?? null,FILTER_VALIDATE_INT);
+    $stmt = $db->prepare('SELECT evidence FROM sectional_alerts WHERE alert_id=?');
+    $stmt->execute([$id ?: 0]);
+    $path = $stmt->fetchColumn();
+    $root = realpath(__DIR__ . '/../database/simulation_runs');
+    $file = is_string($path) ? realpath($path) : false;
+    if (!$root || !$file || !str_starts_with($file,$root . DIRECTORY_SEPARATOR)
+        || !is_file($file) || strtolower(pathinfo($file,PATHINFO_EXTENSION)) !== 'jpg') {
+        http_response_code(404);
+        echo json_encode(['error'=>'Evidence image not found.']);
+        exit;
+    }
+    header('Content-Type: image/jpeg');
+    header('Content-Length: ' . filesize($file));
+    readfile($file);
+    exit;
+}
+
+if ($method === 'POST' && $action === 'review_sectional_alert') {
+    $data = json_decode(file_get_contents('php://input'),true) ?: [];
+    try {
+        $id = filter_var($data['alert_id'] ?? null,FILTER_VALIDATE_INT);
+        if (!$id || $id < 1) throw new InvalidArgumentException('A valid alert ID is required.',400);
+        $sessionId = filter_var($data['session_id'] ?? null,FILTER_VALIDATE_INT) ?: null;
+        echo json_encode(simulationReviewAlert($db,$id,(string)($data['decision'] ?? ''),$sessionId,$actorEmail));
+    } catch (Throwable $error) {
+        http_response_code(in_array($error->getCode(),[400,404,409],true) ? $error->getCode() : 500);
+        echo json_encode(['success'=>false,'error'=>$error->getCode() ? $error->getMessage() : 'Unable to review alert.']);
+    }
     exit;
 }
 
@@ -431,6 +523,13 @@ if ($method === 'POST' && $action === 'reserve') {
         exit;
     }
     $zone = $data['zone'] ?? '';
+    $requestedSlot = is_string($data['slot_number'] ?? null) ? strtoupper(trim($data['slot_number'])) : '';
+    if ($requestedSlot !== '' && (!$isAdmin || !preg_match('/^[A-E]-[0-9]{2}$/D', $requestedSlot) ||
+        !is_string($zone) || !str_starts_with($requestedSlot, $zone . '-'))) {
+        http_response_code(403);
+        echo json_encode(['error' => 'An administrator must choose an active bay in the selected zone.']);
+        exit;
+    }
     $startDate = $data['startDate'] ?? '';
     $endDate = $data['endDate'] ?? '';
     $adminExemption = $isAdmin && ($data['admin_payment_exemption'] ?? false) === true;
@@ -514,16 +613,16 @@ if ($method === 'POST' && $action === 'reserve') {
         }
 
         $slot = $db->prepare("SELECT s.slot_id, s.slot_number FROM parking_slots s
-            WHERE s.zone = ? AND s.is_active = 1 AND s.is_occupied = 0 AND NOT EXISTS (
+            WHERE s.zone = ? AND (? = '' OR s.slot_number = ?) AND s.is_active = 1 AND s.is_occupied = 0 AND NOT EXISTS (
                 SELECT 1 FROM reservations r WHERE r.slot_id = s.slot_id AND r.status IN ('ACTIVE','PENDING_PAYMENT')
             ) ORDER BY s.slot_number LIMIT 1");
-        $slot->execute([$zone]);
+        $slot->execute([$zone,$requestedSlot,$requestedSlot]);
         $slot = $slot->fetch(PDO::FETCH_ASSOC);
 
         if (!$slot) {
             $db->rollBack();
             http_response_code(409);
-            echo json_encode(["error" => "No available slots in Zone " . $zone]);
+            echo json_encode(["error" => $requestedSlot !== '' ? "Bay {$requestedSlot} is unavailable." : "No available slots in Zone " . $zone]);
             exit;
         }
 
@@ -1598,6 +1697,30 @@ if ($method === 'GET' && $action === 'alpr_logs') {
 }
 
 // --- ROUTE: Admin Manual Slot Toggle (Override) ---
+if ($method === 'GET' && $action === 'admin_simulation_sessions') {
+    ensureSimulationSchema($db);
+    $rows = $db->query("SELECT ps.session_id,ss.scenario_id,v.plate_number,s.slot_number,s.zone,
+            ps.payment_status,ps.entry_time,s.is_occupied
+        FROM parking_sessions ps JOIN simulation_sessions ss ON ss.session_id=ps.session_id
+        JOIN vehicles v ON v.vehicle_id=ps.vehicle_id JOIN parking_slots s ON s.slot_id=ps.slot_id
+        WHERE ps.exit_time IS NULL AND ps.location_status='PARKED'
+        ORDER BY ps.session_id DESC")->fetchAll(PDO::FETCH_ASSOC);
+    echo json_encode(['success'=>true,'sessions'=>$rows]);
+    exit;
+}
+
+if ($method === 'POST' && $action === 'admin_close_simulation_session') {
+    $data = json_decode(file_get_contents('php://input'), true) ?: [];
+    $id = filter_var($data['session_id'] ?? null, FILTER_VALIDATE_INT);
+    try {
+        echo json_encode(closeSimulationSession($db,$id ?: 0,trim((string)($data['reason'] ?? '')),$actorEmail));
+    } catch (Throwable $error) {
+        http_response_code(in_array($error->getCode(),[400,404,409],true) ? $error->getCode() : 500);
+        echo json_encode(['success'=>false,'error'=>$error->getMessage()]);
+    }
+    exit;
+}
+
 if ($method === 'POST' && $action === 'toggle_slot') {
     $data = json_decode(file_get_contents('php://input'), true);
     $slotId = $data['slot_id'] ?? null;
@@ -1617,6 +1740,12 @@ if ($method === 'POST' && $action === 'toggle_slot') {
         $slot = $slotInfo->fetch(PDO::FETCH_ASSOC);
 
         if ($slot) {
+            $active = $db->prepare("SELECT 1 FROM parking_sessions WHERE slot_id=? AND exit_time IS NULL
+                AND location_status='PARKED' LIMIT 1");
+            $active->execute([$slotId]);
+            if ($active->fetchColumn()) {
+                throw new RuntimeException('An open parking session uses this bay. Close that session through exit or simulation recovery first.', 409);
+            }
             $stmt = $db->prepare("UPDATE parking_slots SET is_occupied = ? WHERE slot_id = ? AND is_active = 1");
             $stmt->execute([$isOccupied, $slotId]);
             // Sync spatial_allocation count
@@ -1638,9 +1767,10 @@ if ($method === 'POST' && $action === 'toggle_slot') {
 
         $db->commit();
         echo json_encode(["success" => true]);
-    } catch (PDOException $e) {
+    } catch (Throwable $e) {
         $db->rollBack();
-        echo json_encode(["error" => "Failed to update slot status: " . $e->getMessage()]);
+        http_response_code(in_array($e->getCode(),[400,404,409],true) ? $e->getCode() : 500);
+        echo json_encode(["error" => $e->getMessage()]);
     }
     exit;
 }

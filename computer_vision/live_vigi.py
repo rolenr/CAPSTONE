@@ -1,8 +1,8 @@
 """Continuously review plate detections from two VIGI NVR channels.
 
-Entrance detections are printed only. Confirmed exit detections are sent to the
-local PHP API, which checks payment and closes the session when eligible.
-Use --detection-only to print detections without sending exit events.
+Confirmed entrance and exit detections are sent to the local PHP API. Entry
+creates or reuses a session; exit checks payment and closes eligible sessions.
+Use --detection-only to print detections without sending camera events.
 
 Set VIGI_NVR_IP, VIGI_NVR_USERNAME, and VIGI_NVR_PASSWORD in the environment.
 Optionally set VIGI_NVR_RTSP_PORT (default 554). From the repository root:
@@ -147,11 +147,12 @@ def has_entrance_motion(history):
 class PlateDetector:
     """Scenario 5's ALPR rules, with state scoped to one camera."""
 
-    def __init__(self, role, model, reader, cv2):
+    def __init__(self, role, model, reader, cv2, image_size=960):
         self.role = role
         self.model = model
         self.reader = reader
         self.cv2 = cv2
+        self.image_size = image_size
         self.track_history = defaultdict(
             lambda: {
                 "centers": deque(maxlen=8), "areas": deque(maxlen=8),
@@ -243,12 +244,12 @@ class PlateDetector:
         if self.role == "entrance":
             xmin, xmax = int(width * 0.20), int(width * 0.95)
             ymin, ymax = int(height * 0.30), int(height * 0.95)
-            confidence, image_size = 0.20, 960
+            confidence, image_size = 0.20, self.image_size
         else:
             # Include close plates near the bottom of the live exit view.
             xmin, xmax = int(width * 0.20), int(width * 0.95)
             ymin, ymax = int(height * 0.05), int(height * 0.95)
-            confidence, image_size = 0.25, 960
+            confidence, image_size = 0.25, self.image_size
 
         # Draw on a separate image so the ROI and labels cannot affect OCR.
         annotated = frame.copy()
@@ -420,8 +421,8 @@ def exit_event_configuration():
     return token, url
 
 
-def publish_exit_events(events, stop, token, url):
-    """Send confirmed Channel 13 reads without blocking the vision worker."""
+def publish_camera_events(events, stop, token, url, role, scenario_id):
+    """Send confirmed gate reads without blocking either vision worker."""
     class NoRedirect(HTTPRedirectHandler):
         def redirect_request(self, *_args, **_kwargs):
             return None
@@ -433,7 +434,10 @@ def publish_exit_events(events, stop, token, url):
         except queue.Empty:
             continue
         payload = json.dumps({
-            "channel": 13, "plate_number": plate, "observed_at": observed_at,
+            "channel": 1 if role == "entrance" else 13,
+            "plate_number": plate, "observed_at": observed_at,
+            "scenario_id": scenario_id,
+            "preferred_slot": os.environ.get("PARKING_PREFERRED_SLOT", "") if role == "entrance" else "",
         }).encode("utf-8")
         request = Request(url, data=payload, headers={
             "Content-Type": "application/json", "X-Exit-Event-Token": token,
@@ -442,22 +446,24 @@ def publish_exit_events(events, stop, token, url):
             try:
                 with opener.open(request, timeout=4) as response:
                     result = json.load(response)
-                if result.get("departure_recorded"):
+                if role == "entrance" and result.get("success"):
+                    print(f"[entrance] Session {result.get('session_id')} assigned to {result.get('slot_number')} ({result.get('zone')}).", flush=True)
+                elif result.get("departure_recorded"):
                     print(f"[exit] Session {result.get('session_id')} closed; slot {result.get('slot_number')} released.", flush=True)
                 break
             except HTTPError as error:
                 # A denied or unmatched event must not be retried as a new pass.
-                print(f"[exit] {plate}: API rejected detection (HTTP {error.code}).", flush=True)
+                print(f"[{role}] {plate}: API rejected detection (HTTP {error.code}).", flush=True)
                 break
             except (URLError, TimeoutError, OSError, ValueError):
                 if attempt == 0:
                     stop.wait(1)
                 else:
-                    print(f"[exit] {plate}: API unavailable; use issued QR fallback if needed.", flush=True)
+                    print(f"[{role}] {plate}: API unavailable; use staff fallback if needed.", flush=True)
         events.task_done()
 
 
-def recognize_frames(role, frames, detector, latest, lock, stop, exit_events=None):
+def recognize_frames(role, frames, detector, latest, lock, stop, event_queues=None):
     while not stop.is_set():
         try:
             frame = frames.get(timeout=0.2)
@@ -474,11 +480,12 @@ def recognize_frames(role, frames, detector, latest, lock, stop, exit_events=Non
         for event_role, plate in events:
             stamp = datetime.now().astimezone().isoformat(timespec="seconds")
             print(f"[{stamp}] {event_role.upper()} plate: {plate}", flush=True)
-            if event_role == "exit" and exit_events is not None:
+            queue_for_role = (event_queues or {}).get(event_role)
+            if queue_for_role is not None:
                 try:
-                    exit_events.put_nowait((plate, datetime.now(timezone.utc).isoformat(timespec="seconds")))
+                    queue_for_role.put_nowait((plate, datetime.now(timezone.utc).isoformat(timespec="seconds")))
                 except queue.Full:
-                    print("[exit] Event queue full; use issued QR fallback if needed.", flush=True)
+                    print(f"[{event_role}] Event queue full; use staff fallback if needed.", flush=True)
 
 
 def main(argv=None):
@@ -506,7 +513,9 @@ def main(argv=None):
     signal.signal(signal.SIGTERM, lambda _number, _frame: stop.set())
     latest, lock = {}, threading.Lock()
     workers = []
-    exit_events = queue.Queue(maxsize=64) if exit_token else None
+    scenario_id = os.environ.get("PARKING_SCENARIO_ID") or "live-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    event_queues = ({role: queue.Queue(maxsize=64) for role in ("entrance", "exit")}
+                    if exit_token else {})
     try:
         for role, channel, _title in CAMERAS:
             model_file = SCRIPT_DIR / (
@@ -521,17 +530,21 @@ def main(argv=None):
                 threading.Thread(target=capture_frames,
                                  args=(cv2, url, role, frames, stop), daemon=True),
                 threading.Thread(target=recognize_frames,
-                                 args=(role, frames, detector, latest, lock, stop, exit_events), daemon=True),
+                                 args=(role, frames, detector, latest, lock, stop, event_queues), daemon=True),
             ))
-        if exit_events is not None:
+        for role, events in event_queues.items():
+            url = exit_url if role == "exit" else os.environ.get(
+                "PARKING_ENTRY_EVENT_URL", exit_url.replace("exit_camera_event", "camera_entry_event"))
+            if not url.startswith(("http://127.0.0.1:", "http://localhost:", "https://")):
+                raise ValueError("PARKING_ENTRY_EVENT_URL must use local HTTP or HTTPS.")
             workers.append(threading.Thread(
-                target=publish_exit_events,
-                args=(exit_events, stop, exit_token, exit_url), daemon=True,
+                target=publish_camera_events,
+                args=(events, stop, exit_token, url, role, scenario_id), daemon=True,
             ))
         for worker in workers:
             worker.start()
         stop_hint = "Ctrl+C" if args.no_preview else "q or Ctrl+C"
-        print(f"Watching entrance channel 1 and exit channel 13. Press {stop_hint} to stop.")
+        print(f"Watching entrance channel 1 and exit channel 13 for scenario {scenario_id}. Press {stop_hint} to stop.")
         while not stop.is_set():
             if args.no_preview:
                 stop.wait(0.2)

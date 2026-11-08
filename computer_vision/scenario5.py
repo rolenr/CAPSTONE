@@ -119,73 +119,57 @@ def _recognize_recording(frames, detector, feed_type, latest, lock, stop,
                     break
 
 
-def process_video_feed(video_path, model_path, window_name, feed_type="exit"):
-    """Replay at source speed with the same detector used by the live cameras."""
+def process_video_feed(video_path, model_path, window_name, feed_type="exit", preview=True):
+    """Analyze recorded frames in order, independent of CPU inference speed."""
     import cv2
     import easyocr
     from ultralytics import YOLO
 
     if feed_type not in ("entrance", "exit"):
         raise ValueError("feed_type must be 'entrance' or 'exit'")
-    print(f"[VISION PIPELINE]: Initializing YOLOv8 and EasyOCR on {video_path}...")
+    print(f"[VISION PIPELINE]: Analyzing recorded {feed_type} feed: {video_path}...", flush=True)
     detector = PlateDetector(feed_type, YOLO(model_path), easyocr.Reader(["en"]), cv2)
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         cap.release()
-        print(f"[VISION PIPELINE]: Could not open video: {video_path}")
-        return None
-
-    frames = queue.Queue(maxsize=16)
-    stop, finished = threading.Event(), threading.Event()
-    latest, lock, errors = {}, threading.Lock(), []
-    producer = threading.Thread(
-        target=_play_recording_at_source_rate,
-        args=(cap, cv2, frames, latest, lock, stop, finished), daemon=True,
-    )
-    recognizer = threading.Thread(
-        target=_recognize_recording,
-        args=(frames, detector, feed_type, latest, lock, stop, finished, errors),
-        daemon=True,
-    )
-    producer.start()
-    recognizer.start()
-    last_displayed_at = None
+        raise RuntimeError(f"Could not open recorded video: {video_path}")
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if not math.isfinite(fps) or fps <= 0:
+        fps = 25.0
+    stride = max(1, round(fps / 5))
+    frame_index = 0
+    analyzed = 0
+    confirmed = None
     try:
-        while producer.is_alive() or recognizer.is_alive():
-            with lock:
-                frame = latest.get("frame")
-                captured_at = latest.get("captured_at", 0)
-                annotated = latest.get("annotated")
-                annotated_at = latest.get("annotated_at", 0)
-                plate = latest.get("plate")
-            if frame is not None and captured_at != last_displayed_at:
-                # Show annotations only when they belong to the current frame.
-                display = annotated if annotated_at == captured_at else frame
-                if plate and feed_type == "exit":
-                    display = display.copy()
-                    cv2.putText(
-                        display,
-                        f"PLATE RECOGNIZED: {plate} - review vehicle departure",
-                        (24, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 220, 0), 2,
-                    )
-                cv2.imshow(window_name, display)
-                last_displayed_at = captured_at
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                stop.set()
+        while True:
+            ok, frame = cap.read()
+            if not ok:
                 break
-            if stop.is_set():
+            if frame_index % stride:
+                frame_index += 1
+                continue
+            annotated, events = detector.process(frame, now=frame_index / fps)
+            analyzed += 1
+            if preview:
+                cv2.imshow(window_name, annotated)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+            for role, plate in events:
+                if role == feed_type:
+                    confirmed = plate
+                    print(f"[VISION PIPELINE]: Confirmed {feed_type} plate '{plate}' at video frame {frame_index}.", flush=True)
+                    break
+            if confirmed:
                 break
-            stop.wait(0.02)
+            frame_index += 1
     finally:
-        stop.set()
-        producer.join()
-        recognizer.join()
         cap.release()
-        cv2.destroyAllWindows()
-    if errors:
-        raise errors[0]
-    with lock:
-        return latest.get("plate")
+        if preview:
+            cv2.destroyAllWindows()
+    if not confirmed:
+        print(f"[VISION PIPELINE]: No confirmed {feed_type} plate after {analyzed} analyzed frames "
+              f"({frame_index} decoded frames).", flush=True)
+    return confirmed
 
 
 def check_and_assign_slot(cursor, vehicle_id):
@@ -457,4 +441,9 @@ def run_scenario_5_closed_loop(entrance_video=None, exit_video=None):
     conn.close()
 
 if __name__ == "__main__":
-    run_scenario_5_closed_loop()
+    try:
+        from .full_simulation import main as simulation_main
+    except ImportError:
+        from full_simulation import main as simulation_main
+    import sys
+    raise SystemExit(simulation_main(["recorded", *sys.argv[1:]]))

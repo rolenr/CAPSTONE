@@ -10,7 +10,7 @@ function cashierBill(PDO $db, array $session): array {
     $manila = new DateTimeZone('Asia/Manila');
     $entryLocal = (new DateTimeImmutable('@' . $entry))->setTimezone($manila);
     $nowLocal = (new DateTimeImmutable('@' . $now))->setTimezone($manila);
-    $overnight = $entryLocal->format('Y-m-d') !== $nowLocal->format('Y-m-d') || $minutes > 720;
+    $overnight = $entryLocal->format('Y-m-d') !== $nowLocal->format('Y-m-d') || (int)$nowLocal->format('H') >= 23;
     $grace = $minutes <= 15;
     $prepaid = $session['payment_status'] === 'PAID_RESERVATION';
     $alreadyPaid = in_array($session['payment_status'], ['PAID', 'PAID_OVERNIGHT', 'BYPASSED'], true);
@@ -19,7 +19,7 @@ function cashierBill(PDO $db, array $session): array {
     $baseFee = $grace ? 0.0 : 30.0;
     $overnightFee = $overnight ? 100.0 : 0.0;
     $parkingFee = ($prepaid || $alreadyPaid || $grace) ? 0.0 :
-        ($vendorCredit ? $overnightFee : $baseFee + $overnightFee);
+        ($overnight ? $overnightFee : ($vendorCredit ? 0.0 : $baseFee));
 
     $query = $db->prepare("SELECT v.violation_id, v.violation_type, v.penalty_amount, v.issued_at,
                                   v.session_id AS source_session_id

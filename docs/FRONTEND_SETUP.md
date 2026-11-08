@@ -67,7 +67,7 @@ The browser and API must use the same host and port. Keep using `127.0.0.1:8080`
 3. Open the browser developer tools if something fails. On the **Network** tab, check requests to `backend/api/endpoints.php`; on the **Console** tab, check JavaScript errors.
 4. For the reservation demo, start the server with `LOCAL_PAYMENTS_ENABLED=1`, sign in as a driver with a registered vehicle, and follow [Local Simulated Payments](LOCAL_SIMULATED_PAYMENTS.md).
 
-The live map and dashboard read the PHP/SQLite application data. The recorded-video scenarios can change that database. `computer_vision/live_vigi.py` sends confirmed exit detections to the PHP API; an eligible exit closes the session and releases its slot, so the cashier exit log and availability update. Entrance detections are still printed only. Follow [Scenario 5 and Live VIGI Camera Setup](SCENARIO5_AND_LIVE_VIGI_SETUP.md) to create the camera token and run both processes.
+The live map and dashboard read the PHP/SQLite application data. Recorded and live gate simulations can change that database. Confirmed live entrance and exit detections reach the PHP API; an eligible exit closes its session and releases the allocated slot. Follow the [Parking Simulation Guide](SECTIONAL_FIRST_SIMULATION.md) for the current flow and camera token setup.
 
 ## Troubleshooting
 
