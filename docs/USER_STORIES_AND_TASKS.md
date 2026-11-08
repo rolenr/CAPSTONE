@@ -4,7 +4,7 @@ This backlog translates the project evaluation into user-focused work items. Tas
 
 ## Live exit update — 2026-11-05
 
-The October 27 scope and verification records below are historical. The live VIGI program now sends confirmed Channel 13 plates to the authenticated PHP exit-event endpoint. The API closes an active session and releases its slot when its payment status is eligible; a cashier plate lookup remains a status check. Scanning the issued entry QR token in Cashier POS also records an eligible departure immediately. Cashiers no longer press a separate departure-confirmation button. The guard still operates the physical barrier manually. These changes passed isolated HTTP checks with a copied database; an on-site moving-vehicle test remains outstanding. See [Scenario 5 and Live VIGI Camera Setup](SCENARIO5_AND_LIVE_VIGI_SETUP.md).
+The October 27 scope and verification records below are historical. For the current recorded and live-gates workflow, see the [Parking Simulation Guide](SECTIONAL_FIRST_SIMULATION.md).
 
 ## Scope decisions
 
@@ -101,7 +101,7 @@ Ran the departure-confirmation endpoint against an isolated temporary SQLite dat
 | **TASK02.2** | Replace hard-coded video paths with command-line options or configuration. | [x] Done | Scenario scripts accept explicit video paths, retain repository video defaults, and stop with an actionable error if a selected file does not exist. |
 | **TASK02.3** | Define a stable detection event format (event type, timestamp, plate/slot, confidence, source video/frame). | [x] Done | The versioned JSON Schema and examples in [DETECTION_EVENT_SCHEMA.md](DETECTION_EVENT_SCHEMA.md) define required fields, types, and validation rules for plate and occupancy event types. |
 | **TASK02.4** | Prevent duplicate state changes when recorded video is replayed against the project database. | [ ] To do | Replaying an entrance detection does not create another active session for the same vehicle; repeated exit detections do not close or release a session twice. |
-| **TASK02.5** | Document setup and expected outputs without claiming live-camera support. | [x] Done | [RECORDED_VIDEO_DEMO.md](RECORDED_VIDEO_DEMO.md) documents dependencies, commands, project database effects, expected behavior, prerequisites, and recorded-video limitations without claiming live-camera support. |
+| **TASK02.5** | Document setup and expected outputs without claiming live-camera support. | [x] Done | Historical recorded-video documentation was consolidated into the [Parking Simulation Guide](SECTIONAL_FIRST_SIMULATION.md). |
 
 **TASK02.1 video and scenario inventory — 2026-10-27**
 

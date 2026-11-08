@@ -27,4 +27,15 @@ if ((float)$bill['tariff']['parking_fee'] !== 0.0 || (float)$bill['tariff']['tot
 }
 $db->exec("UPDATE violations SET status = 'PAID' WHERE violation_id IN (1, 2)");
 if (hasOutstandingVehicleViolations($db, 1)) throw new RuntimeException('Paid citations still block exit.');
+$session['payment_status'] = 'UNPAID';
+$session['entry_time'] = gmdate('Y-m-d H:i:s', time() - 14 * 60);
+$graceBill = cashierBill($db, $session);
+if (!$graceBill['tariff']['is_grace'] || (float)$graceBill['tariff']['parking_fee'] !== 0.0) {
+    throw new RuntimeException('The fifteen-minute grace period was not applied.');
+}
+$session['entry_time'] = gmdate('Y-m-d H:i:s', time() - 26 * 3600);
+$overnightBill = cashierBill($db, $session);
+if (!$overnightBill['tariff']['is_overnight'] || (float)$overnightBill['tariff']['parking_fee'] !== 100.0) {
+    throw new RuntimeException('Overnight parking must cost ₱100 total.');
+}
 echo "Cashier billing tests passed\n";

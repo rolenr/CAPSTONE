@@ -64,11 +64,7 @@ python3 computer_vision/scenario4.py
 python3 computer_vision/scenario5.py
 ```
 
-The scenarios use `backend/database/parking.db` and change live parking records. For video selection, expected outcomes, and limitations, see **[Recorded-Video Guide](docs/RECORDED_VIDEO_DEMO.md)**.
-
-For reusable Scenario 5 entrance/exit clip commands and live VIGI NVR setup, see **[Scenario 5 and Live VIGI Camera Setup](docs/SCENARIO5_AND_LIVE_VIGI_SETUP.md)**.
-
-For the separate sectional bay and 10-minute no-parking monitor, see **[Sectional Occupancy Setup](docs/SECTIONAL_OCCUPANCY_SETUP.md)**.
+The simulations use `backend/database/parking.db` and change parking records. For the current sectional-first recorded and live-gates flows, use the **[Parking Simulation Guide](docs/SECTIONAL_FIRST_SIMULATION.md)**.
 
 ---
 

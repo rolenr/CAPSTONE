@@ -1,10 +1,10 @@
-"""Sectional bay occupancy and timed no-parking monitoring.
+"""Sectional slot localization, vehicle occupancy, and timed enforcement.
 
 The bundled checkpoint recognizes 40 bay IDs, not generic vehicles or empty
 spaces. Configure normalized polygons for each visible slot and no-parking area.
 A separate COCO-style vehicle model is required for vacancy and enforcement.
-This program emits JSON Lines and optional evidence images; it never changes
-parking sessions, slot counts, or fines without a verified vehicle identity.
+The bay checkpoint locates slots; a separate vehicle model decides occupancy.
+Events may be published to the parking API for review and display.
 """
 
 import argparse
@@ -13,6 +13,8 @@ import math
 import sys
 import time
 import uuid
+import os
+from urllib.request import Request, urlopen
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,9 +22,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BAY_WEIGHTS = ROOT / "content/runs/detect/train/weights/best.pt"
 VEHICLE_NAMES = {"car", "truck", "bus", "motorcycle"}
-GRACE_SECONDS = 600.0
+GRACE_SECONDS = 300.0
 MISSING_SECONDS = 3.0
 MIN_STABLE_SAMPLES = 3
+STATIONARY_FRACTION = 0.025
 
 
 def utc_now():
@@ -122,28 +125,19 @@ class OccupancyMonitor:
     def update(self, when, frame_index, bay_hits, vehicles):
         """Return occupancy and enforcement events for one observed frame."""
         events = []
-        # The trained bay-ID classifier can confuse sections in an unfamiliar
-        # recording. With calibrated slot polygons, geometry determines the
-        # slot; any bay-model box inside it is positive vehicle evidence.
-        by_slot = defaultdict(list)
-        for _predicted_name, conf, box in bay_hits:
-            for name, polygon in self.slots.items():
-                if overlaps_polygon(box, polygon):
-                    by_slot[name].append(conf)
+        # Bay detections locate spaces; they never prove that a car is parked.
+        if vehicles is None:
+            return events
         for name, polygon in self.slots.items():
-            vehicle_conf = [conf for _, conf, box in (vehicles or [])
+            vehicle_conf = [conf for _, conf, box in vehicles
                             if overlaps_polygon(box, polygon)]
-            # A bay-ID detection is positive evidence; lack of detection alone
-            # is not evidence of an empty parking space.
-            positive = by_slot[name] + vehicle_conf
+            positive = vehicle_conf
             occupied = bool(positive)
             self.slot_samples[name].append(occupied)
             samples = self.slot_samples[name]
             if len(samples) < MIN_STABLE_SAMPLES or len(set(samples)) != 1:
                 continue
             state = "OCCUPIED" if occupied else "VACANT"
-            if not occupied and vehicles is None:
-                continue
             if self.slot_state.get(name) == state:
                 continue
             self.slot_state[name] = state
@@ -155,10 +149,9 @@ class OccupancyMonitor:
                 "confidence": max(positive) if positive else None,
                 "source": {"video": self.source, "frame_index": frame_index},
                 "slot_number": name, "occupancy_state": state,
-                "method": "bay_or_vehicle_detection" if occupied else "no_vehicle_in_calibrated_slot",
+                "method": "vehicle_in_calibrated_slot" if occupied else "no_vehicle_in_calibrated_slot",
             })
-        if vehicles is not None:
-            events.extend(self._enforce(when, frame_index, vehicles))
+        events.extend(self._enforce(when, frame_index, vehicles))
         return events
 
     def _enforce(self, when, frame_index, vehicles):
@@ -179,19 +172,23 @@ class OccupancyMonitor:
                     key = self.next_key
                     self.next_key += 1
                     tracks[key] = {"first": when, "last": when,
-                                   "center": (x, y), "alerted": False}
+                                   "center": (x, y), "anchor": (x, y), "alerted": False}
                 track = tracks[key]
                 used.add(key)
+                if math.dist((x, y), track["anchor"]) > STATIONARY_FRACTION:
+                    track["first"], track["anchor"], track["alerted"] = when, (x, y), False
                 track["last"], track["center"] = when, (x, y)
                 elapsed = when - track["first"]
-                if elapsed > self.grace_seconds and not track["alerted"]:
+                if elapsed >= self.grace_seconds and not track["alerted"]:
                     track["alerted"] = True
+                    violation_type = "DOUBLE_PARKING" if region.lower().startswith("double") else "DRIVEWAY"
                     events.append({
                         "event_id": str(uuid.uuid4()),
-                        "event_type": "parking.no_parking.overstay",
+                        "event_type": "parking.restricted.overstay",
                         "timestamp": utc_now(),
                         "source": {"video": self.source, "frame_index": frame_index},
-                        "region": region, "local_track_id": key,
+                        "region": region, "track_id": str(key),
+                        "violation_type": violation_type,
                         "duration_seconds": round(elapsed, 2),
                         "confidence": conf, "review_required": True,
                     })
@@ -224,19 +221,94 @@ def annotate(frame, cv2, slots, zones, vehicles):
     return frame
 
 
+def preview_frame(frame, cv2, slots, zones, vehicles, states, label, frame_index, fps):
+    display = annotate(frame.copy(), cv2, slots, zones, vehicles)
+    height, width = display.shape[:2]
+    cv2.rectangle(display, (0, 0), (width, 76), (20, 20, 20), -1)
+    cv2.putText(display, f"SECTIONAL  {label}  {frame_index / fps:.1f}s", (18, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, .7, (255, 255, 255), 2)
+    occupied = sum(state == "OCCUPIED" for state in states.values())
+    vacant = sum(state == "VACANT" for state in states.values())
+    cv2.putText(display, f"Observed: {occupied} occupied | {vacant} vacant | q: stop", (18, 62),
+                cv2.FONT_HERSHEY_SIMPLEX, .55, (255, 255, 255), 1)
+    for name, polygon in slots.items():
+        state = states.get(name)
+        if not state:
+            continue
+        x, y = polygon[0]
+        anchor = (int(x * width), min(height - 8, int(y * height) + 23))
+        color = (0, 0, 255) if state == "OCCUPIED" else (0, 220, 0)
+        cv2.putText(display, state, anchor, cv2.FONT_HERSHEY_SIMPLEX, .43, color, 2)
+    return display
+
+
+def publish_event(event, url, token):
+    payload = json.dumps(event).encode("utf-8")
+    request = Request(url, data=payload, method="POST", headers={
+        "Content-Type": "application/json", "X-Exit-Event-Token": token,
+    })
+    with urlopen(request, timeout=8) as response:
+        result = json.load(response)
+    if not result.get("success"):
+        raise RuntimeError(f"Sectional API rejected event: {result.get('error', 'unknown error')}")
+    return result
+
+
+def read_plates(frame, model, reader, cv2, slots):
+    """Read visible plates inside calibrated bays; no motion gate is applied."""
+    try:
+        from .live_vigi import best_ocr_candidate
+    except ImportError:
+        from live_vigi import best_ocr_candidate
+    height, width = frame.shape[:2]
+    found = {}
+    result = model.predict(frame, conf=.25, imgsz=1280, verbose=False)[0]
+    for box in result.boxes:
+        x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+        crop = frame[max(0, y1):min(height, y2), max(0, x1):min(width, x2)]
+        if crop.size == 0:
+            continue
+        enlarged = cv2.resize(crop, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        confidence, plate = best_ocr_candidate(reader.readtext(
+            enlarged, allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", paragraph=False))
+        if not plate:
+            continue
+        center = ((x1+x2)/(2*width), (y1+y2)/(2*height))
+        for slot, polygon in slots.items():
+            if inside(center, polygon) and confidence > found.get(slot, (0, ""))[0]:
+                found[slot] = (confidence, plate)
+    return found
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", help="Recorded video or image path")
     parser.add_argument("--camera-id", default="section_a")
     parser.add_argument("--config", default="computer_vision/sectional_regions.json")
-    parser.add_argument("--vehicle-model", help="Local generic vehicle YOLO weights; required for no-parking enforcement and reliable vacancy")
+    parser.add_argument("--vehicle-model", default="yolov8n.pt",
+                        help="Local generic vehicle YOLO weights; required for occupied/vacant states")
+    parser.add_argument("--plate-model", help="Optional local plate weights for sectional OCR")
+    parser.add_argument("--scenario-id", default="standalone")
+    parser.add_argument("--session-id", type=int)
+    parser.add_argument("--clip-plate", default="", help="Labeled target vehicle plate in this recording")
+    parser.add_argument("--clip-slot", default="", help="Labeled bay occupied by the target vehicle")
+    parser.add_argument("--event-url", help="Authenticated parking API sectional_event endpoint")
+    parser.add_argument("--event-token", help="Camera-event token; defaults to PARKING_EXIT_EVENT_TOKEN or token file")
     parser.add_argument("--output", default="sectional_events.jsonl")
     parser.add_argument("--evidence-dir", default="sectional_evidence")
     parser.add_argument("--sample-seconds", type=float, default=1.0)
+    parser.add_argument("--max-seconds", type=float, help="Stop after this much source video for a pre-entry snapshot")
+    parser.add_argument("--start-seconds", type=float, default=0.0,
+                        help="Begin replay at this source-video time")
+    parser.add_argument("--preview", action="store_true", help="Show the sectional camera feed with slot and vehicle overlays")
+    parser.add_argument("--preview-label", default="REPLAY", help="Stage name shown in preview window")
+    parser.add_argument("--target-slot", help="Assigned bay to confirm during parking replay")
+    parser.add_argument("--stop-after-occupied-seconds", type=float,
+                        help="Stop after this many continuous video seconds of vehicle occupancy in the target bay")
     parser.add_argument("--imgsz", type=int, default=960,
                         help="Detector input size; default 960 for wide sectional views")
     parser.add_argument("--grace-seconds", type=float, default=GRACE_SECONDS,
-                        help="No-parking allowance; default 600 seconds")
+                        help="Driveway/double-parking allowance; default 300 seconds")
     parser.add_argument("--write-config-template", metavar="PATH")
     parser.add_argument("--save-reference-frame", metavar="PATH",
                         help="Save the first source frame for drawing calibrated polygons")
@@ -253,8 +325,10 @@ def main(argv=None):
     live = bool(args.source and args.source.startswith("rtsp://"))
     if not args.source or (not live and not Path(args.source).is_file()):
         parser.error("--source must point to an existing video/image or an RTSP URL")
-    if args.sample_seconds <= 0 or args.grace_seconds <= 0 or args.imgsz <= 0:
+    if args.sample_seconds <= 0 or args.grace_seconds <= 0 or args.imgsz <= 0 or args.start_seconds < 0 or (args.max_seconds is not None and args.max_seconds <= 0):
         parser.error("--sample-seconds, --grace-seconds, and --imgsz must be positive")
+    if args.stop_after_occupied_seconds is not None and (not args.target_slot or args.stop_after_occupied_seconds <= 0):
+        parser.error("--stop-after-occupied-seconds needs --target-slot and a positive duration")
     if args.save_reference_frame:
         import cv2
         capture = cv2.VideoCapture(args.source)
@@ -268,13 +342,26 @@ def main(argv=None):
         slots, zones = load_config(args.config, args.camera_id, bay_names)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         parser.error(f"invalid config: {exc}")
-    if zones and not args.vehicle_model:
-        parser.error("--vehicle-model is required for no-parking enforcement")
-    if args.vehicle_model and not Path(args.vehicle_model).is_file():
+    if args.target_slot and args.target_slot not in slots:
+        parser.error(f"target bay {args.target_slot} is absent from this camera's regions")
+    if not args.vehicle_model or not Path(args.vehicle_model).is_file():
         parser.error("--vehicle-model must be an existing local weight file")
-    vehicle_model = YOLO(args.vehicle_model) if args.vehicle_model else None
-    if vehicle_model and not (VEHICLE_NAMES & set(vehicle_model.names.values())):
+    vehicle_model = YOLO(args.vehicle_model)
+    if not (VEHICLE_NAMES & set(vehicle_model.names.values())):
         parser.error("vehicle model has no car/truck/bus/motorcycle classes")
+    if args.plate_model and not Path(args.plate_model).is_file():
+        parser.error("--plate-model must be an existing local weight file")
+    plate_model = YOLO(args.plate_model) if args.plate_model else None
+    reader = None
+    if plate_model:
+        import easyocr
+        reader = easyocr.Reader(["en"])
+    event_token = args.event_token or os.environ.get("PARKING_EXIT_EVENT_TOKEN", "")
+    if args.event_url and not event_token:
+        token_path = ROOT / "backend/database/exit_camera_token"
+        event_token = token_path.read_text().strip() if token_path.is_file() else ""
+    if args.event_url and (len(event_token) < 32 or not args.event_url.startswith(("http://127.0.0.1:", "http://localhost:", "https://"))):
+        parser.error("--event-url requires local HTTP or HTTPS and a camera token")
     import cv2
     capture = cv2.VideoCapture(args.source)
     if not capture.isOpened():
@@ -285,49 +372,110 @@ def main(argv=None):
     stride = max(1, round(fps * args.sample_seconds))
     source_label = f"camera:{args.camera_id}" if live else args.source
     monitor = OccupancyMonitor(slots, zones, source_label, args.grace_seconds)
+    plate_history = defaultdict(lambda: deque(maxlen=3))
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     evidence_dir = Path(args.evidence_dir)
-    frame_index = 0
+    frame_index = round(args.start_seconds * fps)
+    if frame_index:
+        capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
     count = 0
+    target_occupied_since = None
+    parking_confirmed = False
+    window = f"Sectional Occupancy - {args.camera_id}"
+    if args.preview:
+        cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window, 1280, 720)
     try:
         with output.open("w") as stream:
             while True:
+                if args.max_seconds is not None and frame_index / fps >= args.max_seconds:
+                    break
                 ok, frame = capture.read()
                 if not ok:
                     break
                 if frame_index % stride:
+                    if args.preview:
+                        cv2.imshow(window, preview_frame(frame, cv2, slots, zones, [],
+                                                          monitor.slot_state, args.preview_label, frame_index, fps))
+                        if cv2.waitKey(max(1, round(1000 / fps))) & 0xFF == ord("q"):
+                            raise KeyboardInterrupt("Sectional preview stopped by operator")
                     frame_index += 1
                     continue
                 height, width = frame.shape[:2]
                 bay_result = bay_model.predict(frame, conf=.5, imgsz=args.imgsz,
                                                verbose=False)[0]
                 bay_hits = predictions(bay_result, width, height, bay_model.names)
-                vehicles = None
-                if vehicle_model:
-                    vehicle_result = vehicle_model.predict(frame, conf=.35,
-                                                           imgsz=args.imgsz, verbose=False)[0]
-                    vehicles = predictions(vehicle_result, width, height,
-                                           vehicle_model.names, VEHICLE_NAMES)
+                vehicle_result = vehicle_model.predict(frame, conf=.35,
+                                                       imgsz=args.imgsz, verbose=False)[0]
+                vehicles = predictions(vehicle_result, width, height,
+                                       vehicle_model.names, VEHICLE_NAMES)
+                plate_reads = read_plates(frame, plate_model, reader, cv2, slots) if plate_model else {}
+                for slot, (_confidence, plate) in plate_reads.items():
+                    plate_history[slot].append(plate)
                 when = time.monotonic() if live else frame_index / fps
                 events = monitor.update(when, frame_index, bay_hits, vehicles)
+                if args.stop_after_occupied_seconds is not None:
+                    present = any(overlaps_polygon(box, slots[args.target_slot]) for _, _, box in vehicles)
+                    if present and target_occupied_since is None:
+                        target_occupied_since = when
+                    elif not present:
+                        target_occupied_since = None
                 for event in events:
-                    if event["event_type"] == "parking.no_parking.overstay":
+                    event.update({"scenario_id": args.scenario_id, "session_id": args.session_id,
+                                  "camera_id": args.camera_id, "frame_index": frame_index,
+                                  "clip_plate": args.clip_plate, "clip_slot": args.clip_slot})
+                    if event["event_type"] == "sectional.slot.observed":
+                        # The bay checkpoint reports localization quality only;
+                        # vehicle detections alone determine occupied/vacant.
+                        slot_hits = [confidence for name, confidence, box in bay_hits
+                                     if name == event["slot_number"] and
+                                     overlaps_polygon(box, slots[name])]
+                        event["slot_localization_confidence"] = max(slot_hits) if slot_hits else None
+                        votes = plate_history[event["slot_number"]]
+                        if len(votes) >= 2 and votes.count(votes[-1]) >= 2:
+                            event["recognized_plate"] = votes[-1]
+                    if event["event_type"] == "parking.restricted.overstay" or event["occupancy_state"] == "OCCUPIED":
                         evidence_dir.mkdir(parents=True, exist_ok=True)
-                        evidence = evidence_dir / f"{args.camera_id}_{event['region']}_{frame_index}.jpg"
+                        label = event.get("region", event.get("slot_number", "event"))
+                        evidence = evidence_dir / f"{args.camera_id}_{label}_{frame_index}.jpg"
                         if not cv2.imwrite(str(evidence),
                                            annotate(frame.copy(), cv2, slots, zones, vehicles)):
                             raise OSError(f"could not write evidence image: {evidence}")
                         event["evidence"] = str(evidence)
                     stream.write(json.dumps(event) + "\n")
                     print(json.dumps(event), flush=True)
+                    if args.event_url:
+                        publish_event(event, args.event_url, event_token)
                     count += 1
+                if (args.stop_after_occupied_seconds is not None and target_occupied_since is not None
+                        and monitor.slot_state.get(args.target_slot) == "OCCUPIED"
+                        and when - target_occupied_since >= args.stop_after_occupied_seconds):
+                    parking_confirmed = True
+                    print(f"Parking confirmed: {args.target_slot} occupied continuously for "
+                          f"{when - target_occupied_since:.1f} video seconds at frame {frame_index}.", flush=True)
+                if args.preview:
+                    cv2.imshow(window, preview_frame(frame, cv2, slots, zones, vehicles,
+                                                      monitor.slot_state, args.preview_label, frame_index, fps))
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        raise KeyboardInterrupt("Sectional preview stopped by operator")
                 frame_index += 1
+                if parking_confirmed:
+                    break
     finally:
         capture.release()
+        if args.preview:
+            cv2.destroyWindow(window)
     print(f"Processed {frame_index} frames; emitted {count} events to {output}.", file=sys.stderr)
+    if args.stop_after_occupied_seconds is not None and not parking_confirmed:
+        print(f"Parking was not confirmed in {args.target_slot} before the clip ended.", file=sys.stderr)
+        return 3
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("Sectional preview stopped by operator.", file=sys.stderr)
+        raise SystemExit(130)

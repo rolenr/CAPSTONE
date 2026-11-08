@@ -395,7 +395,8 @@ function showZoneDetail(zone) {
                 <div class="slot-row">
                     <span>${slot.slot_number}</span>
                     <span class="${slot.is_occupied == 1 ? 'occupied' : 'free'}"></span>
-                    <span>${slot.availability_status || (slot.is_occupied == 1 ? 'Occupied' : 'Free')}${slot.plate_number ? ' &ndash; ' + slot.plate_number : ''}</span>
+                    <span>${slot.availability_status || (slot.is_occupied == 1 ? 'Allocated' : 'Free')}${slot.plate_number ? ' &ndash; ' + slot.plate_number : ''}
+                    <small> · ${zone === 'F' ? `Zone allocation: ${Number(slot.zone_allocated_count || 0)} vehicles` : `Camera: ${safeSectionalText(slot.observed_state || 'NOT_OBSERVED')}`}</small></span>
                 </div>
             `).join('')}
         </div>
@@ -572,6 +573,12 @@ document.getElementById('retryWallet')?.addEventListener('click', checkActiveRes
 document.getElementById('refreshPaymentStatus')?.addEventListener('click', checkActiveReservation);
 
 // ---------------- RESERVATION ----------------
+const bookingSlotInput = document.getElementById('bookingSlot');
+if (bookingSlotInput) {
+    bookingSlotInput.addEventListener('input', () => {
+        bookingSlotInput.value = bookingSlotInput.value.toUpperCase().replace(/[^A-Z0-9-]/g, '');
+    });
+}
 if (reservationForm) {
     reservationForm.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -596,6 +603,12 @@ if (reservationForm) {
         const sDate = document.getElementById('startDate').value;
         const eDate = document.getElementById('endDate').value;
         const adminPaymentExemption = currentUser.role === 'ADMIN' && Boolean(document.getElementById('adminPaymentExemption')?.checked);
+        const requestedSlot = currentUser.role === 'ADMIN'
+            ? (document.getElementById('bookingSlot')?.value || '').trim().toUpperCase() : '';
+        if (requestedSlot && !new RegExp(`^${zone}-[0-9]{2}$`).test(requestedSlot)) {
+            alert(`Choose a bay in Zone ${zone}, such as ${zone}-05.`);
+            return;
+        }
 
         try {
             const response = await apiFetch(`${API_BASE}?action=reserve`, {
@@ -607,6 +620,7 @@ if (reservationForm) {
                     days: days,
                     startDate: sDate,
                     endDate: eDate,
+                    slot_number: requestedSlot,
                     admin_payment_exemption: adminPaymentExemption
                 })
             });
@@ -861,6 +875,54 @@ async function loadAdminAnalytics() {
 }
 
 // --- 3. VIOLATIONS MANAGEMENT TABLE ---
+function safeSectionalText(value) {
+    return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function loadSectionalAlerts() {
+    const table = document.getElementById('sectionalAlertsTable');
+    if (!table) return;
+    try {
+        const response = await apiFetch(`${API_BASE}?action=sectional_alerts`);
+        const data = await response.json();
+        if (!response.ok || !data.success) throw new Error(data.error || 'Unable to load alerts');
+        table.innerHTML = data.alerts.length ? data.alerts.map(a => `
+            <tr>
+                <td>#${Number(a.alert_id)}<br><small>${safeSectionalText(a.status)}</small></td>
+                <td>${safeSectionalText(a.scenario_id)} / ${safeSectionalText(a.region)}</td>
+                <td>${safeSectionalText(a.violation_type)}<br><small>${safeSectionalText(a.details)}</small></td>
+                <td>${a.status === 'PENDING_REVIEW'
+                    ? `<input id="sectionalSession${Number(a.alert_id)}" type="number" min="1" value="${a.session_id ? Number(a.session_id) : ''}" aria-label="Session for alert ${Number(a.alert_id)}" style="width:6rem">`
+                    : safeSectionalText(a.session_id || '—')}</td>
+                <td>${a.evidence ? `<a href="${API_BASE}?action=sectional_evidence&alert_id=${Number(a.alert_id)}" target="_blank" rel="noopener">View image</a>` : 'No image'}</td>
+                <td>${a.status === 'PENDING_REVIEW'
+                    ? `<button class="btn btn-sm btn-success" onclick="reviewSectionalAlert(${Number(a.alert_id)},'CONFIRMED')">Confirm</button>
+                       <button class="btn btn-sm btn-outline" onclick="reviewSectionalAlert(${Number(a.alert_id)},'REJECTED')">Reject</button>`
+                    : safeSectionalText(a.reviewed_by || a.status)}</td>
+            </tr>`).join('') : '<tr><td colspan="6">No sectional alerts.</td></tr>';
+    } catch (error) {
+        table.innerHTML = `<tr><td colspan="6">${safeSectionalText(error.message)}</td></tr>`;
+    }
+}
+
+async function reviewSectionalAlert(alertId, decision) {
+    const raw = document.getElementById(`sectionalSession${alertId}`)?.value || '';
+    const sessionId = raw ? Number(raw) : null;
+    if (raw && (!Number.isInteger(sessionId) || sessionId < 1)) return alert('Enter a valid session ID.');
+    if (!confirm(`${decision === 'CONFIRMED' ? 'Confirm' : 'Reject'} sectional alert #${alertId}?`)) return;
+    try {
+        const response = await apiFetch(`${API_BASE}?action=review_sectional_alert`, {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({alert_id: alertId, decision, session_id: sessionId})
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) throw new Error(data.error || 'Review failed');
+        loadSectionalAlerts();
+        loadAdminViolations();
+        loadAdminAnalytics();
+    } catch (error) { alert(error.message); }
+}
+
 async function loadAdminViolations() {
     const table = document.getElementById('adminViolationsTable');
     if (!table) return;
@@ -1218,6 +1280,51 @@ async function loadAlprLogs() {
 }
 
 // --- 8. INTERACTIVE SLOT MANAGEMENT & OVERRIDES ---
+async function loadSimulationSessions() {
+    const body = document.getElementById('simulationSessionsBody');
+    if (!body) return;
+    try {
+        const response = await apiFetch(`${API_BASE}?action=admin_simulation_sessions`);
+        const data = await response.json();
+        if (!data.success) throw new Error(data.error || 'Unable to load simulation sessions.');
+        body.innerHTML = data.sessions.length ? data.sessions.map(session => `
+            <tr>
+                <td>${Number(session.session_id)}</td>
+                <td>${safeSectionalText(session.scenario_id)}</td>
+                <td>${safeSectionalText(session.plate_number)}</td>
+                <td>${safeSectionalText(session.slot_number)}</td>
+                <td>${safeSectionalText(session.payment_status)}</td>
+                <td><button type="button" class="btn-action" onclick="recoverSimulationSession(${Number(session.session_id)})">Close session</button></td>
+            </tr>`).join('') : '<tr><td colspan="6">No open simulation sessions.</td></tr>';
+    } catch (error) {
+        body.innerHTML = `<tr><td colspan="6">${safeSectionalText(error.message)}</td></tr>`;
+    }
+}
+
+async function recoverSimulationSession(sessionId) {
+    const reason = prompt(`Reason for closing simulation session ${sessionId} without an exit feed:`);
+    if (reason === null) return;
+    if (reason.trim().length < 8) {
+        alert('Enter a reason of at least 8 characters.');
+        return;
+    }
+    if (!confirm(`Close simulation session ${sessionId}? This records a simulation recovery, not a camera-confirmed departure.`)) return;
+    try {
+        const response = await apiFetch(`${API_BASE}?action=admin_close_simulation_session`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: sessionId, reason: reason.trim() })
+        });
+        const data = await response.json();
+        if (!data.success) throw new Error(data.error || 'Unable to close session.');
+        await loadSimulationSessions();
+        loadAdminMap();
+        loadAdminStats();
+        loadAdminAuditLogs();
+    } catch (error) {
+        alert(error.message);
+    }
+}
+
 async function loadAdminMap() {
     const adminMap = document.getElementById('adminMapControls');
     if (!adminMap) return;
@@ -1277,7 +1384,8 @@ function renderFilteredSlots() {
                     <strong>${slot.slot_number}</strong>
                     <div class="slot-plate">${plateDisplay}</div>
                     <p class="status-text ${statusClass}">
-                        ${isOccupied ? 'Occupied' : 'Available'}
+                        ${isOccupied ? 'Allocated' : 'Available'}<br>
+                        <small>${zone === 'F' ? `Zone allocation: ${Number(slot.zone_allocated_count || 0)}` : `Camera: ${safeSectionalText(slot.observed_state || 'NOT_OBSERVED')}`}</small>
                     </p>
                     <button type="button" class="btn-action slot-override-button" aria-label="Mark ${slot.slot_number} ${isOccupied ? 'available' : 'occupied'}" onclick="toggleSlotOverride(${slot.slot_id}, ${isOccupied ? 0 : 1})">
                         Mark ${isOccupied ? 'available' : 'occupied'}
@@ -1477,8 +1585,10 @@ pageSessionReady.then(user => {
     loadAdminStats();
     loadAdminAnalytics();
     loadAdminViolations();
+    loadSectionalAlerts();
     loadAlprLogs();
     loadAdminMap();
+    loadSimulationSessions();
     loadAdminReservations();
     loadAdminRefundQueue();
     loadAdminAccounts();
