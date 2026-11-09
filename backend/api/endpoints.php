@@ -48,9 +48,10 @@ try {
     $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     require_once __DIR__ . '/exit_departure.php';
     require_once __DIR__ . '/cashier_billing.php';
-    require_once __DIR__ . '/maya_reservation_payments.php';
+    require_once __DIR__ . '/simulation_integration.php';
     require_once __DIR__ . '/local_reservation_payments.php';
     paymentDb($db);
+    ensureSimulationSchema($db);
 
     // Upgrade older local databases on first API request without replacing data.
     $accountColumns = array_column($db->query('PRAGMA table_info(accounts)')->fetchAll(PDO::FETCH_ASSOC), 'name');
@@ -66,7 +67,8 @@ try {
 // 3. Define method and action BEFORE running the IF statements
 $method = $_SERVER['REQUEST_METHOD'];
 $action = $_GET['action'] ?? '';
-$cameraEvent = $action === 'exit_camera_event';
+$cameraEvent = in_array($action, ['exit_camera_event','camera_entry_event','sectional_event','simulation_clock',
+    'simulation_occupancy_start','simulation_occupancy_finish','simulation_zone_a_priority_check'], true);
 
 if ($cameraEvent) {
     if ($method !== 'POST') {
@@ -115,9 +117,14 @@ $actionRoles = [
     'set_account_role' => ['ADMIN'],
     'alpr_logs' => ['ADMIN'],
     'toggle_slot' => ['ADMIN'],
+    'admin_simulation_sessions' => ['ADMIN'],
+    'admin_close_simulation_session' => ['ADMIN'],
     'admin_audit_logs' => ['ADMIN'],
     'admin_violations_list' => ['ADMIN'],
     'admin_resolve_violation' => ['ADMIN'],
+    'sectional_alerts' => ['ADMIN'],
+    'sectional_evidence' => ['ADMIN'],
+    'review_sectional_alert' => ['ADMIN'],
     'cashier_lookup' => ['CASHIER', 'ADMIN'],
     'cashier_payment' => ['CASHIER', 'ADMIN'],
     'exit_barrier_clearance' => ['CASHIER', 'ADMIN'],
@@ -202,6 +209,100 @@ function isExitPaymentCleared($paymentStatus, $vendorScanTime = null) {
     return $minutesSinceVendor >= 0 && $minutesSinceVendor <= (20 * 60);
 }
 
+if ($cameraEvent && $action === 'camera_entry_event') {
+    $data = json_decode(file_get_contents('php://input'), true) ?: [];
+    $plate = normalizeLicensePlate($data['plate_number'] ?? '');
+    $entryQr = trim((string)($data['qr_token'] ?? ''));
+    $qrOnly = ($data['qr_only'] ?? false) === true && !isValidLicensePlate($plate) && $entryQr === '';
+    if (!isValidLicensePlate($plate) && $entryQr !== '') {
+        $reserved = $db->prepare("SELECT v.plate_number FROM reservations r
+            JOIN vehicles v ON v.vehicle_id=r.vehicle_id WHERE r.token_id=?
+            AND r.status='ACTIVE' AND r.payment_state IN ('PAID','ADMIN_EXEMPT') LIMIT 1");
+        $reserved->execute([$entryQr]);
+        $plate = normalizeLicensePlate($reserved->fetchColumn() ?: '');
+    }
+    if ($qrOnly) $plate = 'QR_ONLY_' . strtoupper(bin2hex(random_bytes(8)));
+    $observedAt = strtotime((string)($data['observed_at'] ?? ''));
+    $scenarioId = (string)($data['scenario_id'] ?? '');
+    if ((int)($data['channel'] ?? 0) !== 1 || (!$qrOnly && !isValidLicensePlate($plate))
+        || $observedAt === false || abs(time() - $observedAt) > 30
+        || !preg_match('/^[A-Za-z0-9_-]{1,64}$/', $scenarioId)) {
+        http_response_code(400);
+        echo json_encode(['success'=>false,'error'=>'A recent Channel 1 detection, valid plate or reservation QR, and scenario ID are required.']);
+        exit;
+    }
+    try {
+        echo json_encode(simulationEntry($db,$plate,$scenarioId,'ENTRANCE_CAMERA_CHANNEL_1',
+            (string)($data['preferred_slot'] ?? ''),
+            (string)($data['vehicle_color'] ?? 'UNKNOWN'),
+            (float)($data['color_confidence'] ?? 0),
+            (string)($data['allocation_zone'] ?? ''),
+            ($data['reserved_bay_test'] ?? false) === true,
+            (string)($data['clip_slot'] ?? ''), $qrOnly));
+    } catch (Throwable $error) {
+        http_response_code(in_array($error->getCode(),[400,404,409],true) ? $error->getCode() : 500);
+        echo json_encode(['success'=>false,'error'=>$error->getCode() ? $error->getMessage() : 'Unable to record entry.']);
+    }
+    exit;
+}
+
+if ($cameraEvent && $action === 'simulation_clock') {
+    $data = json_decode(file_get_contents('php://input'), true) ?: [];
+    try {
+        $scenarioId = (string)($data['scenario_id'] ?? '');
+        $sessionId = filter_var($data['session_id'] ?? null,FILTER_VALIDATE_INT);
+        if (!$sessionId || !preg_match('/^[A-Za-z0-9_-]{1,64}$/',$scenarioId)) {
+            throw new InvalidArgumentException('Simulation scenario and session are required.',400);
+        }
+        echo json_encode(simulationAdvanceClock($db,$scenarioId,(int)$sessionId,(string)($data['stage'] ?? '')));
+    } catch (Throwable $error) {
+        http_response_code(in_array($error->getCode(),[400,404,409],true) ? $error->getCode() : 500);
+        echo json_encode(['success'=>false,'error'=>$error->getCode() ? $error->getMessage() : 'Unable to advance simulation time.']);
+    }
+    exit;
+}
+
+if ($cameraEvent && $action === 'sectional_event') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    try {
+        if (!is_array($data)) throw new InvalidArgumentException('A JSON event is required.',400);
+        echo json_encode(simulationSectionalEvent($db,$data));
+    } catch (Throwable $error) {
+        http_response_code(in_array($error->getCode(),[400,404,409],true) ? $error->getCode() : 500);
+        echo json_encode(['success'=>false,'error'=>$error->getCode() ? $error->getMessage() : 'Unable to record sectional event.']);
+    }
+    exit;
+}
+
+if ($cameraEvent && $action === 'simulation_zone_a_priority_check') {
+    $data = json_decode(file_get_contents('php://input'),true) ?: [];
+    try {
+        echo json_encode(simulationZoneAPriorityCheck($db,(string)($data['scenario_id'] ?? ''),
+            (int)($data['session_id'] ?? 0),(string)($data['camera_id'] ?? ''),
+            (string)($data['slot_number'] ?? ''),(string)($data['evidence'] ?? ''),
+            (string)($data['clip_plate'] ?? '')));
+    } catch (Throwable $error) {
+        http_response_code(in_array($error->getCode(),[400,404,409],true) ? $error->getCode() : 500);
+        echo json_encode(['success'=>false,'error'=>$error->getCode() ? $error->getMessage() : 'Unable to check Zone A priority.']);
+    }
+    exit;
+}
+
+if ($cameraEvent && in_array($action,['simulation_occupancy_start','simulation_occupancy_finish'],true)) {
+    $data = json_decode(file_get_contents('php://input'),true) ?: [];
+    try {
+        $scenarioId = (string)($data['scenario_id'] ?? '');
+        echo json_encode($action === 'simulation_occupancy_start'
+            ? simulationOccupancyStart($db,$scenarioId,(string)($data['zone'] ?? ''),
+                ($data['persist_results'] ?? false) === true)
+            : simulationOccupancyFinish($db,$scenarioId));
+    } catch (Throwable $error) {
+        http_response_code(in_array($error->getCode(),[400,404,409],true) ? $error->getCode() : 500);
+        echo json_encode(['success'=>false,'error'=>$error->getCode() ? $error->getMessage() : 'Unable to change simulation occupancy.']);
+    }
+    exit;
+}
+
 // A trusted Channel 13 detection is the departure signal. The server still
 // checks the live session and its payment status before changing any records.
 if ($cameraEvent) {
@@ -215,9 +316,10 @@ if ($cameraEvent) {
         exit;
     }
     try {
-        $find = $db->prepare("SELECT ps.session_id, ps.entry_time
+        $find = $db->prepare("SELECT ps.session_id, ps.entry_time,ps.vehicle_color,ps.color_confidence
             FROM parking_sessions ps JOIN vehicles ve ON ve.vehicle_id = ps.vehicle_id
             WHERE UPPER(REPLACE(REPLACE(ve.plate_number, ' ', ''), '-', '')) = ?
+              AND ve.vehicle_type != 'QR_ONLY'
               AND ps.exit_time IS NULL AND ps.location_status = 'PARKED'
             ORDER BY ps.session_id DESC LIMIT 1");
         $find->execute([$plate]);
@@ -227,11 +329,39 @@ if ($cameraEvent) {
         if ($enteredAt === false || $observedAt < $enteredAt) {
             throw new RuntimeException('The detection predates the active parking session.', 409);
         }
-        echo json_encode(recordExitDeparture($db, (int)$session['session_id'], 'ALPR', 'EXIT_CAMERA_CHANNEL_13'));
+        [$exitColor,$exitColorScore] = normalizeObservedColor(
+            $data['vehicle_color'] ?? 'UNKNOWN',$data['color_confidence'] ?? 0);
+        if (strongColorMismatch((string)$session['vehicle_color'],(float)$session['color_confidence'],
+                $exitColor,$exitColorScore)) {
+            $db->prepare("INSERT INTO audit_logs(admin_email,action_type,target_entity,target_id,details)
+                VALUES('EXIT_CAMERA_CHANNEL_13','COLOR_REVIEW','parking_session',?,?)")
+                ->execute([(string)$session['session_id'],
+                    "Entry color {$session['vehicle_color']}; exit color {$exitColor}; QR/staff review required."]);
+            throw new RuntimeException('Vehicle color differs from the entrance record; use staff QR review.', 409);
+        }
+        $pendingWrongBay = $db->prepare("SELECT alert_id FROM sectional_alerts
+            WHERE session_id=? AND violation_type IN ('WRONG_SLOT','ZONE_A_PRIORITY')
+              AND status='PENDING_REVIEW' LIMIT 1");
+        $pendingWrongBay->execute([$session['session_id']]);
+        if ($pendingWrongBay->fetchColumn()) {
+            throw new RuntimeException('A parking eligibility or wrong-bay alert must be reviewed by staff before exit.',409);
+        }
+        $departure = recordExitDeparture($db, (int)$session['session_id'], 'ALPR', 'EXIT_CAMERA_CHANNEL_13');
+        if ($exitColor !== 'UNKNOWN') {
+            $db->prepare("INSERT INTO gate_color_observations(session_id,camera_role,vehicle_color,confidence)
+                VALUES(?,'EXIT',?,?)")->execute([$session['session_id'],$exitColor,$exitColorScore]);
+        }
+        $departure['entry_vehicle_color'] = $session['vehicle_color'];
+        $departure['observed_vehicle_color'] = $exitColor;
+        echo json_encode($departure);
     } catch (PDOException $error) {
         http_response_code(500);
         echo json_encode(['success' => false, 'error' => 'Unable to record exit detection.']);
     } catch (RuntimeException $error) {
+        $db->prepare("INSERT INTO audit_logs(admin_email,action_type,target_entity,target_id,details)
+            VALUES('EXIT_CAMERA_CHANNEL_13','EXIT_CAMERA_DENIED','parking_session',?,?)")
+            ->execute([isset($session['session_id']) ? (string)$session['session_id'] : null,
+                'plate=' . $plate . '; reason=' . $error->getMessage()]);
         http_response_code(in_array($error->getCode(), [404, 409], true) ? $error->getCode() : 500);
         echo json_encode(['success' => false, 'error' => $error->getMessage()]);
     } catch (Throwable $error) {
@@ -369,6 +499,7 @@ if ($method === 'POST' && $action === 'login') {
 
 // --- ROUTE: Live Map True Availability ---
 if ($method === 'GET' && $action === 'map') {
+    ensureSimulationSchema($db);
 
     $stmt = $db->query("
         SELECT
@@ -384,7 +515,21 @@ if ($method === 'GET' && $action === 'map') {
                  WHEN EXISTS (SELECT 1 FROM reservations r WHERE r.slot_id=s.slot_id AND r.status='ACTIVE') THEN 'RESERVED'
                  ELSE 'FREE' END AS availability_status,
             v.plate_number
+            ,CASE WHEN s.zone='F' THEN 'ALLOCATION_ONLY'
+                  ELSE COALESCE((SELECT o.occupancy_state FROM slot_observations o
+                    WHERE o.slot_id=s.slot_id ORDER BY o.observed_at DESC LIMIT 1),'NOT_OBSERVED') END AS observed_state
+            ,CASE WHEN s.zone='F' THEN 'ZONE_ALLOCATION'
+                  ELSE (SELECT o.observed_at FROM slot_observations o
+                    WHERE o.slot_id=s.slot_id ORDER BY o.observed_at DESC LIMIT 1) END AS observed_at
+            ,CASE WHEN s.zone='F' THEN 'UNKNOWN'
+                  ELSE COALESCE((SELECT o.vehicle_color FROM slot_observations o
+                    WHERE o.slot_id=s.slot_id ORDER BY o.observed_at DESC LIMIT 1),'UNKNOWN') END AS observed_color
+            ,CASE WHEN s.zone='F' THEN NULL
+                  ELSE (SELECT o.recognized_plate FROM slot_observations o
+                    WHERE o.slot_id=s.slot_id ORDER BY o.observed_at DESC LIMIT 1) END AS observed_plate
+            ,a.active_parked_count AS zone_allocated_count
         FROM parking_slots s
+        LEFT JOIN spatial_allocation a ON a.zone_id=s.zone
         LEFT JOIN parking_sessions ps
             ON s.slot_id = ps.slot_id AND ps.exit_time IS NULL
         LEFT JOIN vehicles v
@@ -399,6 +544,49 @@ if ($method === 'GET' && $action === 'map') {
         unset($slot);
     }
     echo json_encode($slots);
+    exit;
+}
+
+if ($method === 'GET' && $action === 'sectional_alerts') {
+    ensureSimulationSchema($db);
+    $rows = $db->query("SELECT alert_id,scenario_id,session_id,camera_id,violation_type,region,track_id,
+        evidence,details,status,reviewed_by,reviewed_at,violation_id,created_at
+        FROM sectional_alerts ORDER BY alert_id DESC LIMIT 100")->fetchAll(PDO::FETCH_ASSOC);
+    echo json_encode(['success'=>true,'alerts'=>$rows]);
+    exit;
+}
+
+if ($method === 'GET' && $action === 'sectional_evidence') {
+    ensureSimulationSchema($db);
+    $id = filter_var($_GET['alert_id'] ?? null,FILTER_VALIDATE_INT);
+    $stmt = $db->prepare('SELECT evidence FROM sectional_alerts WHERE alert_id=?');
+    $stmt->execute([$id ?: 0]);
+    $path = $stmt->fetchColumn();
+    $root = realpath(__DIR__ . '/../database/simulation_runs');
+    $file = is_string($path) ? realpath($path) : false;
+    if (!$root || !$file || !str_starts_with($file,$root . DIRECTORY_SEPARATOR)
+        || !is_file($file) || strtolower(pathinfo($file,PATHINFO_EXTENSION)) !== 'jpg') {
+        http_response_code(404);
+        echo json_encode(['error'=>'Evidence image not found.']);
+        exit;
+    }
+    header('Content-Type: image/jpeg');
+    header('Content-Length: ' . filesize($file));
+    readfile($file);
+    exit;
+}
+
+if ($method === 'POST' && $action === 'review_sectional_alert') {
+    $data = json_decode(file_get_contents('php://input'),true) ?: [];
+    try {
+        $id = filter_var($data['alert_id'] ?? null,FILTER_VALIDATE_INT);
+        if (!$id || $id < 1) throw new InvalidArgumentException('A valid alert ID is required.',400);
+        $sessionId = filter_var($data['session_id'] ?? null,FILTER_VALIDATE_INT) ?: null;
+        echo json_encode(simulationReviewAlert($db,$id,(string)($data['decision'] ?? ''),$sessionId,$actorEmail));
+    } catch (Throwable $error) {
+        http_response_code(in_array($error->getCode(),[400,404,409],true) ? $error->getCode() : 500);
+        echo json_encode(['success'=>false,'error'=>$error->getCode() ? $error->getMessage() : 'Unable to review alert.']);
+    }
     exit;
 }
 
@@ -431,6 +619,13 @@ if ($method === 'POST' && $action === 'reserve') {
         exit;
     }
     $zone = $data['zone'] ?? '';
+    $requestedSlot = is_string($data['slot_number'] ?? null) ? strtoupper(trim($data['slot_number'])) : '';
+    if ($requestedSlot !== '' && (!$isAdmin || !preg_match('/^[A-E]-[0-9]{2}$/D', $requestedSlot) ||
+        !is_string($zone) || !str_starts_with($requestedSlot, $zone . '-'))) {
+        http_response_code(403);
+        echo json_encode(['error' => 'An administrator must choose an active bay in the selected zone.']);
+        exit;
+    }
     $startDate = $data['startDate'] ?? '';
     $endDate = $data['endDate'] ?? '';
     $adminExemption = $isAdmin && ($data['admin_payment_exemption'] ?? false) === true;
@@ -465,20 +660,20 @@ if ($method === 'POST' && $action === 'reserve') {
         exit;
     }
 
-    // VIP SECURITY CHECK
+    // Zone A priority eligibility check.
     $accountCheck = $db->prepare("SELECT is_vip FROM accounts WHERE UPPER(REPLACE(REPLACE(plate_number, ' ', ''), '-', '')) = ?");
     $accountCheck->execute([$plate]);
     $account = $accountCheck->fetch(PDO::FETCH_ASSOC);
 
     $is_vip = ($isAdmin || ($account && (int)$account['is_vip'] === 1)) ? 1 : 0;
 
-    if ($zone === 'E' && $is_vip !== 1) {
+    if ($zone === 'A' && $is_vip !== 1) {
         http_response_code(403);
-        echo json_encode(["error" => "Zone E reservations are restricted to VIP accounts only."]);
+        echo json_encode(["error" => "Zone A reservations are restricted to VIP / PWD priority accounts."]);
         exit;
     }
 
-    // END VIP SECURITY CHECK
+    // End Zone A priority eligibility check.
 
     try {
         paymentBegin($db);
@@ -514,16 +709,16 @@ if ($method === 'POST' && $action === 'reserve') {
         }
 
         $slot = $db->prepare("SELECT s.slot_id, s.slot_number FROM parking_slots s
-            WHERE s.zone = ? AND s.is_active = 1 AND s.is_occupied = 0 AND NOT EXISTS (
+            WHERE s.zone = ? AND (? = '' OR s.slot_number = ?) AND s.is_active = 1 AND s.is_occupied = 0 AND NOT EXISTS (
                 SELECT 1 FROM reservations r WHERE r.slot_id = s.slot_id AND r.status IN ('ACTIVE','PENDING_PAYMENT')
             ) ORDER BY s.slot_number LIMIT 1");
-        $slot->execute([$zone]);
+        $slot->execute([$zone,$requestedSlot,$requestedSlot]);
         $slot = $slot->fetch(PDO::FETCH_ASSOC);
 
         if (!$slot) {
             $db->rollBack();
             http_response_code(409);
-            echo json_encode(["error" => "No available slots in Zone " . $zone]);
+            echo json_encode(["error" => $requestedSlot !== '' ? "Bay {$requestedSlot} is unavailable." : "No available slots in Zone " . $zone]);
             exit;
         }
 
@@ -548,7 +743,7 @@ if ($method === 'POST' && $action === 'reserve') {
         $actionType = $adminExemption ? 'ADMIN_PAYMENT_EXEMPTION' : 'RESERVATION_PAYMENT_HOLD';
         $details = "Reservation #{$reservationId} for {$plate}: Zone {$zone}, Slot {$slot['slot_number']}, {$startDate} to {$endDate}.";
         if ($adminExemption) $details .= ' Administrator explicitly waived online payment.';
-        if ($isAdmin && $zone === 'E' && (!$account || !(int)$account['is_vip'])) $details .= ' Administrator overrode the VIP restriction.';
+        if ($isAdmin && $zone === 'A' && (!$account || !(int)$account['is_vip'])) $details .= ' Administrator overrode the Zone A priority restriction.';
         $audit = $db->prepare('INSERT INTO audit_logs (admin_email, action_type, target_entity, target_id, details) VALUES (?, ?, ?, ?, ?)');
         $audit->execute([$actorEmail, $actionType, 'reservation', $reservationId, $details]);
         $fee = $adminExemption ? 0.0 : $amountCentavos / 100;
@@ -681,7 +876,7 @@ if (($method === 'GET' || $method === 'POST') && $action === 'vendor_lookup') {
             JOIN vehicles ve ON ps.vehicle_id = ve.vehicle_id
             LEFT JOIN parking_slots sl ON ps.slot_id = sl.slot_id
             WHERE (ps.entry_token = ? OR UPPER(REPLACE(REPLACE(ve.plate_number, ' ', ''), '-', '')) = ?)
-              AND ps.location_status = 'PARKED'
+              AND ps.location_status = 'PARKED' AND ps.exit_time IS NULL
             ORDER BY ps.session_id DESC LIMIT 1
         ");
         $stmt->execute([$inputVal, $cleanPlate]);
@@ -751,7 +946,7 @@ if ($method === 'POST' && $action === 'vendor_validate') {
             JOIN vehicles ve ON ps.vehicle_id = ve.vehicle_id
             LEFT JOIN parking_slots sl ON ps.slot_id = sl.slot_id
             WHERE (ps.entry_token = ? OR UPPER(REPLACE(REPLACE(ve.plate_number, ' ', ''), '-', '')) = ?)
-              AND ps.location_status = 'PARKED'
+              AND ps.location_status = 'PARKED' AND ps.exit_time IS NULL
             ORDER BY ps.session_id DESC LIMIT 1
         ");
         $stmt->execute([$inputVal, $cleanPlate]);
@@ -895,7 +1090,7 @@ if ($method === 'GET' && $action === 'vendor_active_vehicles') {
             FROM parking_sessions ps
             JOIN vehicles ve ON ps.vehicle_id = ve.vehicle_id
             JOIN parking_slots sl ON ps.slot_id = sl.slot_id
-            WHERE ps.location_status = 'PARKED'
+            WHERE ps.location_status = 'PARKED' AND ps.exit_time IS NULL
             ORDER BY ps.entry_time DESC
         ");
         $vehicles = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -1011,7 +1206,7 @@ if ($method === 'GET' && $action === 'admin_stats') {
         $totalSlots = (int)$db->query("SELECT COUNT(*) FROM parking_slots WHERE is_active = 1")->fetchColumn();
         $occupiedSlots = (int)$db->query("SELECT COUNT(*) FROM parking_slots WHERE is_active = 1 AND is_occupied = 1")->fetchColumn();
         $unavailableSlots = (int)$db->query("SELECT COUNT(*) FROM parking_slots s WHERE s.is_active=1 AND (s.is_occupied=1 OR EXISTS (SELECT 1 FROM reservations r WHERE r.slot_id=s.slot_id AND r.status IN ('ACTIVE','PENDING_PAYMENT')))")->fetchColumn();
-        $pendingViolations = (int)$db->query("SELECT COUNT(*) FROM violations WHERE status != 'PAID'")->fetchColumn();
+        $pendingViolations = (int)$db->query("SELECT COUNT(*) FROM violations WHERE status = 'UNPAID' AND COALESCE(penalty_amount,0)>0")->fetchColumn();
         $activeReservations = (int)$db->query("SELECT COUNT(*) FROM reservations WHERE status = 'ACTIVE' AND payment_state IN ('PAID','ADMIN_EXEMPT')")->fetchColumn();
 
         // Calculate Revenue from sessions
@@ -1085,13 +1280,13 @@ if ($method === 'GET' && $action === 'admin_analytics') {
         // Violations Revenue
         $violationStats = $db->query("
             SELECT
-                COUNT(*) as total_count,
-                COALESCE(SUM(penalty_amount), 0) as total_imposed,
+                SUM(CASE WHEN status IN ('PAID','UNPAID') AND penalty_amount>0 THEN 1 ELSE 0 END) as total_count,
+                COALESCE(SUM(CASE WHEN status IN ('PAID','UNPAID') THEN penalty_amount ELSE 0 END), 0) as total_imposed,
                 COALESCE(SUM(CASE WHEN status = 'PAID' THEN penalty_amount ELSE 0 END), 0) as total_collected,
-                COALESCE(SUM(CASE WHEN status != 'PAID' THEN penalty_amount ELSE 0 END), 0) as outstanding,
-                COALESCE(AVG(penalty_amount), 0) as avg_fine,
+                COALESCE(SUM(CASE WHEN status = 'UNPAID' THEN penalty_amount ELSE 0 END), 0) as outstanding,
+                COALESCE(AVG(CASE WHEN status IN ('PAID','UNPAID') AND penalty_amount>0 THEN penalty_amount END), 0) as avg_fine,
                 SUM(CASE WHEN status = 'PAID' THEN 1 ELSE 0 END) as paid_count,
-                SUM(CASE WHEN status != 'PAID' THEN 1 ELSE 0 END) as unpaid_count
+                SUM(CASE WHEN status = 'UNPAID' AND penalty_amount>0 THEN 1 ELSE 0 END) as unpaid_count
             FROM violations
         ")->fetch(PDO::FETCH_ASSOC);
 
@@ -1138,11 +1333,11 @@ if ($method === 'GET' && $action === 'admin_analytics') {
 
         // 2. Capacity Heatmap by Zone
         $zonesMeta = [
-            'A' => ['name' => 'Zone A', 'role' => 'PWD / Priority Accessible', 'target' => 'Monitored Overhead'],
+            'A' => ['name' => 'Zone A', 'role' => 'VIP / PWD Priority', 'target' => 'Monitored Overhead'],
             'B' => ['name' => 'Zone B', 'role' => 'Standard Monitored Paved', 'target' => 'Monitored Overhead'],
             'C' => ['name' => 'Zone C', 'role' => 'Standard Monitored Paved', 'target' => 'Monitored Overhead'],
             'D' => ['name' => 'Zone D', 'role' => 'Standard Monitored Paved', 'target' => 'Monitored Overhead'],
-            'E' => ['name' => 'Zone E', 'role' => 'VIP & Reserved Paved', 'target' => 'Monitored Overhead'],
+            'E' => ['name' => 'Zone E', 'role' => 'Standard Monitored Paved', 'target' => 'Monitored Overhead'],
             'F' => ['name' => 'Zone F', 'role' => 'Rough Road Overflow Section', 'target' => 'Unmonitored Perimeter']
         ];
 
@@ -1345,8 +1540,8 @@ if ($method === 'GET' && $action === 'admin_refund_queue') {
         v.plate_number FROM reservation_payments p
         JOIN reservations r ON r.reservation_id=p.reservation_id
         JOIN vehicles v ON v.vehicle_id=r.vehicle_id
-        WHERE p.refund_status IN ('STAFF_REVIEW','STAFF_ATTENTION','REQUESTED','REVIEWING')
-           OR p.status IN ('CHECKOUT_UNKNOWN','CREATING')
+        WHERE p.provider='LOCAL' AND (p.refund_status IN ('STAFF_REVIEW','STAFF_ATTENTION','REQUESTED','REVIEWING')
+           OR p.status IN ('CHECKOUT_UNKNOWN','CREATING'))
         ORDER BY p.updated_at DESC")->fetchAll(PDO::FETCH_ASSOC);
     echo json_encode(['success'=>true,'refunds'=>$rows]);
     exit;
@@ -1363,24 +1558,20 @@ if ($method === 'POST' && $action === 'admin_request_refund') {
             WHERE p.reservation_id=? AND p.status='PAID'");
         $find->execute([$id]);
         $payment = $find->fetch(PDO::FETCH_ASSOC);
-        if (!$payment || !in_array($payment['provider'], ['MAYA','LOCAL'], true) || $payment['status'] !== 'CANCELLED' || $payment['refund_status'] !== 'STAFF_REVIEW') {
+        if (!$payment || $payment['provider'] !== 'LOCAL' || $payment['status'] !== 'CANCELLED' || $payment['refund_status'] !== 'STAFF_REVIEW') {
             $db->rollBack(); http_response_code(409); echo json_encode(['error'=>'This booking is not awaiting staff-reviewed refund.']); exit;
         }
         $db->prepare("UPDATE reservation_payments SET refund_status='REVIEWING',updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?")->execute([$id]);
         paymentAudit($db, $actorEmail, 'REFUND_APPROVED', $id, 'Staff approved full refund request.');
         $db->commit();
         try {
-            if ($payment['provider'] === 'LOCAL') {
-                $db->prepare("UPDATE reservation_payments SET refund_status='SUCCEEDED',refund_id=?,updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?")->execute(['SIM_REFUND_' . $id,$id]);
-                paymentAudit($db,$actorEmail,'SIMULATED_REFUND',(int)$id,'Demo refund completed; no funds moved.');
-                echo json_encode(['success'=>true,'message'=>'Simulated refund completed. No money moved.']); exit;
-            }
-            $db->prepare("UPDATE reservation_payments SET refund_status='STAFF_ATTENTION',updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?")->execute([$id]);
-            echo json_encode(['success'=>true,'message'=>'Refund approved for staff handling in Maya Manager. Record the void/refund there and reconcile before closing this case.']);
+            $db->prepare("UPDATE reservation_payments SET refund_status='SUCCEEDED',refund_id=?,updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?")->execute(['SIM_REFUND_' . $id,$id]);
+            paymentAudit($db,$actorEmail,'SIMULATED_REFUND',(int)$id,'Demo refund completed; no funds moved.');
+            echo json_encode(['success'=>true,'message'=>'Simulated refund completed. No money moved.']); exit;
         } catch (Throwable $e) {
             $db->prepare("UPDATE reservation_payments SET refund_status='STAFF_ATTENTION',updated_at=CURRENT_TIMESTAMP WHERE reservation_id=?")->execute([$id]);
             paymentAudit($db, 'SYSTEM', 'REFUND_FAILED', $id, substr($e->getMessage(),0,300));
-            http_response_code(502); echo json_encode(['error'=>'Refund review failed. Review in Maya Manager.']);
+            http_response_code(502); echo json_encode(['error'=>'Simulated refund failed. Review this booking in Admin.']);
         }
     } catch (Throwable $e) {
         if ($db->inTransaction()) $db->rollBack();
@@ -1598,6 +1789,30 @@ if ($method === 'GET' && $action === 'alpr_logs') {
 }
 
 // --- ROUTE: Admin Manual Slot Toggle (Override) ---
+if ($method === 'GET' && $action === 'admin_simulation_sessions') {
+    ensureSimulationSchema($db);
+    $rows = $db->query("SELECT ps.session_id,ss.scenario_id,v.plate_number,s.slot_number,s.zone,
+            ps.payment_status,ps.entry_time,s.is_occupied
+        FROM parking_sessions ps JOIN simulation_sessions ss ON ss.session_id=ps.session_id
+        JOIN vehicles v ON v.vehicle_id=ps.vehicle_id JOIN parking_slots s ON s.slot_id=ps.slot_id
+        WHERE ps.exit_time IS NULL AND ps.location_status='PARKED'
+        ORDER BY ps.session_id DESC")->fetchAll(PDO::FETCH_ASSOC);
+    echo json_encode(['success'=>true,'sessions'=>$rows]);
+    exit;
+}
+
+if ($method === 'POST' && $action === 'admin_close_simulation_session') {
+    $data = json_decode(file_get_contents('php://input'), true) ?: [];
+    $id = filter_var($data['session_id'] ?? null, FILTER_VALIDATE_INT);
+    try {
+        echo json_encode(closeSimulationSession($db,$id ?: 0,trim((string)($data['reason'] ?? '')),$actorEmail));
+    } catch (Throwable $error) {
+        http_response_code(in_array($error->getCode(),[400,404,409],true) ? $error->getCode() : 500);
+        echo json_encode(['success'=>false,'error'=>$error->getMessage()]);
+    }
+    exit;
+}
+
 if ($method === 'POST' && $action === 'toggle_slot') {
     $data = json_decode(file_get_contents('php://input'), true);
     $slotId = $data['slot_id'] ?? null;
@@ -1617,6 +1832,12 @@ if ($method === 'POST' && $action === 'toggle_slot') {
         $slot = $slotInfo->fetch(PDO::FETCH_ASSOC);
 
         if ($slot) {
+            $active = $db->prepare("SELECT 1 FROM parking_sessions WHERE slot_id=? AND exit_time IS NULL
+                AND location_status='PARKED' LIMIT 1");
+            $active->execute([$slotId]);
+            if ($active->fetchColumn()) {
+                throw new RuntimeException('An open parking session uses this bay. Close that session through exit or simulation recovery first.', 409);
+            }
             $stmt = $db->prepare("UPDATE parking_slots SET is_occupied = ? WHERE slot_id = ? AND is_active = 1");
             $stmt->execute([$isOccupied, $slotId]);
             // Sync spatial_allocation count
@@ -1638,9 +1859,10 @@ if ($method === 'POST' && $action === 'toggle_slot') {
 
         $db->commit();
         echo json_encode(["success" => true]);
-    } catch (PDOException $e) {
+    } catch (Throwable $e) {
         $db->rollBack();
-        echo json_encode(["error" => "Failed to update slot status: " . $e->getMessage()]);
+        http_response_code(in_array($e->getCode(),[400,404,409],true) ? $e->getCode() : 500);
+        echo json_encode(["error" => $e->getMessage()]);
     }
     exit;
 }
@@ -1766,16 +1988,19 @@ if ($method === 'GET' && $action === 'cashier_lookup') {
         $stmt = $db->prepare("
             SELECT ps.session_id, ps.vehicle_id, ps.slot_id, ps.entry_time, ps.total_fee,
                    ps.payment_status, ps.location_status, ps.vendor_scan_time, ps.staff_id,
+                   ps.entry_token,ps.vehicle_color,ps.color_confidence,
                    ve.plate_number, ve.owner_name,
                    sl.slot_number, sl.zone
             FROM parking_sessions ps
             JOIN vehicles ve ON ps.vehicle_id = ve.vehicle_id
             JOIN parking_slots sl ON ps.slot_id = sl.slot_id
             WHERE ps.exit_time IS NULL
-              AND (UPPER(REPLACE(REPLACE(ve.plate_number, ' ', ''), '-', '')) = ? OR ps.session_id = ? OR ps.entry_token = ?)
+              AND (UPPER(REPLACE(REPLACE(ve.plate_number, ' ', ''), '-', '')) = ?
+                   OR ps.session_id = ? OR ps.entry_token = ?
+                   OR (ve.vehicle_type = 'QR_ONLY' AND ve.plate_number = ?))
             ORDER BY ps.session_id DESC LIMIT 1
         ");
-        $stmt->execute([$plateQuery, $query, $query]);
+        $stmt->execute([$plateQuery, $query, $rawQuery, $query]);
         $session = $stmt->fetch(PDO::FETCH_ASSOC);
 
         if (!$session) {
@@ -1842,11 +2067,7 @@ if ($method === 'POST' && $action === 'cashier_payment') {
         $parkingTotal = (float)$session['total_fee'] + ($parkingCents + $lostCents) / 100;
         $up = $db->prepare('UPDATE parking_sessions SET total_fee = ?, payment_status = ?, staff_id = ? WHERE session_id = ?');
         $up->execute([$parkingTotal, $status, $actorEmail, $sessionId]);
-        $fineUpdate = $db->prepare("UPDATE violations SET status = 'PAID' WHERE violation_id = ? AND status = 'UNPAID'");
-        foreach ($bill['tariff']['violations'] as $violation) {
-            $fineUpdate->execute([$violation['violation_id']]);
-            if ($fineUpdate->rowCount() !== 1) throw new RuntimeException('A citation changed before payment was recorded.', 409);
-        }
+        $settledViolations = settleCashierViolations($db, $bill['tariff']['violations']);
         $audit = $db->prepare("INSERT INTO audit_logs (admin_email, action_type, target_entity, target_id, details)
                                VALUES (?, 'CASHIER_PAYMENT', 'parking_session', ?, ?)");
         $details = 'Cash received: PHP ' . number_format($dueCents / 100, 2) .
@@ -1857,7 +2078,10 @@ if ($method === 'POST' && $action === 'cashier_payment') {
         $audit->execute([$actorEmail, $sessionId, $details]);
         $db->commit();
         echo json_encode(['success' => true, 'session_id' => $sessionId, 'plate_number' => $session['plate_number'],
-                          'status' => 'CLEARED', 'amount_paid' => $dueCents / 100,
+                          'status' => 'CLEARED', 'payment_status' => $status,
+                          'violations_settled' => $settledViolations,
+                          'clear_to_exit' => isExitPaymentCleared($status, $session['vendor_scan_time']),
+                          'amount_paid' => $dueCents / 100,
                           'message' => 'Payment cleared. The exit camera or issued QR can record departure.']);
     } catch (Throwable $error) {
         if ($db->inTransaction()) $db->rollBack();
@@ -1911,6 +2135,7 @@ if ($method === 'POST' && $action === 'exit_barrier_clearance') {
                 JOIN vehicles ve ON ps.vehicle_id = ve.vehicle_id
                 JOIN parking_slots sl ON ps.slot_id = sl.slot_id
                 WHERE UPPER(REPLACE(REPLACE(ve.plate_number, ' ', ''), '-', '')) = ?
+                  AND ve.vehicle_type != 'QR_ONLY'
                   AND ps.exit_time IS NULL AND ps.location_status = 'PARKED'
                 ORDER BY ps.session_id DESC LIMIT 1
             ");
@@ -1938,6 +2163,7 @@ if ($method === 'POST' && $action === 'exit_barrier_clearance') {
             // Session IDs and plate numbers are not credentials for this path.
             $stmt = $db->prepare("
                 SELECT ps.session_id, ps.vehicle_id, ps.slot_id, ps.total_fee, ps.payment_status, ps.entry_token,
+                       ps.vehicle_color,ps.color_confidence,
                        ps.vendor_scan_time, ps.location_status,
                        ve.plate_number, sl.slot_number, sl.zone
                 FROM parking_sessions ps
@@ -1960,10 +2186,30 @@ if ($method === 'POST' && $action === 'exit_barrier_clearance') {
                 ]);
                 exit;
             }
+            if ($session['vehicle_color'] !== 'UNKNOWN' && ($data['color_confirmed'] ?? null) !== true) {
+                $logClearanceAttempt('NOT_CLEARED',$session['payment_status'],'entry_color_not_reviewed',$session['session_id']);
+                http_response_code(409);
+                echo json_encode(['success'=>false,'clearance_allowed'=>false,'decision'=>'NOT_CLEARED',
+                    'vehicle_color'=>$session['vehicle_color'],
+                    'error'=>'Compare the vehicle with the entrance color before recording QR exit.']);
+                exit;
+            }
         } else {
             http_response_code(400);
             $logClearanceAttempt('NOT_CLEARED', 'UNKNOWN', 'unsupported_clearance_method');
             echo json_encode(["success" => false, "clearance_allowed" => false, "decision" => "NOT_CLEARED", "error" => "Unsupported clearance method."]);
+            exit;
+        }
+
+        $pendingWrongBay = $db->prepare("SELECT alert_id FROM sectional_alerts
+            WHERE session_id=? AND violation_type IN ('WRONG_SLOT','ZONE_A_PRIORITY')
+              AND status='PENDING_REVIEW' LIMIT 1");
+        $pendingWrongBay->execute([$session['session_id']]);
+        if ($pendingWrongBay->fetchColumn()) {
+            $logClearanceAttempt('NOT_CLEARED',$session['payment_status'],'wrong_bay_review_pending',$session['session_id']);
+            http_response_code(409);
+            echo json_encode(['success'=>false,'clearance_allowed'=>false,'decision'=>'NOT_CLEARED',
+                'error'=>'A parking eligibility or wrong-bay alert must be reviewed by staff before exit.']);
             exit;
         }
 

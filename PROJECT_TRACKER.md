@@ -49,9 +49,8 @@ CAPSTONE/
 ├── computer_vision/            # Edge vision, YOLO detection & OCR inference
 │   ├── best.pt                 # YOLOv8 weights for vehicle detection & lane localization
 │   ├── entrance-feed-best1.pt  # Fine-tuned YOLO weights for gatehouse ALPR
-│   ├── scenario3.py            # Scenario 3: Gate entrance detection & slot assignment
-│   ├── scenario4.py            # Scenario 4: Exit detection, clearance & fee auditing
 │   ├── scenario5.py            # Scenario 5: Full closed-loop cycle simulation
+│   ├── models/sectional_occupancy/ # Trained sectional bay model and training reports
 │   └── simulation_videos/      # Recorded edge camera test footage (.mp4)
 │
 └── docs/                       # Project documentation & institutional records
@@ -163,7 +162,7 @@ CAPSTONE/
 ### F. Computer Vision, Sectional Occupancy & Model Training (`computer_vision/`)
 | Component / Pipeline | Description | Status | Target Deliverable / Proposal Alignment |
 | :--- | :--- | :---: | :--- |
-| **Sectional Occupancy Detection Model** | Custom YOLOv8n model trained across 40 physical parking bays (Zones A–E) achieving 98.89% mAP@0.5 and 0.96 peak F1 score | `COMPLETED (content/runs/detect/train/)` | Section 5.5.6 Spatial Allocation & Overhead Telemetry |
+| **Sectional Occupancy Detection Model** | Custom YOLOv8n model trained across 40 physical parking bays (Zones A–E) achieving 98.89% mAP@0.5 and 0.96 peak F1 score | `COMPLETED (computer_vision/models/sectional_occupancy/)` | Section 5.5.6 Spatial Allocation & Overhead Telemetry |
 | **Sectional Occupancy Rules Engine** | Standalone `sectional_occupancy.py` observes calibrated bays; allocation policy and database integration remain pending | `PARTIAL` | Section 5.5.6 Spatial Allocations |
 | **Automated Infraction Enforcement** | Standalone monitor emits evidence-backed review alerts after a vehicle remains in a mapped no-parking area for more than 10 minutes; identity matching and fines remain pending | `PARTIAL` | Section 5.4.1 Compliance & Enforcement Matrix |
 | **Entrance ALPR Accuracy Optimization** | Preprocessing, CLAHE contrast adjustment, multi-frame confidence aggregation, and glare reduction for entrance camera | `OPTIMIZATION REQUIRED` | Section 5.3 Gatehouse Optical Recognition |
@@ -249,7 +248,7 @@ gantt
 ## 4. Revision History
 * **2026-11-03 (Xendit sandbox reservations)**: New prepaid bookings create a 10-minute hold and a Xendit Test Mode Payment Session. A callback token plus server-to-server session and payment verification gates paid passes; the expiry worker cancels/observes remote sessions before releasing slots, and late paid bookings request a full refund. Added Xendit reconciliation, staff-reviewed refunds, provider-tagged payment rows, sandbox tests, and a setup guide with expected outputs. Legacy PayMongo rows remain tagged and are not converted to paid Xendit records. A pre-existing PayMongo `CREATING` hold requires staff reconciliation. Live keys are rejected; a real Xendit end-to-end test awaits user-owned test credentials and webhook configuration.
 * **2026-10-27 (Update 11)**: Changed exit handling to a clearance decision for manual guard operation. The API now checks active parked sessions, allows `PAID`, `BYPASSED`, `PAID_OVERNIGHT`, and `PAID_RESERVATION`, and allows `PAID_VENDOR` only within its 20-minute window. QR fallback accepts only the issued entry token. Approved and denied checks record the authenticated operator, timestamp, method, outcome, and status/reason in the audit trail without storing raw QR tokens. Ten isolated API checks passed for allowed/denied statuses, plate mismatch, unknown token, and session-ID-as-QR rejection; sessions remained parked. A cashier/admin departure-confirmation route now requires the latest approved clearance, rechecks payment eligibility, records the physical departure, frees the slot, updates zone occupancy, and audits the confirmation. Removed the simulated barrier actuation and emergency override from the cashier screen.
-* **2026-10-23 (Update 10)**: Evaluated and ingested custom YOLOv8n Sectional Occupancy detection model artifacts (`content/runs/detect/train/`). Model features 40 discrete bay classes (`A-01` through `E-07`), achieving **98.89% mAP@0.5**, **89.73% mAP@0.5:0.95**, and **0.96 peak F1 score** at 0.784 confidence threshold. Validated zero-overfitting loss curves and prepared pipeline for live sectional rules testing.
+* **2026-10-23 (Update 10)**: Evaluated and ingested custom YOLOv8n Sectional Occupancy detection model artifacts (now under `computer_vision/models/sectional_occupancy/`). Model features 40 discrete bay classes (`A-01` through `E-07`), achieving **98.89% mAP@0.5**, **89.73% mAP@0.5:0.95**, and **0.96 peak F1 score** at 0.784 confidence threshold. Validated zero-overfitting loss curves and prepared pipeline for live sectional rules testing.
 * **2026-10-20 (Update 9)**: Refined Admin console navigation hierarchy & brand accents in `frontend/admin.html` and `frontend/css/style.css`:
   - Removed station identifier (`PARK-MNL-01`) and `Online Port 8080` status indicator from the left sidebar for a minimalist corporate aesthetic.
   - Relocated System Portals navigation (`Administration`, `Cashier POS`, `Tenant Validator`, `Live Map & Wallet`, `Reserve Bay`, `Violations Tracker`) to the top navigation header (`.main-topbar`), providing instant 1-click cross-portal switching.

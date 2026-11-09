@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "notes": "Zone C bay polygons remain active. The driveway polygon spans the visible roadway in front of all six bays; vehicle ground position separates lane obstruction from parked-bay occupancy. Confirm its boundary in the preview before staff review.",
+  "cameras": {
+    "simulation_zone_c_violation": {
+      "slots": {
+        "C-01": [
+          [
+            0.04,
+            0.44
+          ],
+          [
+            0.21,
+            0.44
+          ],
+          [
+            0.21,
+            0.68
+          ],
+          [
+            0.04,
+            0.68
+          ]
+        ],
+        "C-02": [
+          [
+            0.22,
+            0.44
+          ],
+          [
+            0.34,
+            0.44
+          ],
+          [
+            0.34,
+            0.68
+          ],
+          [
+            0.22,
+            0.68
+          ]
+        ],
+        "C-03": [
+          [
+            0.35,
+            0.44
+          ],
+          [
+            0.46,
+            0.44
+          ],
+          [
+            0.46,
+            0.68
+          ],
+          [
+            0.35,
+            0.68
+          ]
+        ],
+        "C-04": [
+          [
+            0.47,
+            0.44
+          ],
+          [
+            0.58,
+            0.44
+          ],
+          [
+            0.58,
+            0.68
+          ],
+          [
+            0.47,
+            0.68
+          ]
+        ],
+        "C-05": [
+          [
+            0.59,
+            0.44
+          ],
+          [
+            0.7,
+            0.44
+          ],
+          [
+            0.7,
+            0.68
+          ],
+          [
+            0.59,
+            0.68
+          ]
+        ],
+        "C-06": [
+          [
+            0.71,
+            0.44
+          ],
+          [
+            0.83,
+            0.44
+          ],
+          [
+            0.83,
+            0.68
+          ],
+          [
+            0.71,
+            0.68
+          ]
+        ]
+      },
+      "no_parking_zones": {
+        "driveway_zone_c": [
+          [
+            0.015,
+            0.655
+          ],
+          [
+            0.985,
+            0.655
+          ],
+          [
+            0.985,
+            0.93
+          ],
+          [
+            0.015,
+            0.93
+          ]
+        ]
+      }
+    }
+  }
+}

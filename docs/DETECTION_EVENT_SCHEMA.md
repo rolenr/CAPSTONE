@@ -40,7 +40,7 @@ Entry plate detection:
   "plate_number": "ABC1234",
   "confidence": 0.94,
   "source": {
-    "video": "computer_vision/simulation_videos/Entry Fortuner - Day (walk-in).mp4",
+    "video": "computer_vision/simulation_videos/ENTRANCE_XPANDER.mov",
     "frame_index": 128
   }
 }

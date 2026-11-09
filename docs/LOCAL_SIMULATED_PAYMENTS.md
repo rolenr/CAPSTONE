@@ -20,7 +20,7 @@ php -S 127.0.0.1:8080 backend/router.php
 PHP 8.x Development Server (http://127.0.0.1:8080) started
 ```
 
-The `export` and PHP server must run in the same terminal. This switch only enables the local simulator; it is not a gateway key. No ngrok, HTTPS tunnel, webhook, Maya/Xendit account, API key, or payment dashboard is needed.
+The `export` and PHP server must run in the same terminal. This switch only enables the local simulator; it is not a gateway key. No external payment account, API key, webhook, or payment dashboard is needed.
 
 Open [http://127.0.0.1:8080/frontend/login.html](http://127.0.0.1:8080/frontend/login.html). Sign in with a driver account that has a registered vehicle. The credentials in the repository's Quickstart section can be used on the supplied development database.
 
@@ -67,9 +67,9 @@ cd /Users/ridzrgt/Documents/GitHub/CAPSTONE/CAPSTONE
 php backend/api/expire_reservation_holds.php
 ```
 
-**Expected result:** Expired local holds become `EXPIRED`, have no QR token, and release their slots. The worker can also report unresolved records from older Maya or Xendit experiments; those remote-provider holds are kept separate and are not automatically released by this local simulator.
+**Expected result:** Expired local holds become `EXPIRED`, have no QR token, and release their slots. Historical non-local holds are not changed by the local expiry worker.
 
-If the reservation page shows an expired hold from Maya or Xendit, it is a historical provider record, not a local checkout. The page labels it **Expired hold · provider review** and explains whether a checkout session was saved. No pass was issued. It remains unresolved until staff checks that old provider record; an administrator can use a different plate in the booking form to continue a local demo without replacing the old hold.
+If the reservation page shows an old non-local provider hold, it is not a local checkout. It remains unresolved for staff review; no local demo pass is issued for it.
 
 ## 5. Review the records and demo refunds
 
@@ -99,5 +99,5 @@ The test uses an in-memory database and fake payment outcomes. It does not creat
 
 - Keep the simulator enabled only while you want local demo checkouts. Stop the PHP server with `Ctrl+C`; in a later shell, do not export `LOCAL_PAYMENTS_ENABLED=1` unless you want it enabled again.
 - Use `http://127.0.0.1:8080` for the full local flow. Do not expose this simulation URL through ngrok or use it to accept actual payments.
-- Existing Maya and Xendit records are retained for history and reconciliation; expired PayMongo records remain in the database for audit. This change does not cancel those providers' pending checkouts or mark their bookings paid.
+- Historical provider records remain in the existing database for audit. The local simulator does not cancel or mark those bookings paid.
 - The simulator tests the product flow and server-side reservation state. It does not verify a bank, acquiring connection, real OTP, card authentication, or payment-provider reconciliation.

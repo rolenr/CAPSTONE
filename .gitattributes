@@ -1,1 +1,3 @@
 computer_vision/simulation_videos/SectOcc_Sample1.mp4 filter=lfs diff=lfs merge=lfs -text
+computer_vision/simulation_videos/*.mp4 filter=lfs diff=lfs merge=lfs -text
+computer_vision/simulation_videos/*.mov filter=lfs diff=lfs merge=lfs -text

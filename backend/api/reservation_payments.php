@@ -19,12 +19,6 @@ function paymentDb(PDO $db): void {
     if (!in_array('provider', $paymentColumns, true)) {
         $db->exec("ALTER TABLE reservation_payments ADD COLUMN provider TEXT NOT NULL DEFAULT 'PAYMONGO'");
     }
-    $db->exec("CREATE TABLE IF NOT EXISTS xendit_webhook_events (
-        event_id TEXT PRIMARY KEY, event_type TEXT NOT NULL,
-        processed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
-    $db->exec("CREATE TABLE IF NOT EXISTS maya_webhook_events (
-        event_id TEXT PRIMARY KEY, event_type TEXT NOT NULL,
-        processed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
     $db->exec("CREATE INDEX IF NOT EXISTS idx_reservations_hold ON reservations(status, expiry_time)");
     // Old ACTIVE records have no verified payment. Expire only dated, unfulfilled ones.
     $legacy = $db->query("SELECT reservation_id FROM reservations WHERE status='ACTIVE'

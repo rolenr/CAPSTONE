@@ -74,6 +74,10 @@
                     </div>
 
                     <div class="invoice-row">
+                        <span>Entrance camera color</span>
+                        <strong id="invVehicleColor">Unknown</strong>
+                    </div>
+                    <div class="invoice-row">
                         <span>Entry Timestamp</span>
                         <strong id="invEntryTime">—</strong>
                     </div>
@@ -275,9 +279,9 @@
                 const isPaid = v.payment_status === 'PAID' || v.payment_status === 'PAID_RESERVATION';
                 const statusDot = isPaid ? 'var(--success)' : 'var(--warning)';
                 return `
-                    <button type="button" class="parked-chip-btn" onclick="selectParkedVehicle('${v.plate_number}')">
+                    <button type="button" class="parked-chip-btn" onclick="selectParkedVehicle(${Number(v.session_id)})">
                         <span style="width: 6px; height: 6px; border-radius: 50%; background: ${statusDot};"></span>
-                        <code>${v.plate_number}</code>
+                        <code>${v.plate_number.startsWith('QR_ONLY_') ? 'Unreadable plate · QR issued' : v.plate_number}</code>
                         <span style="color: var(--text-muted); font-size: 0.68rem;">Zone ${v.zone}-${v.slot_number}</span>
                     </button>
                 `;
@@ -287,8 +291,8 @@
         }
     }
 
-    function selectParkedVehicle(plate) {
-        document.getElementById('lookupQuery').value = plate;
+    function selectParkedVehicle(sessionId) {
+        document.getElementById('lookupQuery').value = String(sessionId);
         document.getElementById('cashierLookupForm').dispatchEvent(new Event('submit'));
     }
 
@@ -323,7 +327,11 @@
         document.getElementById('posEmptyState').style.display = 'none';
         document.getElementById('invoiceDetailsCard').style.display = 'block';
 
-        document.getElementById('invPlate').textContent = s.plate_number;
+        const qrOnly = s.plate_number.startsWith('QR_ONLY_');
+        document.getElementById('invPlate').textContent = qrOnly ? 'Unreadable plate · QR issued' : s.plate_number;
+        document.getElementById('invVehicleColor').textContent =
+            s.vehicle_color && s.vehicle_color !== 'UNKNOWN'
+                ? s.vehicle_color.charAt(0) + s.vehicle_color.slice(1).toLowerCase() : 'Unknown';
         document.getElementById('invSlot').textContent = `Zone ${s.zone} · Slot ${s.slot_number}`;
         document.getElementById('invEntryTime').textContent = formatPhtDateTime(s.entry_time);
         document.getElementById('invDuration').textContent = `${d.human} (${d.minutes} mins)`;
@@ -365,7 +373,7 @@
         updateTotalDue();
 
         // Stage the plate for a status check. The QR must be scanned separately.
-        document.getElementById('alprLivePlate').textContent = s.plate_number;
+        document.getElementById('alprLivePlate').textContent = qrOnly ? 'READY' : s.plate_number;
         document.getElementById('qrFallbackInput').value = '';
     }
 
@@ -426,16 +434,24 @@
             const data = await response.json();
 
             if (data.success) {
-                alert(`Payment recorded for ${data.plate_number}. The exit camera will record departure when it confirms this plate.`);
+                const qrOnly = data.plate_number.startsWith('QR_ONLY_');
+                const fineMessage = Number(data.violations_settled || 0) > 0
+                    ? ` ${data.violations_settled} violation${data.violations_settled === 1 ? '' : 's'} marked PAID. Clear to exit.`
+                    : '';
+                alert(qrOnly
+                    ? `Payment recorded.${fineMessage} Scan the issued entry QR in the exit fallback panel to record departure.`
+                    : `Payment recorded for ${data.plate_number}.${fineMessage} The exit camera will record departure when it confirms this plate.`);
                 loadActiveParkedChips();
                 loadRecentExits();
                 document.getElementById('cashTendered').value = '';
                 document.getElementById('cashierLookupForm').dispatchEvent(new Event('submit'));
 
                 // Stage the plate for a separate exit clearance check.
-                document.getElementById('alprLivePlate').textContent = data.plate_number;
-                document.getElementById('alprConfScore').textContent = 'Ready to check';
-                document.getElementById('barrierFeedbackMsg').textContent = `Payment recorded for ${data.plate_number}. Check the active session before the guard operates the barrier.`;
+                document.getElementById('alprLivePlate').textContent = qrOnly ? 'READY' : data.plate_number;
+                document.getElementById('alprConfScore').textContent = qrOnly ? 'Scan entry QR' : 'Ready to check';
+                document.getElementById('barrierFeedbackMsg').textContent = qrOnly
+                    ? `Payment recorded.${fineMessage} Scan the issued entry QR in the fallback panel before opening the barrier.`
+                    : `Payment recorded for ${data.plate_number}.${fineMessage} Check the active session before the guard operates the barrier.`;
             } else {
                 alert(data.error || 'Payment failed.');
                 if (response.status === 409) document.getElementById('cashierLookupForm').dispatchEvent(new Event('submit'));
@@ -490,6 +506,27 @@
             alert('Please scan the issued entry QR token.');
             return;
         }
+        if (!currentSession || currentSession.session.entry_token !== token) {
+            try {
+                const lookup = await apiFetch(`${API_BASE}?action=cashier_lookup&query=${encodeURIComponent(token)}`);
+                const stay = await lookup.json();
+                if (!stay.success || !stay.session || stay.session.entry_token !== token) {
+                    alert(stay.error || 'No active session matches this entry QR token.');
+                    return;
+                }
+                currentSession = stay;
+                document.getElementById('lookupQuery').value = token;
+                renderInvoice(stay);
+                document.getElementById('qrFallbackInput').value = token;
+            } catch (error) {
+                alert('Could not look up the entry QR token.');
+                return;
+            }
+        }
+        const entryColor = currentSession.session.vehicle_color || 'UNKNOWN';
+        const colorConfirmed = entryColor === 'UNKNOWN' ||
+            confirm(`Entrance camera recorded ${entryColor.toLowerCase()}. Does the vehicle appear to match?`);
+        if (!colorConfirmed) return;
 
 
         try {
@@ -499,6 +536,7 @@
                 body: JSON.stringify({
                     method: 'QR_FALLBACK',
                     token_or_session: token,
+                    color_confirmed: entryColor !== 'UNKNOWN',
 
                 })
             });

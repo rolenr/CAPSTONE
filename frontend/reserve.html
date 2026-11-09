@@ -80,6 +80,11 @@
                     <input type="text" id="bookingPlate" data-license-plate-input minlength="6" maxlength="7" pattern="[A-Za-z]{3}[0-9]{3,4}" placeholder="e.g. ABC1234" autocapitalize="characters" aria-describedby="bookingPlateHelp">
                     <small class="field-help" id="bookingPlateHelp">Book for your linked vehicle or enter another plate: three letters followed by three or four digits, without spaces or hyphens.</small>
                 </div>
+                <div class="form-group">
+                    <label for="bookingSlot">Specific bay (optional, admin only)</label>
+                    <input type="text" id="bookingSlot" pattern="[A-E]-[0-9]{2}" maxlength="4" placeholder="D-05" autocapitalize="characters" aria-describedby="bookingSlotHelp">
+                    <small class="field-help" id="bookingSlotHelp">For the Section D recording, choose Zone D and enter D-05. Leave blank for normal zone allocation.</small>
+                </div>
                 <label class="checkbox-label" for="adminPaymentExemption">
                     <input type="checkbox" id="adminPaymentExemption">
                     Explicit admin payment exemption (audited)
@@ -89,11 +94,11 @@
             <div class="form-group">
                 <label for="zoneSelect">Destination Zone</label>
                 <select id="zoneSelect" required>
-                    <option value="A">Zone A (Standard Bay &bull; Fast Main Gate Access)</option>
+                    <option value="A">Zone A (VIP / PWD Priority Access)</option>
                     <option value="B">Zone B (Standard Bay &bull; Central Lane)</option>
                     <option value="C">Zone C (Standard Bay &bull; East Perimeter)</option>
                     <option value="D">Zone D (Standard Bay &bull; West Perimeter)</option>
-                    <option value="E">Zone E (VIP &amp; Priority Access Only)</option>
+                    <option value="E">Zone E (Standard Bay &bull; Monitored Paved)</option>
                 </select>
             </div>
 
