@@ -58,3 +58,15 @@ function hasOutstandingVehicleViolations(PDO $db, int $vehicleId): bool {
     $query->execute([$vehicleId]);
     return $query->fetchColumn() !== false;
 }
+
+/** Settle the exact citations included in the locked cashier invoice. */
+function settleCashierViolations(PDO $db, array $violations): int {
+    $update = $db->prepare("UPDATE violations SET status = 'PAID' WHERE violation_id = ? AND status = 'UNPAID'");
+    foreach ($violations as $violation) {
+        $update->execute([(int)$violation['violation_id']]);
+        if ($update->rowCount() !== 1) {
+            throw new RuntimeException('A citation changed before payment was recorded.', 409);
+        }
+    }
+    return count($violations);
+}

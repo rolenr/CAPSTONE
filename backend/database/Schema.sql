@@ -49,6 +49,8 @@ CREATE TABLE parking_sessions (
     vendor_scan_time DATETIME,
     staff_id TEXT,
     exit_method TEXT,
+    vehicle_color TEXT NOT NULL DEFAULT 'UNKNOWN',
+    color_confidence REAL,
     FOREIGN KEY(vehicle_id) REFERENCES vehicles(vehicle_id),
     FOREIGN KEY(slot_id) REFERENCES parking_slots(slot_id)
 );
@@ -84,18 +86,6 @@ CREATE TABLE reservation_payments (
     paid_at TEXT,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(reservation_id) REFERENCES reservations(reservation_id)
-);
-
-CREATE TABLE xendit_webhook_events (
-    event_id TEXT PRIMARY KEY,
-    event_type TEXT NOT NULL,
-    processed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE maya_webhook_events (
-    event_id TEXT PRIMARY KEY,
-    event_type TEXT NOT NULL,
-    processed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_reservations_hold ON reservations(status, expiry_time);

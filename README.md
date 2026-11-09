@@ -49,22 +49,14 @@ These credentials are for the local demo quick-fill controls. The PHP router and
 
 The live map uses `frontend/images/parking-lot-mapv2.png`. Active slot counts are A=9, B=7, C=6, D=7, E=10, and F=30. For an existing database created before map v2, run `python3 backend/database/update_map_v2_slots.py`. The migration preserves historical sessions by retiring nine old slot rows and moves active assignments from A-10 to A-09 and B-09 to B-07. It can be run again safely when the map inventory changes.
 
-Reservation checkout currently uses a **local payment simulator**. It holds a slot for 10 minutes and issues a demo pass only after the server records the successful simulation. No payment provider, real card, OTP SMS, or funds are involved. Follow [Local Simulated Payments](docs/LOCAL_SIMULATED_PAYMENTS.md) for setup, test scenarios, and expected output. Maya remains available as an alternative sandbox integration. Xendit remains only to reconcile an unresolved historical checkout.
+Reservation checkout uses a **local payment simulator**. It holds a slot for 10 minutes and issues a demo pass only after the server records the successful simulation. No real card or funds are involved. Follow [Local Simulated Payments](docs/LOCAL_SIMULATED_PAYMENTS.md) for setup, test scenarios, and expected output.
 
 ### 3. Run Computer Vision Simulations
-Ensure Python 3.9+ is installed with the required dependencies (`opencv-python`, `easyocr`, `ultralytics`):
-```bash
-# Scenario 3: Entrance detection & dynamic slot assignment
-python3 computer_vision/scenario3.py
-
-# Scenario 4: Exit detection & payment clearance
-python3 computer_vision/scenario4.py
-
-# Scenario 5: Full closed-loop cycle simulation
-python3 computer_vision/scenario5.py
-```
+Ensure Python 3.9+ is installed with the required dependencies (`opencv-python`, `easyocr`, `ultralytics`). Run the current sectional-first simulation with the recorded business-rule commands in the guides below. `scenario5.py` remains available for its separate closed-loop test when supplied with matching gate clips.
 
 The simulations use `backend/database/parking.db` and change parking records. For the current sectional-first recorded and live-gates flows, use the **[Parking Simulation Guide](docs/SECTIONAL_FIRST_SIMULATION.md)**.
+For the 26 recorded business-rule runs, use the **[Recorded Business-Rule Commands](docs/RECORDED_BUSINESS_RULE_RUNS.md)**.
+For physical VIGI NVR channel setup and live gate operation, use the **[Live VIGI Setup Guide](docs/LIVE_VIGI_SETUP.md)**.
 
 ---
 

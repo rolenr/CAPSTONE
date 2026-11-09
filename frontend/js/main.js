@@ -12,7 +12,7 @@ function normalizeLicensePlateInput(value) {
 
 function normalizePlateOrTokenInput(value) {
     const input = String(value || '').trim();
-    if (/^QR_/i.test(input)) return input.toUpperCase().replace(/\s+/g, '');
+    if (/^QR_/i.test(input)) return input.replace(/\s+/g, '');
     return normalizeLicensePlateInput(input);
 }
 
@@ -512,7 +512,7 @@ function renderPaymentPending(data) {
         : `Zone ${data.zone}, slot ${data.slot} · ₱${Number(data.fee).toFixed(2)} · ${data.start_date} to ${data.end_date}`;
     if (reservationFormContainer) reservationFormContainer.style.display = currentUser.role === 'ADMIN' && legacyUnresolved ? 'block' : 'none';
     const link = document.getElementById('resumeCheckoutLink');
-    if (data.checkout_url && (/^\/frontend\/demo-checkout\.html\?session=local_[a-f0-9]{48}$/.test(data.checkout_url) || /^https:\/\/payments-web-sandbox\.paymaya\.com\//.test(data.checkout_url))) {
+    if (data.checkout_url && /^\/frontend\/demo-checkout\.html\?session=local_[a-f0-9]{48}$/.test(data.checkout_url)) {
         link.href = data.checkout_url;
         link.hidden = false;
     } else link.hidden = true;
@@ -593,9 +593,9 @@ if (reservationForm) {
 
         const zone = document.getElementById('zoneSelect').value;
 
-        // STRICT VIP VALIDATION CHECK - Intercepts non-VIP users instantly (Admins possess universal VIP clearance)
-        if (zone === 'E' && !currentUser.isVIP && currentUser.role !== 'ADMIN') {
-            alert("Error: Zone E reservations are restricted to VIP accounts only.");
+        // Zone A is reserved for VIP / PWD priority vehicles; admins may override.
+        if (zone === 'A' && !currentUser.isVIP && currentUser.role !== 'ADMIN') {
+            alert("Zone A reservations are restricted to VIP / PWD priority accounts.");
             return; // Stops the form from proceeding to the backend
         }
 
@@ -1385,7 +1385,7 @@ function renderFilteredSlots() {
                     <div class="slot-plate">${plateDisplay}</div>
                     <p class="status-text ${statusClass}">
                         ${isOccupied ? 'Allocated' : 'Available'}<br>
-                        <small>${zone === 'F' ? `Zone allocation: ${Number(slot.zone_allocated_count || 0)}` : `Camera: ${safeSectionalText(slot.observed_state || 'NOT_OBSERVED')}`}</small>
+                        <small>${zone === 'F' ? `Zone allocation: ${Number(slot.zone_allocated_count || 0)}` : `Camera: ${safeSectionalText(slot.observed_state || 'NOT_OBSERVED')}${slot.observed_color && slot.observed_color !== 'UNKNOWN' ? ` · ${safeSectionalText(slot.observed_color.toLowerCase())}` : ''}${slot.observed_plate ? ` · OCR ${safeSectionalText(slot.observed_plate)}` : ''}`}</small>
                     </p>
                     <button type="button" class="btn-action slot-override-button" aria-label="Mark ${slot.slot_number} ${isOccupied ? 'available' : 'occupied'}" onclick="toggleSlotOverride(${slot.slot_id}, ${isOccupied ? 0 : 1})">
                         Mark ${isOccupied ? 'available' : 'occupied'}
@@ -1594,9 +1594,11 @@ pageSessionReady.then(user => {
     loadAdminAccounts();
     loadAdminAuditLogs();
 
-    // Auto-refresh stats & ALPR feed every 30 seconds for live gate monitoring
+    // Refresh payment and violation status when Cashier settles a citation in another tab.
     setInterval(() => {
         loadAdminStats();
         loadAlprLogs();
+        loadAdminViolations();
+        loadSectionalAlerts();
     }, 30000);
 });

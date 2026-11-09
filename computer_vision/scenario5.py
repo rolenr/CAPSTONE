@@ -119,7 +119,8 @@ def _recognize_recording(frames, detector, feed_type, latest, lock, stop,
                     break
 
 
-def process_video_feed(video_path, model_path, window_name, feed_type="exit", preview=True):
+def process_video_feed(video_path, model_path, window_name, feed_type="exit", preview=True,
+                       vehicle_model_path=None, return_observation=False):
     """Analyze recorded frames in order, independent of CPU inference speed."""
     import cv2
     import easyocr
@@ -128,7 +129,9 @@ def process_video_feed(video_path, model_path, window_name, feed_type="exit", pr
     if feed_type not in ("entrance", "exit"):
         raise ValueError("feed_type must be 'entrance' or 'exit'")
     print(f"[VISION PIPELINE]: Analyzing recorded {feed_type} feed: {video_path}...", flush=True)
-    detector = PlateDetector(feed_type, YOLO(model_path), easyocr.Reader(["en"]), cv2)
+    vehicle_model = YOLO(str(vehicle_model_path)) if vehicle_model_path else None
+    detector = PlateDetector(feed_type, YOLO(model_path), easyocr.Reader(["en"]), cv2,
+                             vehicle_model=vehicle_model)
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         cap.release()
@@ -169,6 +172,11 @@ def process_video_feed(video_path, model_path, window_name, feed_type="exit", pr
     if not confirmed:
         print(f"[VISION PIPELINE]: No confirmed {feed_type} plate after {analyzed} analyzed frames "
               f"({frame_index} decoded frames).", flush=True)
+    if return_observation:
+        color, score = ((detector.confirmed_colors.get(confirmed) if confirmed else None)
+                        or (detector.color_observer.for_single_vehicle()
+                            if detector.color_observer else ("UNKNOWN", 0.0)))
+        return {"plate": confirmed, "vehicle_color": color, "color_confidence": score}
     return confirmed
 
 
@@ -213,11 +221,11 @@ def run_scenario_5_closed_loop(entrance_video=None, exit_video=None):
             {
                 "entry_video": (
                     "Recorded video of a reserved customer arriving at the entrance.",
-                    os.path.join(video_dir, "RegularCustomer - Reservation (Entry and Exit).mp4"),
+                    os.path.join(video_dir, "ENTRANCE_XPANDER.mov"),
                 ),
                 "exit_video": (
                     "Recorded video of a vehicle approaching the exit.",
-                    os.path.join(video_dir, "nissanExit.mp4"),
+                    os.path.join(video_dir, "EXIT_XPANDER.mov"),
                 ),
             },
         )
@@ -231,9 +239,12 @@ def run_scenario_5_closed_loop(entrance_video=None, exit_video=None):
     init_db()
     
     # Dynamic resolution for model weights & video with fallback
-    entrance_weights = os.path.join(SCRIPT_DIR, "entrance-feed-best1.pt")
+    # Keep recorded Scenario 5 aligned with the detector used by the current
+    # recorded and live-gate simulation flows. The entrance-specific legacy
+    # weights miss the FD car in the newly recorded gate angle.
+    entrance_weights = os.path.join(SCRIPT_DIR, "best.pt")
     if not os.path.exists(entrance_weights):
-        entrance_weights = r"R:\Capstone\entrance-feed-best1.pt"
+        entrance_weights = r"R:\Capstone\best.pt"
     
     exit_weights = os.path.join(SCRIPT_DIR, "best.pt")
     if not os.path.exists(exit_weights):

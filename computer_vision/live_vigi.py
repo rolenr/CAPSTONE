@@ -14,6 +14,7 @@ Press q in either preview window, or Ctrl+C in the terminal, to stop. Use
 """
 
 import argparse
+import getpass
 import json
 import os
 import queue
@@ -34,6 +35,10 @@ try:
     from .plate_utils import normalize_license_plate
 except ImportError:
     from plate_utils import normalize_license_plate
+try:
+    from .vehicle_color import GateColorObserver
+except ImportError:
+    from vehicle_color import GateColorObserver
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -49,7 +54,7 @@ OCR_TWO_READ_CONFIDENCE = 0.90
 ENTRANCE_MOTION_FRACTION = 0.035
 EXIT_MOTION_FRACTION = 0.08
 PLATE_OBSERVATION_SECONDS = 6.0
-LETTER_FIXES = str.maketrans({"0": "O", "1": "I", "2": "Z", "5": "S", "6": "G", "8": "B"})
+LETTER_FIXES = str.maketrans({"0": "O", "1": "I", "5": "S", "6": "G", "8": "B"})
 DIGIT_FIXES = str.maketrans({"B": "8", "G": "6", "I": "1", "L": "1", "O": "0", "S": "5", "Z": "2"})
 
 
@@ -82,10 +87,26 @@ def configuration():
 def normalize_ocr_plate(value):
     """Correct common letter/digit swaps only where the plate format requires it."""
     text = normalize_license_plate(value)
-    if len(text) not in (6, 7):
-        return None
-    plate = text[:3].translate(LETTER_FIXES) + text[3:].translate(DIGIT_FIXES)
-    return plate if PLATE_PATTERN.fullmatch(plate) else None
+    candidates = [text]
+    # EasyOCR sometimes absorbs a plate border/reflection as one edge symbol.
+    # Permit a single edge trim only when it produces the exact local plate
+    # format, rather than accepting arbitrary partial substrings.
+    if len(text) == 8:
+        candidates.extend((text[:-1], text[1:]))
+    elif len(text) == 9:
+        candidates.append(text[1:-1])
+    for candidate in candidates:
+        if len(candidate) not in (6, 7):
+            continue
+        # Edge-trimmed OCR must still contain three visible letters. A missing
+        # leading letter plus an extra trailing border must not become a
+        # plausible plate by converting the first numeric digit into Z.
+        if candidate != text and not candidate[:3].isalpha():
+            continue
+        plate = candidate[:3].translate(LETTER_FIXES) + candidate[3:].translate(DIGIT_FIXES)
+        if PLATE_PATTERN.fullmatch(plate):
+            return plate
+    return None
 
 
 def best_ocr_candidate(reads):
@@ -147,12 +168,14 @@ def has_entrance_motion(history):
 class PlateDetector:
     """Scenario 5's ALPR rules, with state scoped to one camera."""
 
-    def __init__(self, role, model, reader, cv2, image_size=960):
+    def __init__(self, role, model, reader, cv2, image_size=960, vehicle_model=None):
         self.role = role
         self.model = model
         self.reader = reader
         self.cv2 = cv2
         self.image_size = image_size
+        self.color_observer = GateColorObserver(vehicle_model, cv2) if vehicle_model else None
+        self.confirmed_colors = {}
         self.track_history = defaultdict(
             lambda: {
                 "centers": deque(maxlen=8), "areas": deque(maxlen=8),
@@ -198,53 +221,84 @@ class PlateDetector:
         return strong_motion >= max(minimum_motion, 0.08)
 
     def _read_plate(self, crop, padded_crop):
-        """Return the best (OCR confidence, plate) from crop variants."""
+        """Read the whole plate from tight and context-padded crops."""
         options = {
             "allowlist": "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
             "paragraph": False,
         }
-        scale = min(4.0, max(1.0, 280.0 / crop.shape[1]))
-        enlarged = self.cv2.resize(
-            crop, None, fx=scale, fy=scale, interpolation=self.cv2.INTER_CUBIC
-        ) if scale > 1.0 else crop
-        best = best_ocr_candidate(self.reader.readtext(enlarged, **options))
-        if best[0] >= OCR_STRONG_CONFIDENCE:
-            return best
+        if crop.size == 0:
+            return 0.0, None
 
-        # Night scenes can leave the characters dark beside bright headlights.
-        # Work on the detected plate only; enhancing the whole frame would also
-        # brighten glare and change the tracker's input.
-        gray = self.cv2.cvtColor(enlarged, self.cv2.COLOR_BGR2GRAY)
-        contrast = self.cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
-        best = max(best, best_ocr_candidate(self.reader.readtext(contrast, **options)))
-        if best[0] >= OCR_STRONG_CONFIDENCE:
-            return best
+        candidates = []
+        # Entrance views are often angled and the plate detector may clip the
+        # first or last character. Read both the tight detection and its padded
+        # context on every frame, so a plausible partial read cannot suppress
+        # a more complete read from the same image.
+        sources = [padded_crop, crop] if padded_crop.size else [crop]
+        enlarged_sources = []
+        for source in sources:
+            scale = min(5.0, max(1.0, 420.0 / source.shape[1]))
+            enlarged = self.cv2.resize(
+                source, None, fx=scale, fy=scale,
+                interpolation=self.cv2.INTER_CUBIC if scale > 1 else self.cv2.INTER_LINEAR,
+            ) if scale > 1.0 else source
+            enlarged_sources.append(enlarged)
+            candidates.append(best_ocr_candidate(self.reader.readtext(enlarged, **options)))
 
-        # Local thresholding can separate characters from a plate illuminated
-        # unevenly by headlights or the camera's night light.
-        binary = self.cv2.adaptiveThreshold(
-            self.cv2.GaussianBlur(gray, (3, 3), 0), 255,
-            self.cv2.ADAPTIVE_THRESH_GAUSSIAN_C, self.cv2.THRESH_BINARY, 31, 9,
-        )
-        best = max(best, best_ocr_candidate(self.reader.readtext(binary, **options)))
-        if best[1] or padded_crop.size == 0:
-            return best
+        if len(candidates) == 1:
+            tight = candidates[0]
+            padded = (0.0, None)
+        else:
+            padded, tight = candidates[:2]
+        if padded[1] and tight[1] == padded[1] and padded[0] >= OCR_STRONG_CONFIDENCE:
+            return padded
 
-        # A wider crop is useful only when the detector clipped a character.
-        scale = min(4.0, max(1.0, 280.0 / padded_crop.shape[1]))
-        enlarged = self.cv2.resize(
-            padded_crop, None, fx=scale, fy=scale, interpolation=self.cv2.INTER_CUBIC
-        ) if scale > 1.0 else padded_crop
-        return best_ocr_candidate(self.reader.readtext(enlarged, **options))
+        # Spend extra OCR work only when the base and padded crops disagree or
+        # both fail. CLAHE and sharpening help glare, shadows, and motion blur.
+        if not tight[1] or not padded[1] or tight[1] != padded[1]:
+            source = enlarged_sources[-1]
+            gray = (self.cv2.cvtColor(source, self.cv2.COLOR_BGR2GRAY)
+                    if source.ndim == 3 else source)
+            contrast = self.cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+            candidates.append(best_ocr_candidate(self.reader.readtext(contrast, **options)))
+            blurred = self.cv2.GaussianBlur(contrast, (0, 0), 1.1)
+            sharpened = self.cv2.addWeighted(contrast, 1.7, blurred, -0.7, 0)
+            candidates.append(best_ocr_candidate(self.reader.readtext(sharpened, **options)))
+            if not any(candidate[1] for candidate in candidates):
+                binary = self.cv2.adaptiveThreshold(
+                    self.cv2.GaussianBlur(contrast, (3, 3), 0), 255,
+                    self.cv2.ADAPTIVE_THRESH_GAUSSIAN_C, self.cv2.THRESH_BINARY, 31, 9,
+                )
+                candidates.append(best_ocr_candidate(self.reader.readtext(binary, **options)))
+
+        valid = [candidate for candidate in candidates if candidate[1]]
+        if not valid:
+            return max(candidates, default=(0.0, None))
+
+        # When one read is exactly a prefix of another, keep the complete read
+        # if its confidence is reasonably close. This helps with clipped final
+        # digits while retaining six-character plates when no longer read exists.
+        selected = max(valid, key=lambda item: item[0])
+        for candidate in valid:
+            if (candidate[1] != selected[1] and
+                    candidate[1].startswith(selected[1]) and
+                    len(candidate[1]) == len(selected[1]) + 1 and
+                    candidate[0] >= selected[0] * 0.70):
+                selected = candidate
+        return selected
 
     def process(self, frame, now=None):
         """Annotate a frame and return newly confirmed (role, plate) events."""
         now = time.monotonic() if now is None else now
+        if self.color_observer:
+            self.color_observer.observe(frame)
         height, width = frame.shape[:2]
         if self.role == "entrance":
-            xmin, xmax = int(width * 0.20), int(width * 0.95)
-            ymin, ymax = int(height * 0.30), int(height * 0.95)
-            confidence, image_size = 0.20, self.image_size
+            # Keep the full drive-up approach in view. The newer clips place
+            # plates above or left of the previous narrow entrance ROI.
+            xmin, xmax = int(width * 0.03), int(width * 0.98)
+            ymin, ymax = int(height * 0.08), int(height * 0.98)
+            confidence, image_size = 0.15, max(self.image_size, 1152)
         else:
             # Include close plates near the bottom of the live exit view.
             xmin, xmax = int(width * 0.20), int(width * 0.95)
@@ -275,6 +329,8 @@ class PlateDetector:
                 if len(history["origin"]) < 2:
                     history["origin"].append(position)
                 self.track_last_seen[track_id] = now
+                if self.color_observer:
+                    self.color_observer.sample_plate(track_id, (x1, y1, x2, y2))
                 if (is_approaching(history, self.role) or
                         (self.role == "entrance" and has_entrance_motion(history))):
                     self.eligible_tracks.add(track_id)
@@ -289,9 +345,27 @@ class PlateDetector:
                 if not (xmin <= cx <= xmax and ymin <= cy <= ymax):
                     continue
 
+                # Wait for the vehicle to cross the entrance before running
+                # EasyOCR. This avoids spending CPU on fixed plates and
+                # background detections in the wide approach view.
+                if not eligible:
+                    self.cv2.putText(
+                        annotated, "checking movement", (max(0, x1), max(20, y1 - 8)),
+                        self.cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 2,
+                    )
+                    continue
+
                 # A little margin preserves characters at the detector's edge.
-                pad_x = max(2, int((x2 - x1) * 0.08))
-                pad_y = max(2, int((y2 - y1) * 0.12))
+                pad_x_fraction, pad_y_fraction = ((0.30, 0.38) if self.role == "entrance"
+                                                   else (0.30, 0.30))
+                pad_x = max(3, int((x2 - x1) * pad_x_fraction))
+                pad_y = max(3, int((y2 - y1) * pad_y_fraction))
+                self.cv2.rectangle(
+                    annotated,
+                    (max(0, x1 - pad_x), max(0, y1 - pad_y)),
+                    (min(width - 1, x2 + pad_x), min(height - 1, y2 + pad_y)),
+                    (255, 180, 0), 2,
+                )
                 crop = frame[max(0, y1):min(height, y2), max(0, x1):min(width, x2)]
                 padded_crop = frame[
                     max(0, y1 - pad_y):min(height, y2 + pad_y),
@@ -305,6 +379,11 @@ class PlateDetector:
                         self.plate_history[track_id].append(plate)
                         if self._moving_plate_confirmed(plate, position, now, ocr_confidence):
                             self.confirmed_tracks[track_id] = plate
+                            if self.color_observer:
+                                color = self.color_observer.for_track(track_id)
+                                if color[0] == "UNKNOWN":
+                                    color = self.color_observer.for_single_vehicle()
+                                self.confirmed_colors[plate] = color
                             last_seen = self.plate_last_seen.get(plate)
                             self.plate_last_seen[plate] = now
                             self._label(annotated, plate, x1, y1)
@@ -324,6 +403,11 @@ class PlateDetector:
                     continue
                 candidate = votes[0][0]
                 self.confirmed_tracks[track_id] = candidate
+                if self.color_observer:
+                    color = self.color_observer.for_track(track_id)
+                    if color[0] == "UNKNOWN":
+                        color = self.color_observer.for_single_vehicle()
+                    self.confirmed_colors[candidate] = color
                 last_seen = self.plate_last_seen.get(candidate)
                 self.plate_last_seen[candidate] = now
                 self._label(annotated, candidate, x1, y1)
@@ -331,6 +415,11 @@ class PlateDetector:
                     events.append((self.role, candidate))
 
         self.cv2.rectangle(annotated, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
+        if self.color_observer:
+            color, _score = self.color_observer.for_single_vehicle()
+            self.cv2.putText(annotated, f"Vehicle color: {color.title()}",
+                             (max(10, xmin), max(28, ymin - 10)),
+                             self.cv2.FONT_HERSHEY_SIMPLEX, .65, (0, 255, 255), 2)
         self._expire(now)
         return annotated, events
 
@@ -430,14 +519,17 @@ def publish_camera_events(events, stop, token, url, role, scenario_id):
     opener = build_opener(NoRedirect)
     while not stop.is_set() or not events.empty():
         try:
-            plate, observed_at = events.get(timeout=0.2)
+            plate, observed_at, color, color_confidence, entry_qr = events.get(timeout=0.2)
         except queue.Empty:
             continue
         payload = json.dumps({
             "channel": 1 if role == "entrance" else 13,
             "plate_number": plate, "observed_at": observed_at,
+            "qr_only": role == "entrance" and not plate,
             "scenario_id": scenario_id,
             "preferred_slot": os.environ.get("PARKING_PREFERRED_SLOT", "") if role == "entrance" else "",
+            "vehicle_color": color, "color_confidence": color_confidence,
+            "qr_token": entry_qr if role == "entrance" else "",
         }).encode("utf-8")
         request = Request(url, data=payload, headers={
             "Content-Type": "application/json", "X-Exit-Event-Token": token,
@@ -448,12 +540,24 @@ def publish_camera_events(events, stop, token, url, role, scenario_id):
                     result = json.load(response)
                 if role == "entrance" and result.get("success"):
                     print(f"[entrance] Session {result.get('session_id')} assigned to {result.get('slot_number')} ({result.get('zone')}).", flush=True)
+                    if not result.get("duplicate") and result.get("entry_token"):
+                        try:
+                            from .qr_ticket import print_entry_ticket
+                        except ImportError:
+                            from qr_ticket import print_entry_ticket
+                        print_entry_ticket(result["entry_token"], int(result["session_id"]),
+                                           result["slot_number"], result.get("vehicle_color", "UNKNOWN"),
+                                           SCRIPT_DIR.parent / "backend/database/simulation_runs" / scenario_id)
                 elif result.get("departure_recorded"):
                     print(f"[exit] Session {result.get('session_id')} closed; slot {result.get('slot_number')} released.", flush=True)
                 break
             except HTTPError as error:
                 # A denied or unmatched event must not be retried as a new pass.
-                print(f"[{role}] {plate}: API rejected detection (HTTP {error.code}).", flush=True)
+                try:
+                    reason = json.load(error).get("error", "Camera event rejected")
+                except (ValueError, OSError):
+                    reason = "Camera event rejected"
+                print(f"[{role}] {plate or 'unreadable plate'}: {reason} (HTTP {error.code}).", flush=True)
                 break
             except (URLError, TimeoutError, OSError, ValueError):
                 if attempt == 0:
@@ -483,7 +587,9 @@ def recognize_frames(role, frames, detector, latest, lock, stop, event_queues=No
             queue_for_role = (event_queues or {}).get(event_role)
             if queue_for_role is not None:
                 try:
-                    queue_for_role.put_nowait((plate, datetime.now(timezone.utc).isoformat(timespec="seconds")))
+                    color, score = detector.confirmed_colors.get(plate, ("UNKNOWN", 0.0))
+                    queue_for_role.put_nowait((plate, datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                               color, score, ""))
                 except queue.Full:
                     print(f"[{event_role}] Event queue full; use staff fallback if needed.", flush=True)
 
@@ -494,7 +600,11 @@ def main(argv=None):
                         help="Print detections without OpenCV video windows.")
     parser.add_argument("--detection-only", action="store_true",
                         help="Print exit detections without recording departures in the API.")
+    parser.add_argument("--vehicle-model", default=str(SCRIPT_DIR.parent / "yolov8n.pt"),
+                        help="Generic vehicle detector used for paint-color observations")
     args = parser.parse_args(argv)
+    if not Path(args.vehicle_model).is_file():
+        parser.error(f"vehicle model is missing: {args.vehicle_model}")
     try:
         host, port, username, password = configuration()
     except ValueError as exc:
@@ -513,17 +623,20 @@ def main(argv=None):
     signal.signal(signal.SIGTERM, lambda _number, _frame: stop.set())
     latest, lock = {}, threading.Lock()
     workers = []
+    detectors = {}
     scenario_id = os.environ.get("PARKING_SCENARIO_ID") or "live-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     event_queues = ({role: queue.Queue(maxsize=64) for role in ("entrance", "exit")}
                     if exit_token else {})
     try:
         for role, channel, _title in CAMERAS:
             model_file = SCRIPT_DIR / (
-                "entrance-feed-best1.pt" if role == "entrance" else "best.pt"
+                "best.pt"
             )
             if not model_file.is_file():
                 raise FileNotFoundError(f"Model weights missing: {model_file}")
-            detector = PlateDetector(role, YOLO(str(model_file)), easyocr.Reader(["en"]), cv2)
+            detector = PlateDetector(role, YOLO(str(model_file)), easyocr.Reader(["en"]), cv2,
+                                     vehicle_model=YOLO(args.vehicle_model))
+            detectors[role] = detector
             frames = queue.Queue(maxsize=1)
             url = rtsp_url(host, port, username, password, channel)
             workers.extend((
@@ -544,7 +657,9 @@ def main(argv=None):
         for worker in workers:
             worker.start()
         stop_hint = "Ctrl+C" if args.no_preview else "q or Ctrl+C"
-        print(f"Watching entrance channel 1 and exit channel 13 for scenario {scenario_id}. Press {stop_hint} to stop.")
+        print(f"Watching entrance channel 1 and exit channel 13 for scenario {scenario_id}. "
+              f"Press {stop_hint} to stop; press u for an unreadable-plate walk-in QR "
+              "or r to scan an active reservation QR when one vehicle is visible.")
         while not stop.is_set():
             if args.no_preview:
                 stop.wait(0.2)
@@ -554,7 +669,34 @@ def main(argv=None):
             for title, frame in previews:
                 if frame is not None:
                     cv2.imshow(title, frame)
-            if cv2.waitKey(50) & 0xFF == ord("q"):
+            key = cv2.waitKey(50) & 0xFF
+            if key == ord("u") and "entrance" in event_queues:
+                observer = detectors["entrance"].color_observer
+                if observer and len(observer.boxes) == 1:
+                    color, score = observer.for_single_vehicle()
+                    try:
+                        event_queues["entrance"].put_nowait(("", datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                                             color, score, ""))
+                        print(f"[entrance] Unreadable plate; requesting QR-only session. Color: {color}.", flush=True)
+                    except queue.Full:
+                        print("[entrance] QR event queue is full.", flush=True)
+                else:
+                    print("[entrance] Show exactly one vehicle before issuing an unreadable-plate QR.", flush=True)
+            if key == ord("r") and "entrance" in event_queues:
+                observer = detectors["entrance"].color_observer
+                if observer and len(observer.boxes) == 1:
+                    reservation_qr = getpass.getpass("Scan the active reservation QR token: ").strip()
+                    if reservation_qr:
+                        color, score = observer.for_single_vehicle()
+                        try:
+                            event_queues["entrance"].put_nowait(("", datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                                                 color, score, reservation_qr))
+                            print(f"[entrance] Reservation QR submitted for the visible vehicle. Color: {color}.", flush=True)
+                        except queue.Full:
+                            print("[entrance] Reservation event queue is full.", flush=True)
+                else:
+                    print("[entrance] Show exactly one vehicle before scanning a reservation QR.", flush=True)
+            if key == ord("q"):
                 stop.set()
     except KeyboardInterrupt:
         stop.set()

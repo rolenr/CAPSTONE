@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "notes": "Camera-frame bay footprints for the C snapshot, aligned with the recorded parking target. Vehicle detections determine occupied/vacant state; verify bay-ID ordering against site markings before operational use. Driveway regions cover the visibly clear lane in this camera view; verify site markings before unattended enforcement. Bay and roadway observations are separate.",
+  "cameras": {
+    "simulation_zone_c": {
+      "slots": {
+        "C-01": [
+          [
+            0.04,
+            0.44
+          ],
+          [
+            0.21,
+            0.44
+          ],
+          [
+            0.21,
+            0.68
+          ],
+          [
+            0.04,
+            0.68
+          ]
+        ],
+        "C-02": [
+          [
+            0.22,
+            0.44
+          ],
+          [
+            0.34,
+            0.44
+          ],
+          [
+            0.34,
+            0.68
+          ],
+          [
+            0.22,
+            0.68
+          ]
+        ],
+        "C-03": [
+          [
+            0.35,
+            0.44
+          ],
+          [
+            0.46,
+            0.44
+          ],
+          [
+            0.46,
+            0.68
+          ],
+          [
+            0.35,
+            0.68
+          ]
+        ],
+        "C-04": [
+          [
+            0.47,
+            0.44
+          ],
+          [
+            0.58,
+            0.44
+          ],
+          [
+            0.58,
+            0.68
+          ],
+          [
+            0.47,
+            0.68
+          ]
+        ],
+        "C-05": [
+          [
+            0.59,
+            0.44
+          ],
+          [
+            0.7,
+            0.44
+          ],
+          [
+            0.7,
+            0.68
+          ],
+          [
+            0.59,
+            0.68
+          ]
+        ],
+        "C-06": [
+          [
+            0.71,
+            0.44
+          ],
+          [
+            0.83,
+            0.44
+          ],
+          [
+            0.83,
+            0.68
+          ],
+          [
+            0.71,
+            0.68
+          ]
+        ]
+      },
+      "no_parking_zones": {
+        "driveway_front_c": [
+          [
+            0.015,
+            0.655
+          ],
+          [
+            0.985,
+            0.655
+          ],
+          [
+            0.985,
+            0.93
+          ],
+          [
+            0.015,
+            0.93
+          ]
+        ]
+      }
+    }
+  }
+}

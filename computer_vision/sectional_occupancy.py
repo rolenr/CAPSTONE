@@ -10,6 +10,7 @@ Events may be published to the parking API for review and display.
 import argparse
 import json
 import math
+from statistics import median
 import sys
 import time
 import uuid
@@ -18,11 +19,15 @@ from urllib.request import Request, urlopen
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
+try:
+    from .vehicle_color import classify_vehicle_color, consensus
+except ImportError:
+    from vehicle_color import classify_vehicle_color, consensus
 
 ROOT = Path(__file__).resolve().parents[1]
-BAY_WEIGHTS = ROOT / "content/runs/detect/train/weights/best.pt"
+BAY_WEIGHTS = ROOT / "computer_vision/models/sectional_occupancy/weights/best.pt"
 VEHICLE_NAMES = {"car", "truck", "bus", "motorcycle"}
-GRACE_SECONDS = 300.0
+GRACE_SECONDS = 20.0
 MISSING_SECONDS = 3.0
 MIN_STABLE_SAMPLES = 3
 STATIONARY_FRACTION = 0.025
@@ -60,6 +65,22 @@ def overlaps_polygon(box, polygon):
               (x1 + .25*(x2-x1), (y1+y2)/2),
               (x1 + .75*(x2-x1), (y1+y2)/2)]
     return sum(inside(p, polygon) for p in points) >= 2
+
+
+def vehicle_ground_point(box):
+    """Approximate where the vehicle meets the pavement in this fixed view."""
+    x1, y1, x2, y2 = box
+    return ((x1 + x2) / 2, y1 + .92 * (y2 - y1))
+
+
+def restricted_region_for_vehicle(box, zones):
+    point = vehicle_ground_point(box)
+    return next((name for name, polygon in zones.items() if inside(point, polygon)), None)
+
+
+def vehicles_for_bays(vehicles, zones):
+    return [(label, conf, box) for label, conf, box in vehicles
+            if restricted_region_for_vehicle(box, zones) is None]
 
 
 def validate_polygon(value, label):
@@ -113,10 +134,68 @@ def predictions(result, width, height, names, wanted=None):
     return found
 
 
+def discover_slot_regions(capture, model, cv2, slots, camera_id, source_config,
+                          output_config, fps, sample_seconds, max_seconds, imgsz):
+    """Add only stable, unambiguous same-zone bay localizations to this run."""
+    zones = {name.split("-", 1)[0] for name in slots}
+    if len(zones) != 1:
+        raise ValueError("automatic bay discovery needs one configured zone")
+    zone = next(iter(zones))
+    observations = defaultdict(list)
+    ambiguous = set()
+    sample_count = max(1, math.ceil(max_seconds / sample_seconds))
+    for index in range(sample_count):
+        capture.set(cv2.CAP_PROP_POS_MSEC, index * sample_seconds * 1000)
+        ok, frame = capture.read()
+        if not ok:
+            break
+        height, width = frame.shape[:2]
+        result = model.predict(frame, conf=.25, imgsz=imgsz, verbose=False)[0]
+        by_name = defaultdict(list)
+        for name, confidence, box in predictions(result, width, height, model.names):
+            if name.startswith(zone + "-") and name not in slots:
+                by_name[name].append((confidence, box))
+        for name, hits in by_name.items():
+            hits.sort(reverse=True)
+            if hits[0][0] < .5:
+                continue
+            if len(hits) > 1:
+                a, b = hits[0][1], hits[1][1]
+                ac = ((a[0] + a[2]) / 2, (a[1] + a[3]) / 2)
+                bc = ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
+                if math.dist(ac, bc) > .06:
+                    ambiguous.add(name)
+                    continue
+            observations[name].append(hits[0][1])
+    added = []
+    for name, boxes in sorted(observations.items()):
+        if name in ambiguous or len(boxes) < 2:
+            continue
+        centers = [((b[0] + b[2]) / 2, (b[1] + b[3]) / 2) for b in boxes]
+        anchor = (median(x for x, _ in centers), median(y for _, y in centers))
+        if any(math.dist(anchor, center) > .06 for center in centers):
+            continue
+        x1, y1, x2, y2 = (median(box[k] for box in boxes) for k in range(4))
+        pad_x, pad_y = .08 * (x2 - x1), .08 * (y2 - y1)
+        slots[name] = polygon_from_box((max(0, x1 - pad_x), max(0, y1 - pad_y),
+                                        min(1, x2 + pad_x), min(1, y2 + pad_y)))
+        added.append(name)
+    document = json.loads(Path(source_config).read_text())
+    document["cameras"][camera_id]["slots"].update(slots)
+    document["discovery"] = {"source": "stable_slot_model_boxes", "added": added,
+                             "ambiguous": sorted(ambiguous)}
+    Path(output_config).parent.mkdir(parents=True, exist_ok=True)
+    Path(output_config).write_text(json.dumps(document, indent=2) + "\n")
+    print(f"Bay discovery: {len(added)} additional stable bays ({', '.join(added) or 'none'}); "
+          f"ambiguous labels: {', '.join(sorted(ambiguous)) or 'none'}.", flush=True)
+
+
 class OccupancyMonitor:
-    def __init__(self, slots, zones, source, grace_seconds=GRACE_SECONDS):
+    def __init__(self, slots, zones, source, grace_seconds=GRACE_SECONDS,
+                 max_observation_gap=MISSING_SECONDS):
         self.slots, self.zones, self.source = slots, zones, source
         self.grace_seconds = grace_seconds
+        self.max_observation_gap = max_observation_gap
         self.slot_samples = defaultdict(lambda: deque(maxlen=MIN_STABLE_SAMPLES))
         self.slot_state = {}
         self.stays = {}  # region -> local track key -> first/last/center/alerted
@@ -128,8 +207,11 @@ class OccupancyMonitor:
         # Bay detections locate spaces; they never prove that a car is parked.
         if vehicles is None:
             return events
+        # Restricted roadway and bay polygons can overlap in perspective. A
+        # vehicle grounded in the roadway must not occupy a bay behind it.
+        bay_vehicles = vehicles_for_bays(vehicles, self.zones)
         for name, polygon in self.slots.items():
-            vehicle_conf = [conf for _, conf, box in vehicles
+            vehicle_conf = [conf for _, conf, box in bay_vehicles
                             if overlaps_polygon(box, polygon)]
             positive = vehicle_conf
             occupied = bool(positive)
@@ -158,7 +240,7 @@ class OccupancyMonitor:
         events = []
         for region, polygon in self.zones.items():
             current = [((box[0]+box[2])/2, (box[1]+box[3])/2, conf)
-                       for _, conf, box in vehicles if overlaps_polygon(box, polygon)]
+                       for _, conf, box in vehicles if inside(vehicle_ground_point(box), polygon)]
             tracks = self.stays.setdefault(region, {})
             used = set()
             for x, y, conf in current:
@@ -166,7 +248,7 @@ class OccupancyMonitor:
                 # counted only once per frame. Large jumps start a new stay.
                 candidates = [(math.dist((x, y), track["center"]), key)
                               for key, track in tracks.items()
-                              if key not in used and when - track["last"] <= MISSING_SECONDS]
+                              if key not in used and when - track["last"] <= self.max_observation_gap]
                 distance, key = min(candidates, default=(float("inf"), None))
                 if distance > .08:
                     key = self.next_key
@@ -175,7 +257,8 @@ class OccupancyMonitor:
                                    "center": (x, y), "anchor": (x, y), "alerted": False}
                 track = tracks[key]
                 used.add(key)
-                if math.dist((x, y), track["anchor"]) > STATIONARY_FRACTION:
+                if (when - track["last"] > self.max_observation_gap or
+                        math.dist((x, y), track["anchor"]) > STATIONARY_FRACTION):
                     track["first"], track["anchor"], track["alerted"] = when, (x, y), False
                 track["last"], track["center"] = when, (x, y)
                 elapsed = when - track["first"]
@@ -193,7 +276,7 @@ class OccupancyMonitor:
                         "confidence": conf, "review_required": True,
                     })
             for key, track in list(tracks.items()):
-                if key not in used and when - track["last"] > MISSING_SECONDS:
+                if key not in used and when - track["last"] > self.max_observation_gap:
                     del tracks[key]
         return events
 
@@ -229,7 +312,10 @@ def preview_frame(frame, cv2, slots, zones, vehicles, states, label, frame_index
                 cv2.FONT_HERSHEY_SIMPLEX, .7, (255, 255, 255), 2)
     occupied = sum(state == "OCCUPIED" for state in states.values())
     vacant = sum(state == "VACANT" for state in states.values())
-    cv2.putText(display, f"Observed: {occupied} occupied | {vacant} vacant | q: stop", (18, 62),
+    unknown = len(slots) - occupied - vacant
+    cv2.putText(display,
+                f"Bays: {len(slots)} | {occupied} occupied | {vacant} vacant | {unknown} unknown | q: stop",
+                (18, 62),
                 cv2.FONT_HERSHEY_SIMPLEX, .55, (255, 255, 255), 1)
     for name, polygon in slots.items():
         state = states.get(name)
@@ -254,28 +340,44 @@ def publish_event(event, url, token):
     return result
 
 
-def read_plates(frame, model, reader, cv2, slots):
-    """Read visible plates inside calibrated bays; no motion gate is applied."""
+def read_plates(frame, model, reader, cv2, slots, vehicles):
+    """Read plates only when a detected vehicle overlaps the same calibrated bay."""
     try:
         from .live_vigi import best_ocr_candidate
     except ImportError:
         from live_vigi import best_ocr_candidate
     height, width = frame.shape[:2]
     found = {}
-    result = model.predict(frame, conf=.25, imgsz=1280, verbose=False)[0]
-    for box in result.boxes:
-        x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-        crop = frame[max(0, y1):min(height, y2), max(0, x1):min(width, x2)]
-        if crop.size == 0:
+    for slot, polygon in slots.items():
+        candidates = [(confidence, box) for _, confidence, box in vehicles
+                      if overlaps_polygon(box, polygon)]
+        if not candidates:
             continue
-        enlarged = cv2.resize(crop, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-        confidence, plate = best_ocr_candidate(reader.readtext(
-            enlarged, allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", paragraph=False))
-        if not plate:
+        _, vehicle_box = max(candidates, key=lambda item: item[0])
+        vx1, vy1, vx2, vy2 = vehicle_box
+        left = max(0, int((vx1-.04*(vx2-vx1))*width))
+        right = min(width, int((vx2+.04*(vx2-vx1))*width))
+        top = max(0, int((vy1-.04*(vy2-vy1))*height))
+        bottom = min(height, int((vy2+.04*(vy2-vy1))*height))
+        vehicle_crop = frame[top:bottom,left:right]
+        if vehicle_crop.size == 0:
             continue
-        center = ((x1+x2)/(2*width), (y1+y2)/(2*height))
-        for slot, polygon in slots.items():
-            if inside(center, polygon) and confidence > found.get(slot, (0, ""))[0]:
+        result = model.predict(vehicle_crop, conf=.25, imgsz=640, verbose=False)[0]
+        for box in result.boxes:
+            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+            pad_x, pad_y = max(2,(x2-x1)//4), max(2,(y2-y1)//4)
+            crop = vehicle_crop[max(0,y1-pad_y):min(vehicle_crop.shape[0],y2+pad_y),
+                                max(0,x1-pad_x):min(vehicle_crop.shape[1],x2+pad_x)]
+            if crop.size == 0:
+                continue
+            enlarged = cv2.resize(crop, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+            confidence, plate = best_ocr_candidate(reader.readtext(
+                enlarged, allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", paragraph=False))
+            if not plate:
+                gray = cv2.equalizeHist(cv2.cvtColor(enlarged, cv2.COLOR_BGR2GRAY))
+                confidence, plate = best_ocr_candidate(reader.readtext(
+                    gray, allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", paragraph=False))
+            if plate and confidence >= .55 and confidence > found.get(slot, (0, ""))[0]:
                 found[slot] = (confidence, plate)
     return found
 
@@ -298,6 +400,10 @@ def main(argv=None):
     parser.add_argument("--evidence-dir", default="sectional_evidence")
     parser.add_argument("--sample-seconds", type=float, default=1.0)
     parser.add_argument("--max-seconds", type=float, help="Stop after this much source video for a pre-entry snapshot")
+    parser.add_argument("--discover-slots", action="store_true",
+                        help="Find additional stable same-zone bays during the recorded baseline")
+    parser.add_argument("--discovered-config",
+                        help="Write run-scoped calibration including discovered bays")
     parser.add_argument("--start-seconds", type=float, default=0.0,
                         help="Begin replay at this source-video time")
     parser.add_argument("--preview", action="store_true", help="Show the sectional camera feed with slot and vehicle overlays")
@@ -307,12 +413,18 @@ def main(argv=None):
                         help="Stop after this many continuous video seconds of vehicle occupancy in the target bay")
     parser.add_argument("--stop-on-vacant", action="store_true",
                         help="Stop after the target bay is observed occupied, then vacant")
+    parser.add_argument("--initial-target-occupied", action="store_true",
+                        help="Target occupancy was confirmed by an earlier clip in this scenario")
+    parser.add_argument("--publish-target-only", action="store_true",
+                        help="Publish slot observations only for the target bay")
     parser.add_argument("--frame-offset", type=int, default=0,
                         help="Offset published frame indexes for later clips in one scenario")
     parser.add_argument("--imgsz", type=int, default=960,
                         help="Detector input size; default 960 for wide sectional views")
     parser.add_argument("--grace-seconds", type=float, default=GRACE_SECONDS,
-                        help="Driveway/double-parking allowance; default 300 seconds")
+                        help="Driveway/double-parking allowance; default 20 seconds")
+    parser.add_argument("--max-observation-gap", type=float, default=MISSING_SECONDS,
+                        help="Maximum seconds between detections counted as one continuous stay")
     parser.add_argument("--write-config-template", metavar="PATH")
     parser.add_argument("--save-reference-frame", metavar="PATH",
                         help="Save the first source frame for drawing calibrated polygons")
@@ -329,12 +441,18 @@ def main(argv=None):
     live = bool(args.source and args.source.startswith("rtsp://"))
     if not args.source or (not live and not Path(args.source).is_file()):
         parser.error("--source must point to an existing video/image or an RTSP URL")
-    if args.sample_seconds <= 0 or args.grace_seconds <= 0 or args.imgsz <= 0 or args.start_seconds < 0 or (args.max_seconds is not None and args.max_seconds <= 0):
+    if args.sample_seconds <= 0 or args.grace_seconds <= 0 or args.max_observation_gap <= 0 or args.imgsz <= 0 or args.start_seconds < 0 or (args.max_seconds is not None and args.max_seconds <= 0):
         parser.error("--sample-seconds, --grace-seconds, and --imgsz must be positive")
     if args.stop_after_occupied_seconds is not None and (not args.target_slot or args.stop_after_occupied_seconds <= 0):
         parser.error("--stop-after-occupied-seconds needs --target-slot and a positive duration")
+    if args.discover_slots and (live or args.max_seconds is None or not args.discovered_config):
+        parser.error("--discover-slots needs a recorded snapshot, --max-seconds, and --discovered-config")
     if args.stop_on_vacant and not args.target_slot:
         parser.error("--stop-on-vacant needs --target-slot")
+    if args.initial_target_occupied and not args.stop_on_vacant:
+        parser.error("--initial-target-occupied needs --stop-on-vacant")
+    if args.publish_target_only and not args.target_slot:
+        parser.error("--publish-target-only needs --target-slot")
     if args.stop_on_vacant and args.stop_after_occupied_seconds is not None:
         parser.error("use only one sectional stop condition")
     if args.frame_offset < 0:
@@ -379,10 +497,18 @@ def main(argv=None):
     fps = capture.get(cv2.CAP_PROP_FPS)
     if not math.isfinite(fps) or fps <= 0:
         fps = 1.0
+    if args.discover_slots:
+        discover_slot_regions(capture, bay_model, cv2, slots, args.camera_id,
+                              args.config, args.discovered_config, fps,
+                              args.sample_seconds, args.max_seconds, args.imgsz)
+        capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
     stride = max(1, round(fps * args.sample_seconds))
     source_label = f"camera:{args.camera_id}" if live else args.source
-    monitor = OccupancyMonitor(slots, zones, source_label, args.grace_seconds)
-    plate_history = defaultdict(lambda: deque(maxlen=3))
+    monitor = OccupancyMonitor(slots, zones, source_label, args.grace_seconds,
+                               args.max_observation_gap)
+    plate_history = defaultdict(lambda: deque(maxlen=5))
+    color_history = defaultdict(lambda: deque(maxlen=6))
+    published_details = {}
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     evidence_dir = Path(args.evidence_dir)
@@ -392,7 +518,7 @@ def main(argv=None):
     count = 0
     target_occupied_since = None
     parking_confirmed = False
-    target_was_occupied = False
+    target_was_occupied = args.initial_target_occupied
     departure_confirmed = False
     window = f"Sectional Occupancy - {args.camera_id}"
     if args.preview:
@@ -422,21 +548,59 @@ def main(argv=None):
                                                        imgsz=args.imgsz, verbose=False)[0]
                 vehicles = predictions(vehicle_result, width, height,
                                        vehicle_model.names, VEHICLE_NAMES)
-                plate_reads = read_plates(frame, plate_model, reader, cv2, slots) if plate_model else {}
+                bay_vehicles = vehicles_for_bays(vehicles, zones)
+                for slot_name, polygon in slots.items():
+                    candidates = [(confidence, box) for _, confidence, box in bay_vehicles
+                                  if overlaps_polygon(box, polygon)]
+                    if candidates:
+                        _, vehicle_box = max(candidates, key=lambda item: item[0])
+                        color_history[slot_name].append(
+                            classify_vehicle_color(frame, vehicle_box, cv2))
+                    else:
+                        color_history[slot_name].clear()
+                        plate_history[slot_name].clear()
+                plate_reads = read_plates(frame, plate_model, reader, cv2, slots, bay_vehicles) if plate_model else {}
                 for slot, (_confidence, plate) in plate_reads.items():
                     plate_history[slot].append(plate)
                 when = time.monotonic() if live else frame_index / fps
                 events = monitor.update(when, frame_index, bay_hits, vehicles)
+                transitioned = {event["slot_number"] for event in events
+                                if event["event_type"] == "sectional.slot.observed"}
+                for slot_name, state in monitor.slot_state.items():
+                    if state != "OCCUPIED" or slot_name in transitioned:
+                        continue
+                    votes = plate_history[slot_name]
+                    recognized = votes[-1] if len(votes) >= 2 and votes.count(votes[-1]) >= 2 else ""
+                    color, _ = consensus(color_history[slot_name])
+                    previous_plate, previous_color = published_details.get(slot_name,("","UNKNOWN"))
+                    if ((recognized and recognized != previous_plate)
+                            or (color != "UNKNOWN" and previous_color == "UNKNOWN")):
+                        confidence = max((conf for _, conf, box in bay_vehicles
+                                          if overlaps_polygon(box, slots[slot_name])),default=None)
+                        events.append({"event_id":str(uuid.uuid4()),
+                                       "event_type":"sectional.slot.observed",
+                                       "timestamp":utc_now(),"confidence":confidence,
+                                       "source":{"video":source_label,"frame_index":frame_index},
+                                       "slot_number":slot_name,"occupancy_state":"OCCUPIED",
+                                       "method":"vehicle_identity_update"})
                 if args.stop_after_occupied_seconds is not None:
-                    present = any(overlaps_polygon(box, slots[args.target_slot]) for _, _, box in vehicles)
+                    present = any(overlaps_polygon(box, slots[args.target_slot]) for _, _, box in bay_vehicles)
                     if present and target_occupied_since is None:
                         target_occupied_since = when
                     elif not present:
                         target_occupied_since = None
                 for event in events:
+                    if (args.publish_target_only and event["event_type"] == "sectional.slot.observed"
+                            and event["slot_number"] != args.target_slot):
+                        continue
+                    target_observation = (event["event_type"] != "sectional.slot.observed"
+                                          or event["slot_number"] == (args.target_slot or args.clip_slot))
                     event.update({"scenario_id": args.scenario_id, "session_id": args.session_id,
                                   "camera_id": args.camera_id, "frame_index": frame_index + args.frame_offset,
-                                  "clip_plate": args.clip_plate, "clip_slot": args.clip_slot})
+                                  "clip_plate": args.clip_plate if target_observation else "",
+                                  "clip_slot": args.clip_slot if target_observation else ""})
+                    if not target_observation:
+                        event["session_id"] = None
                     if event["event_type"] == "sectional.slot.observed":
                         # The bay checkpoint reports localization quality only;
                         # vehicle detections alone determine occupied/vacant.
@@ -444,9 +608,18 @@ def main(argv=None):
                                      if name == event["slot_number"] and
                                      overlaps_polygon(box, slots[name])]
                         event["slot_localization_confidence"] = max(slot_hits) if slot_hits else None
+                        color, score = (consensus(color_history[event["slot_number"]])
+                                        if event["occupancy_state"] == "OCCUPIED" else ("UNKNOWN", 0.0))
+                        event["vehicle_color"] = color
+                        event["color_confidence"] = score
                         votes = plate_history[event["slot_number"]]
                         if len(votes) >= 2 and votes.count(votes[-1]) >= 2:
                             event["recognized_plate"] = votes[-1]
+                        if event["occupancy_state"] == "OCCUPIED":
+                            published_details[event["slot_number"]] = (
+                                event.get("recognized_plate",""),color)
+                        else:
+                            published_details.pop(event["slot_number"],None)
                     if event["event_type"] == "parking.restricted.overstay" or event["occupancy_state"] == "OCCUPIED":
                         evidence_dir.mkdir(parents=True, exist_ok=True)
                         label = event.get("region", event.get("slot_number", "event"))

@@ -51,7 +51,7 @@ try {
 expectExit((int)$db->query('SELECT is_occupied FROM parking_slots')->fetchColumn() === 1, 'Unpaid exit released slot');
 
 $db = exitFixture('PAID');
-$db->exec("INSERT INTO violations VALUES(1,1,300,'UNPAID')");
+$db->exec("INSERT INTO violations VALUES(1,1,200,'UNPAID')");
 try {
     recordExitDeparture($db, 1, 'ALPR', 'EXIT_CAMERA_CHANNEL_13');
     throw new LogicException('Exit with unpaid citation was accepted');

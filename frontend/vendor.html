@@ -592,6 +592,7 @@
 
             // Periodic Refresh every 15s
             setInterval(() => {
+                loadActiveVehicles();
                 loadRecentValidations();
             }, 15000);
         })();
