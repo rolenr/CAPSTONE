@@ -78,7 +78,7 @@
 }
 
 html {
-    font-size: 15px;
+    font-size: 17px;
     scroll-behavior: smooth;
 }
 
@@ -233,7 +233,7 @@ body {
     border-radius: 50%;
     background: var(--slate-700);
     color: var(--white);
-    font-size: 0.65rem;
+    font-size: 0.75rem;
     font-weight: 600;
     display: flex;
     align-items: center;
@@ -1233,7 +1233,7 @@ button[type="submit"]:hover {
 }
 
 .demo-toolbar-label {
-    font-size: 0.68rem;
+    font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     font-weight: 600;
@@ -1250,7 +1250,7 @@ button[type="submit"]:hover {
 .btn-demo-quick {
     flex: 1;
     padding: 5px 8px;
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     font-weight: 500;
     color: var(--text-secondary);
     background: var(--slate-100);
@@ -1396,7 +1396,30 @@ button[type="submit"]:hover {
 }
 
 .status-text.slot-occupied { color: #9a3412; }
-.status-text.slot-available { color: var(--success-text); }
+.status-text.slot-available,
+.status-text.slot-vacant { color: var(--success-text); }
+.status-text.slot-reserved { color: #92400e; }
+
+.admin-slot-card.slot-vacant {
+    background-color: #f8fafc;
+    border-color: var(--border-color);
+}
+
+.admin-slot-card.slot-reserved {
+    background-color: #fffbeb;
+    border-color: #fcd34d;
+}
+
+.plate-check { display: block; margin-top: 2px; font-size: 0.8125rem; color: var(--text-secondary); }
+.plate-check.is-match { color: #065f46; }
+.plate-check.is-mismatch { color: #b91c1c; font-weight: 700; }
+
+.violation-rule { margin: 2px 0 6px; font-style: italic; }
+.violation-facts { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0; font-size: 0.875rem; color: var(--text-secondary); }
+.violation-facts dt { font-weight: 600; color: var(--text-primary); }
+.violation-facts dd { margin: 0; }
+.violation-facts small { display: block; margin-top: 2px; color: var(--text-muted); }
+.admin-table td small.violation-evidence-note { color: var(--text-muted); font-style: italic; }
 
 .zone-section {
     width: 100%;
@@ -1496,11 +1519,11 @@ button[type="submit"]:hover {
 }
 
 .map-zone-copy strong { font-size: .8rem; }
-.map-zone-copy small { color: var(--text-muted); font-size: .68rem; }
+.map-zone-copy small { color: var(--text-muted); font-size: 0.75rem; }
 
 .map-zone-availability {
     margin-left: auto;
-    font-size: .72rem;
+    font-size: 0.75rem;
     font-weight: 700;
     white-space: nowrap;
 }
@@ -1540,7 +1563,7 @@ button[type="submit"]:hover {
     color: #0f172a;
     cursor: pointer;
     font-family: inherit;
-    font-size: .6rem;
+    font-size: 0.75rem;
     font-weight: 750;
     letter-spacing: .05em;
     line-height: 1;
@@ -1574,7 +1597,7 @@ button[type="submit"]:hover {
 
 .zone-detail-heading h3 { margin: 2px 0 0; }
 .zone-detail-heading strong { color: #047857; font-size: .82rem; }
-.map-detail-eyebrow { color: var(--text-muted); font-size: .68rem; text-transform: uppercase; letter-spacing: .08em; }
+.map-detail-eyebrow { color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: .08em; }
 
 .zone-detail-slots {
     max-height: 230px;
@@ -1624,6 +1647,8 @@ button[type="submit"]:hover {
 
 .slot-row span.free { background: #10b981; }
 .slot-row span.occupied { background: #ef4444; }
+.slot-row span.reserved { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: #d97706; }
+.slot-dot.reserved { background: #d97706; }
 
 @media (max-width: 760px) {
     .live-map-layout { grid-template-columns: 1fr; }
@@ -1689,7 +1714,7 @@ button[type="submit"]:hover {
 .pass-detail-item span {
     display: block;
     color: var(--text-muted);
-    font-size: 0.68rem;
+    font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     font-weight: 600;
@@ -1785,7 +1810,7 @@ button[type="submit"]:hover {
 
 .parked-chip-btn code {
     font-family: var(--font-mono);
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     font-weight: 600;
 }
 
@@ -1941,7 +1966,7 @@ button[type="submit"]:hover {
 }
 
 .alpr-scan-title {
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.06em;
@@ -1964,7 +1989,7 @@ button[type="submit"]:hover {
 }
 
 .alpr-conf-meter {
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     color: #94a3b8;
 }
 
@@ -1977,7 +2002,7 @@ button[type="submit"]:hover {
 }
 
 .fallback-badge {
-    font-size: 0.68rem;
+    font-size: 0.75rem;
     font-weight: 600;
     padding: 2px 6px;
     border-radius: var(--radius-sm);

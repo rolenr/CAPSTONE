@@ -453,6 +453,29 @@ body[data-page="admin"] {
     border-radius: 2px;
 }
 
+#slot-controls .slot-legend-dot.reserved {
+    background: #d97706;
+    border-radius: 2px;
+    transform: rotate(45deg) scale(.85);
+}
+
+#adminMapControls .admin-slot-card.slot-vacant {
+    background: #fff;
+    border-color: #cbd5e1;
+    border-left-color: #047857;
+}
+
+#adminMapControls .admin-slot-card.slot-reserved {
+    background: #fffbeb;
+    border-color: #fcd34d;
+    border-left-color: #d97706;
+}
+
+.slot-state.is-vacant { background: #d1fae5; color: #065f46; }
+.slot-state.is-vacant i { border-radius: 50%; background: #047857; }
+.slot-state.is-reserved { background: #fef3c7; color: #92400e; }
+.slot-state.is-reserved i { border-radius: 2px; background: #d97706; transform: rotate(45deg) scale(.85); }
+
 #adminMapControls.admin-slot-zones {
     display: flex;
     flex-direction: column;

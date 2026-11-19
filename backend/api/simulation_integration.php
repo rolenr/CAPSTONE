@@ -651,8 +651,15 @@ function simulationSectionalEvent(PDO $db, array $event): array {
                         $alert = $db->prepare("INSERT INTO sectional_alerts
                             (event_id,scenario_id,session_id,camera_id,violation_type,region,evidence,details)
                             VALUES(?,?,?,?,?,?,?,?)");
+                        // Always name a plate: the camera read when there is one,
+                        // otherwise the session plate the recorded clip is bound to.
+                        $seenPlate = $readPlate !== '' ? $readPlate : $expectedPlate;
+                        $plateBasis = $readPlate !== ''
+                            ? 'plate read by camera'
+                            : 'plate not readable on camera; identified by entry-gate session';
                         $alert->execute([$id,$scenario,$sessionId,$camera,$result,$slotName,
-                            (string)($event['evidence'] ?? ''),"Expected {$expectedPlate} in {$session['slot_number']} ({$session['vehicle_color']}); observed {$readPlate} in {$slotName} ({$observedColor})"]);
+                            (string)($event['evidence'] ?? ''),
+                            "Expected {$expectedPlate} in {$session['slot_number']} ({$session['vehicle_color']}); observed {$seenPlate} in {$slotName} ({$observedColor}) - {$plateBasis}"]);
                     }
                 }
             }

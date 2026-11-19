@@ -347,11 +347,11 @@ async function fetchLiveMap() {
                     slots.forEach((slot, i) => {
                         const dp = dotPositions[i];
                         if (!dp) return;
-                        const isOccupied = slot.is_occupied == 1;
-                        const label = `Zone ${zone} - ${slot.slot_number}: ${slot.availability_status || (isOccupied ? 'Occupied' : 'Free')}`;
+                        const status = slotStatus(slot);
+                        const label = `Zone ${zone} - ${slot.slot_number}: ${status.label}`;
 
                         markersHTML += `
-                            <button type="button" class="slot-dot ${isOccupied ? 'occupied' : 'free'}"
+                            <button type="button" class="slot-dot ${status.key === 'vacant' ? 'free' : status.key}"
                                 style="top:${dp.top}%; left:${dp.left}%;"
                                 data-zone="${zone}"
                                 title="${label}"
@@ -391,14 +391,18 @@ function showZoneDetail(zone) {
             <strong>${free}/${slots.length} free</strong>
         </div>
         <div class="zone-detail-slots">
-            ${slots.map(slot => `
+            ${slots.map(slot => {
+                const status = slotStatus(slot);
+                const plate = slot.plate_number ? normalizeLicensePlateInput(slot.plate_number) : '';
+                return `
                 <div class="slot-row">
                     <span>${slot.slot_number}</span>
-                    <span class="${slot.is_occupied == 1 ? 'occupied' : 'free'}"></span>
-                    <span>${slot.availability_status || (slot.is_occupied == 1 ? 'Allocated' : 'Free')}${slot.plate_number ? ' &ndash; ' + slot.plate_number : ''}
-                    <small> · ${zone === 'F' ? `Zone allocation: ${Number(slot.zone_allocated_count || 0)} vehicles` : `Camera: ${safeSectionalText(slot.observed_state || 'NOT_OBSERVED')}`}</small></span>
+                    <span class="${status.key === 'vacant' ? 'free' : status.key}"></span>
+                    <span>${status.label}${plate ? ' &ndash; ' + safeSectionalText(plate) : ''}
+                    <small> · ${zone === 'F' ? `Zone allocation: ${Number(slot.zone_allocated_count || 0)} vehicles` : `Camera: ${titleCaseStatus(slot.observed_state || 'NOT_OBSERVED')}`}</small></span>
                 </div>
-            `).join('')}
+            `;
+            }).join('')}
         </div>
     `;
     document.querySelectorAll('#mapZoneList .map-zone-card, #liveMap .zone-marker').forEach(marker => {
@@ -644,6 +648,59 @@ if (reservationForm) {
 }
 
 // ---------------- VIOLATIONS ----------------
+// What each infraction means and what record supports it, shown to drivers and staff.
+function violationRule(type) {
+    const t = String(type || '').toLowerCase();
+    if (t.includes('zone a') || t.includes('vip')) return {
+        rule: 'Zone A bays are reserved for vehicles with VIP or PWD priority status.',
+        basis: 'The sectional camera saw this vehicle parked in a Zone A bay, and the account for this plate has no VIP / PWD status.'
+    };
+    if (t.includes('wrong slot')) return {
+        rule: 'Each vehicle must park in the bay assigned to it at the entrance gate.',
+        basis: 'The sectional camera saw this vehicle in a different bay from the one on its parking ticket.'
+    };
+    if (t.includes('double')) return {
+        rule: 'Vehicles may not double-park or block other parked vehicles.',
+        basis: 'The camera tracked the vehicle standing in a no-parking area for at least 20 continuous seconds.'
+    };
+    if (t.includes('driveway') || t.includes('no parking')) return {
+        rule: 'Driveways and lanes must stay clear. Stopping there is limited to under 20 seconds.',
+        basis: 'The camera tracked the vehicle standing in the driveway for at least 20 continuous seconds.'
+    };
+    if (t.includes('bypass')) return {
+        rule: 'Every vehicle must settle its parking fee before leaving through the exit gate.',
+        basis: 'The exit gate camera read this plate leaving while the session was still unpaid.'
+    };
+    if (t.includes('reserved')) return {
+        rule: 'A reserved bay may only be used by the vehicle that booked it.',
+        basis: 'The plate read in the reserved bay did not match the plate on the reservation.'
+    };
+    if (t.includes('plate')) return {
+        rule: 'The vehicle in a bay must match the plate registered at the entrance gate.',
+        basis: 'The camera read a different plate in the bay than the one assigned to it.'
+    };
+    if (t.includes('color')) return {
+        rule: 'The vehicle in a bay must match the vehicle registered at the entrance gate.',
+        basis: 'The vehicle colour seen in the bay did not match the colour recorded at entry.'
+    };
+    if (t.includes('lost') && t.includes('ticket')) return {
+        rule: 'A lost parking ticket carries a replacement fee.',
+        basis: 'The driver reported the ticket lost at the cashier.'
+    };
+    return { rule: 'Parking regulation infraction recorded by staff.', basis: 'Recorded against the parking session for this plate.' };
+}
+
+// Where the infraction happened: the bay the camera saw versus the bay that was assigned.
+function violationLocation(v) {
+    const assigned = v.slot_number ? `${v.slot_number} (Zone ${v.zone || '?'})` : '';
+    const seen = v.observed_region || '';
+    const seenLabel = /^[A-F]-\d+$/i.test(seen) ? seen : seen.replace(/_/g, ' ');
+    if (seen && assigned && seen !== v.slot_number) return { seen: seenLabel, assigned, text: `Seen in ${seenLabel} · assigned ${assigned}` };
+    if (seen) return { seen: seenLabel, assigned, text: `Seen in ${seenLabel}` };
+    if (assigned) return { seen: '', assigned, text: `Assigned bay ${assigned}` };
+    return { seen: '', assigned: '', text: 'Driveway / lane' };
+}
+
 if (violationForm) {
     violationForm.addEventListener("submit", async function (e) {
         e.preventDefault();
@@ -674,11 +731,21 @@ if (violationForm) {
                     ? '<span class="badge badge-paid">PAID / SETTLED</span>'
                     : '<span class="badge badge-unpaid">UNPAID / OUTSTANDING</span>';
 
+                const info = violationRule(v.violation_type);
+                const place = violationLocation(v);
                 html += `
                     <div class="violation-card-item">
                         <div class="violation-card-info">
-                            <h4>${v.violation_type}</h4>
-                            <p>Location: Zone ${v.zone || '—'} &bull; Slot ${v.slot_number || 'Driveway/Perimeter'} &bull; Issued: ${formatPhtDateTime(v.issued_at)}</p>
+                            <h4>${v.violation_id ? `Case #V-${Number(v.violation_id)} · ` : ''}${escapeHtml(v.violation_type)}</h4>
+                            <p class="violation-rule">${escapeHtml(info.rule)}</p>
+                            <dl class="violation-facts">
+                                <dt>Plate</dt><dd><code>${escapeHtml(v.plate_number || plate)}</code></dd>
+                                <dt>Location</dt><dd>${escapeHtml(place.text)}</dd>
+                                ${v.entry_time ? `<dt>Entered</dt><dd>${formatPhtDateTime(v.entry_time)}</dd>` : ''}
+                                ${v.detected_at ? `<dt>Detected</dt><dd>${formatPhtDateTime(v.detected_at)}</dd>` : ''}
+                                <dt>Issued</dt><dd>${formatPhtDateTime(v.issued_at)}</dd>
+                                <dt>Evidence</dt><dd>${escapeHtml(info.basis)}${v.alert_details ? ` <small>Camera record: ${escapeHtml(v.alert_details)}</small>` : ''}</dd>
+                            </dl>
                         </div>
                         <div class="violation-card-meta">
                             <div class="violation-fine-amount">₱${parseFloat(v.penalty_amount || 0).toFixed(2)}</div>
@@ -706,6 +773,15 @@ let reservationsCache = [];
 let refundsCache = [];
 let simulationCache = [];
 const SECTIONAL_ALERT_FINE = 200;
+
+// A bay is always exactly one of: Occupied, Reserved, Vacant.
+function slotStatus(slot) {
+    const raw = String(slot.slot_status || slot.availability_status || '').toUpperCase();
+    if (raw === 'OCCUPIED') return { key: 'occupied', label: 'Occupied' };
+    if (raw === 'RESERVED' || raw === 'HELD') return { key: 'reserved', label: 'Reserved' };
+    if (raw === 'VACANT' || raw === 'FREE') return { key: 'vacant', label: 'Vacant' };
+    return slot.is_occupied == 1 ? { key: 'occupied', label: 'Occupied' } : { key: 'vacant', label: 'Vacant' };
+}
 
 function formatPeso(value) {
     return '₱' + Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1329,19 +1405,26 @@ async function loadAdminViolations() {
                 ? `<span class="badge badge-paid">Paid</span>`
                 : isDismissed ? `<span class="badge badge-secondary">Dismissed</span>` : `<span class="badge badge-unpaid">Unpaid</span>`;
 
+            const viewButton = `<button class="btn btn-sm btn-outline" onclick="viewAdminViolation(${id})">View case</button>`;
             const actionCell = (isPaid || isDismissed)
-                ? `<span style="font-size: 0.8125rem; color: var(--text-muted);">${isPaid ? 'Settled' : 'Closed'}</span>`
+                ? `<div class="row-actions">${viewButton}</div><small>${isPaid ? 'Settled' : 'Closed'}</small>`
                 : `<div class="row-actions">
+                       ${viewButton}
                        <button class="btn btn-sm btn-success" onclick="resolveAdminViolation(${id}, 'PAID')">Mark paid</button>
                        <button class="btn btn-sm btn-outline" onclick="resolveAdminViolation(${id}, 'DISMISSED')">Dismiss</button>
                    </div>`;
+            const place = violationLocation(v);
+            const info = violationRule(v.violation_type);
+            const evidenceNote = Number(v.has_evidence) === 1
+                ? `Camera alert #${Number(v.alert_id)} with image`
+                : v.alert_id ? `Camera alert #${Number(v.alert_id)}, no image` : 'No camera alert linked';
 
             return `
                 <tr>
-                    <td data-sort="${id}"><strong>#V-${id}</strong></td>
-                    <td><code>${escapeHtml(v.plate_number || 'N/A')}</code></td>
-                    <td data-filter="Zone ${escapeHtml(v.zone || '—')}">Zone ${escapeHtml(v.zone || '—')} &bull; ${escapeHtml(v.slot_number || 'Driveway/Lane')}</td>
-                    <td data-filter="${escapeHtml(v.violation_type)}">${escapeHtml(v.violation_type)}</td>
+                    <td data-sort="${id}"><strong>#V-${id}</strong>${v.session_id ? `<small>Session #${Number(v.session_id)}</small>` : ''}</td>
+                    <td><code>${escapeHtml(v.plate_number || 'N/A')}</code>${v.vehicle_color && v.vehicle_color !== 'UNKNOWN' ? `<small>${escapeHtml(v.vehicle_color.toLowerCase())}${v.vehicle_type ? ' ' + escapeHtml(v.vehicle_type.toLowerCase()) : ''}</small>` : ''}</td>
+                    <td data-filter="Zone ${escapeHtml(v.zone || '—')}">${escapeHtml(place.text)}</td>
+                    <td data-filter="${escapeHtml(v.violation_type)}"><strong>${escapeHtml(v.violation_type)}</strong><small>${escapeHtml(v.alert_details || info.basis)}</small><small class="violation-evidence-note">${escapeHtml(evidenceNote)}</small></td>
                     <td data-sort="${Number(v.penalty_amount)}"><strong>${formatPeso(v.penalty_amount)}</strong></td>
                     <td data-filter="${statusLabel}">${statusBadge}</td>
                     <td data-sort="${escapeHtml(v.issued_at)}" style="font-size: 0.84rem; color: var(--text-secondary);">${formatPhtDateTime(v.issued_at)}</td>
@@ -1355,23 +1438,64 @@ async function loadAdminViolations() {
     }
 }
 
+function violationCaseFacts(v) {
+    const place = violationLocation(v);
+    const facts = [
+        ['Case', `#V-${Number(v.violation_id)}`],
+        ['Plate', v.plate_number || 'N/A'],
+        ['Vehicle', [v.vehicle_color && v.vehicle_color !== 'UNKNOWN' ? v.vehicle_color.toLowerCase() : '', v.vehicle_type ? v.vehicle_type.toLowerCase() : ''].filter(Boolean).join(' ') || 'Not recorded'],
+        ['Infraction', v.violation_type],
+        ['Seen in', place.seen || 'Not recorded'],
+        ['Assigned bay', place.assigned || 'None'],
+        ['Penalty', formatPeso(v.penalty_amount)],
+        ['Case status', titleCaseStatus(v.status || 'UNPAID')]
+    ];
+    if (v.session_id) facts.push(['Parking session', `#${Number(v.session_id)} · ${titleCaseStatus(v.payment_status || 'UNPAID')}`]);
+    if (v.entry_time) facts.push(['Entered', formatPhtDateTime(v.entry_time)]);
+    if (v.exit_time) facts.push(['Exited', formatPhtDateTime(v.exit_time)]);
+    if (v.camera_id) facts.push(['Camera', v.camera_id]);
+    if (v.detected_at) facts.push(['Detected', formatPhtDateTime(v.detected_at)]);
+    if (v.alert_details) facts.push(['Camera record', v.alert_details]);
+    if (v.reviewed_by) facts.push(['Confirmed by', `${v.reviewed_by}${v.reviewed_at ? ' · ' + formatPhtDateTime(v.reviewed_at) : ''}`]);
+    facts.push(['Fine issued', formatPhtDateTime(v.issued_at)]);
+    return facts;
+}
+
+function violationEvidence(v) {
+    return Number(v.has_evidence) === 1 && v.alert_id
+        ? { src: `${API_BASE}?action=sectional_evidence&alert_id=${Number(v.alert_id)}`, alt: `Camera frame for case #V-${Number(v.violation_id)}` }
+        : { missing: v.alert_id ? 'The camera alert for this case has no saved image.' : 'This case was recorded without a camera alert, so there is no image.' };
+}
+
+function viewAdminViolation(violationId) {
+    const v = violationsCache.find(item => Number(item.violation_id) === violationId);
+    if (!v) return;
+    const info = violationRule(v.violation_type);
+    decisionDialog.open({
+        title: `Case #V-${violationId}: ${v.violation_type}`,
+        subtitle: info.rule,
+        evidence: violationEvidence(v),
+        facts: violationCaseFacts(v),
+        notice: `Basis for the fine: ${info.basis}`,
+        actions: []
+    });
+}
+
 function resolveAdminViolation(violationId, status) {
     const v = violationsCache.find(item => Number(item.violation_id) === violationId);
     if (!v) return;
     const paying = status === 'PAID';
     const amount = formatPeso(v.penalty_amount);
-    const facts = [
-        ['Case', `#V-${violationId}`],
-        ['Plate', v.plate_number || 'N/A'],
-        ['Location', `Zone ${v.zone || '—'}, ${v.slot_number || 'Driveway/Lane'}`],
-        ['Infraction', v.violation_type],
-        ['Penalty', amount],
-        ['Logged', formatPhtDateTime(v.issued_at)]
-    ];
+    const facts = violationCaseFacts(v);
     decisionDialog.open({
         title: paying ? `Mark case #V-${violationId} as paid` : `Dismiss case #V-${violationId}`,
         subtitle: paying ? 'Record a cash payment received at the desk.' : 'Close this case without collecting the penalty.',
+        evidence: violationEvidence(v),
         facts,
+        criteria: paying ? null : [
+            'The image or camera record does not show the vehicle committing this infraction, or',
+            'The plate in the image does not match the plate on this case.'
+        ],
         fields: paying ? [{ id: 'received', type: 'checkbox', label: `I have received ${amount} in cash for this penalty.` }] : [],
         actions: [{
             label: paying ? `Mark ${amount} as paid` : 'Dismiss case',
@@ -1791,24 +1915,37 @@ function renderFilteredSlots() {
 
     adminMap.innerHTML = Object.keys(zones).sort().map(zone => {
         const zoneSlots = zones[zone];
-        const occupiedCount = zoneSlots.filter(s => s.is_occupied == 1).length;
-        const totalCount = zoneSlots.length;
+        const counts = { occupied: 0, reserved: 0, vacant: 0 };
+        zoneSlots.forEach(s => { counts[slotStatus(s).key] += 1; });
 
         const cards = zoneSlots.map(slot => {
-            const isOccupied = slot.is_occupied == 1;
-            const statusClass = isOccupied ? 'slot-occupied' : 'slot-available';
-            const plateDisplay = isOccupied && slot.plate_number ? slot.plate_number : '—';
+            const status = slotStatus(slot);
+            const isOccupied = status.key === 'occupied';
+            const plate = slot.plate_number ? normalizeLicensePlateInput(slot.plate_number) : '';
+            const plateDisplay = plate
+                ? `<code>${safeSectionalText(plate)}</code>${status.key === 'reserved' ? ' <small>reserved for</small>' : ''}`
+                : '—';
+            const cameraPlate = slot.observed_plate ? normalizeLicensePlateInput(slot.observed_plate) : '';
+            let plateCheck = '';
+            if (slot.plate_check === 'MATCH') plateCheck = `<small class="plate-check is-match">Camera read matches</small>`;
+            else if (slot.plate_check === 'MISMATCH') plateCheck = `<small class="plate-check is-mismatch">Camera read ${safeSectionalText(cameraPlate)} does not match</small>`;
+            else if (cameraPlate && !plate) plateCheck = `<small class="plate-check">Camera read ${safeSectionalText(cameraPlate)}</small>`;
+            const camera = zone === 'F'
+                ? `Zone allocation: ${Number(slot.zone_allocated_count || 0)}`
+                : `Camera: ${titleCaseStatus(slot.observed_state || 'NOT_OBSERVED')}${slot.observed_color && slot.observed_color !== 'UNKNOWN' ? ` · ${safeSectionalText(slot.observed_color.toLowerCase())}` : ''}`;
+            const next = isOccupied ? 'vacant' : 'occupied';
 
             return `
-                <div class="admin-slot-card ${statusClass}">
+                <div class="admin-slot-card slot-${status.key}">
                     <strong>${slot.slot_number}</strong>
                     <div class="slot-plate">${plateDisplay}</div>
-                    <p class="status-text ${statusClass}">
-                        <span class="slot-state ${isOccupied ? 'is-occupied' : 'is-available'}"><i aria-hidden="true"></i>${isOccupied ? 'Occupied' : 'Available'}</span>
-                        <small class="slot-detail">${zone === 'F' ? `Zone allocation: ${Number(slot.zone_allocated_count || 0)}` : `Camera: ${safeSectionalText(slot.observed_state || 'NOT_OBSERVED')}${slot.observed_color && slot.observed_color !== 'UNKNOWN' ? ` · ${safeSectionalText(slot.observed_color.toLowerCase())}` : ''}${slot.observed_plate ? ` · OCR ${safeSectionalText(slot.observed_plate)}` : ''}`}</small>
+                    ${plateCheck}
+                    <p class="status-text slot-${status.key}">
+                        <span class="slot-state is-${status.key}"><i aria-hidden="true"></i>${status.label}</span>
+                        <small class="slot-detail">${camera}</small>
                     </p>
-                    <button type="button" class="btn-action slot-override-button" aria-label="Mark ${slot.slot_number} ${isOccupied ? 'available' : 'occupied'}" onclick="toggleSlotOverride(${slot.slot_id}, ${isOccupied ? 0 : 1})">
-                        Mark ${isOccupied ? 'available' : 'occupied'}
+                    <button type="button" class="btn-action slot-override-button" aria-label="Mark ${slot.slot_number} ${next}" onclick="toggleSlotOverride(${slot.slot_id}, ${isOccupied ? 0 : 1})">
+                        Mark ${next}
                     </button>
                 </div>
             `;
@@ -1818,7 +1955,7 @@ function renderFilteredSlots() {
             <div class="zone-section">
                 <div class="zone-header">
                     <h3>Zone ${zone}</h3>
-                    <span class="zone-badge"><strong>${totalCount - occupiedCount}</strong> available <span aria-hidden="true">·</span> ${occupiedCount} occupied</span>
+                    <span class="zone-badge"><strong>${counts.vacant}</strong> vacant <span aria-hidden="true">·</span> ${counts.reserved} reserved <span aria-hidden="true">·</span> ${counts.occupied} occupied</span>
                 </div>
                 <div class="admin-grid">
                     ${cards}
@@ -1831,22 +1968,27 @@ function renderFilteredSlots() {
 function toggleSlotOverride(slotId, newOccupiedState) {
     const slot = adminSlotsCache.find(item => Number(item.slot_id) === slotId);
     if (!slot) return;
-    const stateName = newOccupiedState ? 'occupied' : 'available';
-    const wasOccupied = slot.is_occupied == 1;
+    const stateName = newOccupiedState ? 'occupied' : 'vacant';
+    const status = slotStatus(slot);
     const facts = [
         ['Space', `${slot.slot_number} (Zone ${slot.zone})`],
-        ['Current status', wasOccupied ? 'Occupied' : 'Available'],
-        ['Plate on record', wasOccupied && slot.plate_number ? slot.plate_number : 'None']
+        ['Current status', status.label],
+        [status.key === 'reserved' ? 'Reserved for' : 'Plate on record', slot.plate_number ? normalizeLicensePlateInput(slot.plate_number) : 'None']
     ];
-    let notice = '';
+    let notice = status.key === 'reserved' && !newOccupiedState
+        ? 'This bay has an active reservation. It stays reserved until the booking is cancelled or expires.'
+        : '';
     if (slot.zone === 'F') {
         facts.push(['Zone allocation', Number(slot.zone_allocated_count || 0)]);
     } else {
         const observed = slot.observed_state || 'NOT_OBSERVED';
         facts.push(['Camera state', observed]);
         if (slot.observed_color && slot.observed_color !== 'UNKNOWN') facts.push(['Vehicle colour', slot.observed_color.toLowerCase()]);
-        if (slot.observed_plate) facts.push(['Plate read by camera', slot.observed_plate]);
-        if (observed === 'NOT_OBSERVED') notice = 'The camera has no reading for this space, so this change rests on your own check of the bay.';
+        if (slot.observed_plate) {
+            const check = slot.plate_check === 'MATCH' ? ' (matches)' : slot.plate_check === 'MISMATCH' ? ' (does not match plate on record)' : '';
+            facts.push(['Plate read by camera', normalizeLicensePlateInput(slot.observed_plate) + check]);
+        }
+        if (observed === 'NOT_OBSERVED' && !notice) notice = 'The camera has no reading for this space, so this change rests on your own check of the bay.';
     }
     decisionDialog.open({
         title: `Mark ${slot.slot_number} as ${stateName}`,
