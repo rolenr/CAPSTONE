@@ -659,7 +659,7 @@ if (violationForm) {
                     <div style="background: var(--success-bg); border: 1px solid var(--success-border); border-radius: var(--radius-md); padding: 14px 16px; color: var(--success-text); display: flex; align-items: center; justify-content: space-between;">
                         <div>
                             <strong style="font-size: 0.875rem;">Clear Record</strong>
-                            <p style="margin: 2px 0 0 0; font-size: 0.78rem;">No active violations or outstanding penalties found for plate <code>${plate}</code>.</p>
+                            <p style="margin: 2px 0 0 0; font-size: 0.84rem;">No active violations or outstanding penalties found for plate <code>${plate}</code>.</p>
                         </div>
                         <span class="badge badge-paid">IN COMPLIANCE</span>
                     </div>
@@ -699,6 +699,344 @@ if (violationForm) {
 const adminPage = document.querySelector('body[data-page="admin"]');
 let adminSlotsCache = [];
 let adminCurrentZoneFilter = 'ALL';
+
+let sectionalAlertsCache = [];
+let violationsCache = [];
+let reservationsCache = [];
+let refundsCache = [];
+let simulationCache = [];
+const SECTIONAL_ALERT_FINE = 200;
+
+function formatPeso(value) {
+    return '₱' + Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function titleCaseStatus(value) {
+    const text = String(value || '').replace(/_/g, ' ').toLowerCase();
+    return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+async function postAdmin(action, payload, fallbackMessage) {
+    const response = await apiFetch(`${API_BASE}?action=${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    let data = {};
+    try { data = await response.json(); } catch (_) { /* handled below */ }
+    if (!response.ok || data.success === false) throw new Error(data.error || fallbackMessage);
+    return data;
+}
+
+// --- TABLE TOOLS: search, filter and sort for any admin table body ---
+const tableTools = (() => {
+    const states = new Map();
+    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+    function cellText(row, col, attr) {
+        const cell = row.cells[col];
+        if (!cell) return '';
+        return String(cell.dataset[attr] ?? cell.textContent).replace(/\s+/g, ' ').trim();
+    }
+
+    function dataRows(state) {
+        return Array.from(state.body.rows).filter(row => !row.classList.contains('no-match') && !row.querySelector('td[colspan]'));
+    }
+
+    function setup(bodyId, options) {
+        const body = document.getElementById(bodyId);
+        if (!body || states.has(bodyId)) return;
+        const table = body.closest('table');
+        const scroller = table.closest('.table-scroll') || table;
+        const filters = options.filters || [];
+        const state = { body, table, options, filters, query: '', picked: filters.map(() => ''), sortCol: -1, sortDir: 0, selects: [] };
+        states.set(bodyId, state);
+
+        const tools = document.createElement('div');
+        tools.className = 'table-tools';
+
+        if (options.search !== false) {
+            const search = document.createElement('input');
+            search.type = 'search';
+            search.className = 'tt-search';
+            search.placeholder = options.search || 'Search this table';
+            search.setAttribute('aria-label', options.search || 'Search this table');
+            search.addEventListener('input', () => { state.query = search.value.trim().toLowerCase(); apply(state); });
+            state.searchInput = search;
+            tools.append(search);
+        }
+
+        filters.forEach((filter, index) => {
+            const wrap = document.createElement('label');
+            wrap.className = 'tt-filter';
+            wrap.append(document.createTextNode(filter.label));
+            const select = document.createElement('select');
+            select.addEventListener('change', () => { state.picked[index] = select.value; apply(state); });
+            wrap.append(select);
+            state.selects[index] = select;
+            tools.append(wrap);
+        });
+
+        const clear = document.createElement('button');
+        clear.type = 'button';
+        clear.className = 'tt-clear';
+        clear.textContent = 'Clear filters';
+        clear.hidden = true;
+        clear.addEventListener('click', () => {
+            state.query = '';
+            state.picked = filters.map(() => '');
+            if (state.searchInput) state.searchInput.value = '';
+            apply(state);
+        });
+        state.clearButton = clear;
+
+        const count = document.createElement('span');
+        count.className = 'tt-count';
+        count.setAttribute('aria-live', 'polite');
+        state.countLabel = count;
+        tools.append(clear, count);
+        scroller.before(tools);
+
+        const noSort = options.noSort || [];
+        Array.from(table.tHead.rows[0].cells).forEach((th, col) => {
+            if ((options.numeric || []).includes(col)) th.classList.add('num');
+            if (noSort.includes(col)) return;
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'th-sort';
+            button.textContent = th.textContent.trim();
+            button.addEventListener('click', () => {
+                if (state.sortCol !== col) { state.sortCol = col; state.sortDir = 1; }
+                else if (state.sortDir === 1) state.sortDir = -1;
+                else { state.sortCol = -1; state.sortDir = 0; }
+                apply(state);
+            });
+            th.replaceChildren(button);
+            th.setAttribute('aria-sort', 'none');
+        });
+
+        // Re-apply whenever a loader rewrites the rows.
+        state.observer = new MutationObserver(() => apply(state));
+        state.observer.observe(body, { childList: true });
+        apply(state);
+    }
+
+    function refreshFilterOptions(state, rows) {
+        state.filters.forEach((filter, index) => {
+            const values = Array.from(new Set(rows.map(row => cellText(row, filter.col, 'filter')).filter(Boolean))).sort(collator.compare);
+            const select = state.selects[index];
+            if (state.picked[index] && !values.includes(state.picked[index])) state.picked[index] = '';
+            select.replaceChildren(new Option('All', ''), ...values.map(value => new Option(value, value)));
+            select.value = state.picked[index];
+        });
+    }
+
+    function apply(state) {
+        state.observer.disconnect();
+        const rows = dataRows(state);
+        rows.forEach((row, i) => { if (row.dataset.order === undefined) row.dataset.order = String(i); });
+        refreshFilterOptions(state, rows);
+        (state.options.numeric || []).forEach(col => rows.forEach(row => row.cells[col]?.classList.add('num')));
+
+        const tokens = state.query.split(/\s+/).filter(Boolean);
+        let shown = 0;
+        rows.forEach(row => {
+            const text = row.textContent.toLowerCase();
+            const visible = tokens.every(token => text.includes(token))
+                && state.filters.every((filter, i) => !state.picked[i] || cellText(row, filter.col, 'filter') === state.picked[i]);
+            row.hidden = !visible;
+            if (visible) shown += 1;
+        });
+
+        const ordered = rows.slice().sort((a, b) => {
+            if (state.sortDir !== 0) {
+                const x = cellText(a, state.sortCol, 'sort');
+                const y = cellText(b, state.sortCol, 'sort');
+                const nx = Number(x);
+                const ny = Number(y);
+                const result = x !== '' && y !== '' && !Number.isNaN(nx) && !Number.isNaN(ny) ? nx - ny : collator.compare(x, y);
+                if (result) return result * state.sortDir;
+            }
+            return Number(a.dataset.order) - Number(b.dataset.order);
+        });
+        state.body.querySelector('.no-match')?.remove();
+        state.body.append(...ordered);
+
+        if (rows.length && !shown) {
+            const empty = document.createElement('tr');
+            empty.className = 'no-match';
+            const cell = document.createElement('td');
+            cell.colSpan = state.table.tHead.rows[0].cells.length;
+            cell.textContent = 'No records match the current search and filters.';
+            empty.append(cell);
+            state.body.append(empty);
+        }
+
+        Array.from(state.table.tHead.rows[0].cells).forEach((th, col) => {
+            if (th.hasAttribute('aria-sort')) {
+                th.setAttribute('aria-sort', state.sortCol === col ? (state.sortDir === 1 ? 'ascending' : 'descending') : 'none');
+            }
+        });
+
+        const noun = state.options.noun || 'records';
+        state.countLabel.textContent = rows.length ? `Showing ${shown} of ${rows.length} ${noun}` : '';
+        state.clearButton.hidden = !(state.query || state.picked.some(Boolean));
+        state.observer.observe(state.body, { childList: true });
+        state.observer.takeRecords();
+    }
+
+    return { setup };
+})();
+
+// --- REVIEW DIALOG: one place that shows the evidence, rules and consequences before a decision ---
+const decisionDialog = (() => {
+    const dialog = document.getElementById('decisionDialog');
+    if (!dialog) return { open() {} };
+    const byId = id => document.getElementById(id);
+    const tones = { danger: 'btn-danger', success: 'btn-success', primary: 'btn-primary' };
+
+    function make(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
+    }
+
+    function readValues() {
+        const values = {};
+        dialog.querySelectorAll('[data-field]').forEach(input => {
+            values[input.dataset.field] = input.type === 'checkbox' ? input.checked : input.value.trim();
+        });
+        return values;
+    }
+
+    function close() { if (dialog.open) dialog.close(); }
+
+    function closeButton(label) {
+        const button = make('button', 'btn btn-outline', label);
+        button.type = 'button';
+        button.addEventListener('click', close);
+        return button;
+    }
+
+    function buildEvidence(evidence) {
+        const figure = make('figure', 'decision-evidence');
+        const missing = text => make('div', 'ev-missing', text);
+        if (evidence && evidence.src) {
+            const image = make('img');
+            image.src = evidence.src;
+            image.alt = evidence.alt || 'Evidence image';
+            image.addEventListener('error', () => image.replaceWith(missing('The evidence image could not be loaded.')));
+            const caption = make('figcaption');
+            const link = make('a', '', 'Open full size');
+            link.href = evidence.src;
+            link.target = '_blank';
+            link.rel = 'noopener';
+            caption.append(link);
+            figure.append(image, caption);
+        } else {
+            figure.append(missing((evidence && evidence.missing) || 'No evidence image was captured.'));
+        }
+        return figure;
+    }
+
+    function open(config) {
+        byId('decisionTitle').textContent = config.title;
+        const subtitle = byId('decisionSub');
+        subtitle.textContent = config.subtitle || '';
+        subtitle.hidden = !config.subtitle;
+
+        const body = byId('decisionBody');
+        body.className = 'decision-body';
+        const info = make('div', 'decision-info');
+        const errorBox = make('p', 'decision-error');
+        errorBox.setAttribute('role', 'alert');
+        errorBox.hidden = true;
+
+        if (config.facts && config.facts.length) {
+            const list = make('dl', 'decision-facts');
+            config.facts.forEach(([label, value]) => {
+                list.append(make('dt', '', label), make('dd', '', value === undefined || value === null || value === '' ? '—' : String(value)));
+            });
+            info.append(list);
+        }
+        if (config.notice) info.append(make('p', 'decision-notice', config.notice));
+        if (config.criteria && config.criteria.length) {
+            const wrap = make('div', 'decision-criteria');
+            wrap.append(make('h3', '', config.criteriaTitle || 'Check before deciding'));
+            const list = make('ul');
+            config.criteria.forEach(text => list.append(make('li', '', text)));
+            wrap.append(list);
+            info.append(wrap);
+        }
+        (config.fields || []).forEach(field => {
+            const wrap = make('div', 'decision-field' + (field.type === 'checkbox' ? ' is-check' : ''));
+            const inputId = `decisionField-${field.id}`;
+            const label = make('label', '', field.label);
+            label.htmlFor = inputId;
+            let input;
+            if (field.type === 'textarea') input = make('textarea');
+            else { input = make('input'); input.type = field.type || 'text'; }
+            input.id = inputId;
+            input.dataset.field = field.id;
+            if (field.min !== undefined) input.min = field.min;
+            if (field.type === 'checkbox') { input.checked = !!field.value; label.prepend(input); wrap.append(label); }
+            else { input.value = field.value ?? ''; wrap.append(label, input); }
+            if (field.help) wrap.append(make('span', 'field-help', field.help));
+            info.append(wrap);
+        });
+        const actions = config.actions || [];
+        if (actions.some(action => action.outcome)) {
+            const wrap = make('div', 'decision-consequences');
+            wrap.append(make('h3', '', actions.length > 1 ? 'What each choice does' : 'What happens'));
+            const list = make('ul', 'decision-outcomes');
+            actions.filter(action => action.outcome).forEach(action => {
+                const item = make('li', action.tone ? `tone-${action.tone}` : '');
+                item.append(make('strong', '', action.label), document.createTextNode(action.outcome));
+                list.append(item);
+            });
+            wrap.append(list);
+            info.append(wrap);
+        }
+        info.append(errorBox);
+
+        const parts = [];
+        if (config.evidence !== undefined) { body.classList.add('has-evidence'); parts.push(buildEvidence(config.evidence)); }
+        body.replaceChildren(...parts, info);
+
+        const footer = byId('decisionActions');
+        const cancel = closeButton(actions.length ? 'Cancel' : 'Close');
+        const buttons = actions.map(action => {
+            const button = make('button', `btn ${tones[action.tone] || 'btn-outline'}`, action.label);
+            button.type = 'button';
+            button.addEventListener('click', async () => {
+                errorBox.hidden = true;
+                footer.querySelectorAll('button').forEach(b => { b.disabled = true; });
+                try {
+                    const result = await action.run(readValues());
+                    if (typeof result === 'string' && result) {
+                        body.className = 'decision-body';
+                        body.replaceChildren(make('p', 'decision-notice', result));
+                        footer.replaceChildren(closeButton('Close'));
+                        footer.querySelector('button').focus();
+                    } else close();
+                } catch (error) {
+                    errorBox.textContent = error.message || 'Something went wrong. Try again.';
+                    errorBox.hidden = false;
+                    footer.querySelectorAll('button').forEach(b => { b.disabled = false; });
+                }
+            });
+            return button;
+        });
+        footer.replaceChildren(cancel, ...buttons);
+
+        if (typeof dialog.showModal === 'function') dialog.showModal(); else dialog.setAttribute('open', '');
+        (dialog.querySelector('[data-field]') || cancel).focus();
+    }
+
+    byId('decisionForm')?.addEventListener('submit', event => event.preventDefault());
+    return { open };
+})();
 
 // --- 1. OVERVIEW KPIS ---
 async function loadAdminStats() {
@@ -886,41 +1224,80 @@ async function loadSectionalAlerts() {
         const response = await apiFetch(`${API_BASE}?action=sectional_alerts`);
         const data = await response.json();
         if (!response.ok || !data.success) throw new Error(data.error || 'Unable to load alerts');
-        table.innerHTML = data.alerts.length ? data.alerts.map(a => `
+        sectionalAlertsCache = data.alerts;
+        const statusClass = { PENDING_REVIEW: 'badge-warning', CONFIRMED: 'badge-danger', REJECTED: 'badge-secondary' };
+        table.innerHTML = data.alerts.length ? data.alerts.map(a => {
+            const id = Number(a.alert_id);
+            const pending = a.status === 'PENDING_REVIEW';
+            const statusLabel = titleCaseStatus(a.status);
+            const evidenceUrl = `${API_BASE}?action=sectional_evidence&alert_id=${id}`;
+            return `
             <tr>
-                <td>#${Number(a.alert_id)}<br><small>${safeSectionalText(a.status)}</small></td>
-                <td>${safeSectionalText(a.scenario_id)} / ${safeSectionalText(a.region)}</td>
-                <td>${safeSectionalText(a.violation_type)}<br><small>${safeSectionalText(a.details)}</small></td>
-                <td>${a.status === 'PENDING_REVIEW'
-                    ? `<input id="sectionalSession${Number(a.alert_id)}" type="number" min="1" value="${a.session_id ? Number(a.session_id) : ''}" aria-label="Session for alert ${Number(a.alert_id)}" style="width:6rem">`
-                    : safeSectionalText(a.session_id || '—')}</td>
-                <td>${a.evidence ? `<a href="${API_BASE}?action=sectional_evidence&alert_id=${Number(a.alert_id)}" target="_blank" rel="noopener">View image</a>` : 'No image'}</td>
-                <td>${a.status === 'PENDING_REVIEW'
-                    ? `<button class="btn btn-sm btn-success" onclick="reviewSectionalAlert(${Number(a.alert_id)},'CONFIRMED')">Confirm</button>
-                       <button class="btn btn-sm btn-outline" onclick="reviewSectionalAlert(${Number(a.alert_id)},'REJECTED')">Reject</button>`
-                    : safeSectionalText(a.reviewed_by || a.status)}</td>
-            </tr>`).join('') : '<tr><td colspan="6">No sectional alerts.</td></tr>';
+                <td data-sort="${id}" data-filter="${safeSectionalText(statusLabel)}"><strong>#${id}</strong><br><span class="badge ${statusClass[a.status] || 'badge-secondary'}">${safeSectionalText(statusLabel)}</span></td>
+                <td data-sort="${safeSectionalText(a.scenario_id)}">${safeSectionalText(a.scenario_id)}<small>${safeSectionalText(a.region)}</small></td>
+                <td data-filter="${safeSectionalText(a.violation_type)}"><strong>${safeSectionalText(a.violation_type)}</strong><small>${safeSectionalText(a.details)}</small></td>
+                <td data-sort="${a.session_id ? Number(a.session_id) : ''}">${a.session_id ? '#' + Number(a.session_id) : '<small>Not linked</small>'}</td>
+                <td>${a.evidence
+                    ? `<button type="button" class="thumb-btn" onclick="reviewSectionalAlert(${id})" aria-label="Open evidence for alert ${id}"><img class="alert-thumb" loading="lazy" src="${evidenceUrl}" alt="Evidence for alert ${id}"></button>`
+                    : '<small>No image</small>'}</td>
+                <td>${pending
+                    ? `<button type="button" class="btn btn-sm btn-primary" onclick="reviewSectionalAlert(${id})">Review</button>`
+                    : `<div class="row-actions"><button type="button" class="btn btn-sm btn-outline" onclick="reviewSectionalAlert(${id})">View</button></div>${a.reviewed_by ? `<small>by ${safeSectionalText(a.reviewed_by)}</small>` : ''}`}</td>
+            </tr>`;
+        }).join('') : '<tr><td colspan="6">No sectional alerts.</td></tr>';
     } catch (error) {
         table.innerHTML = `<tr><td colspan="6">${safeSectionalText(error.message)}</td></tr>`;
     }
 }
 
-async function reviewSectionalAlert(alertId, decision) {
-    const raw = document.getElementById(`sectionalSession${alertId}`)?.value || '';
-    const sessionId = raw ? Number(raw) : null;
-    if (raw && (!Number.isInteger(sessionId) || sessionId < 1)) return alert('Enter a valid session ID.');
-    if (!confirm(`${decision === 'CONFIRMED' ? 'Confirm' : 'Reject'} sectional alert #${alertId}?`)) return;
-    try {
-        const response = await apiFetch(`${API_BASE}?action=review_sectional_alert`, {
-            method: 'POST', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({alert_id: alertId, decision, session_id: sessionId})
-        });
-        const data = await response.json();
-        if (!response.ok || !data.success) throw new Error(data.error || 'Review failed');
-        loadSectionalAlerts();
-        loadAdminViolations();
-        loadAdminAnalytics();
-    } catch (error) { alert(error.message); }
+function reviewSectionalAlert(alertId) {
+    const a = sectionalAlertsCache.find(item => Number(item.alert_id) === alertId);
+    if (!a) return;
+    const pending = a.status === 'PENDING_REVIEW';
+    const timed = /driveway|double/i.test(String(a.violation_type || ''));
+    const facts = [
+        ['Alert', `#${alertId}`],
+        ['Scenario', a.scenario_id],
+        ['Region', a.region],
+        ['Finding', a.violation_type],
+        ['Details', a.details],
+        ['Status', titleCaseStatus(a.status)],
+        ['Linked session', a.session_id ? `#${Number(a.session_id)}` : 'None']
+    ];
+    if (a.plate_number) facts.push(['Plate', a.plate_number]);
+    if (a.confidence !== undefined && a.confidence !== null) facts.push(['Detection confidence', a.confidence]);
+    if (a.duration_seconds !== undefined && a.duration_seconds !== null) facts.push(['Observed for', `${a.duration_seconds} seconds`]);
+    const detected = a.detected_at || a.created_at;
+    if (detected) facts.push(['Detected', formatPhtDateTime(detected)]);
+    if (a.reviewed_by) facts.push(['Reviewed by', a.reviewed_by]);
+
+    const criteria = [`The image shows a vehicle in region ${a.region || 'shown'} that matches the finding.`];
+    if (timed) criteria.push('Driveway and double-parking alerts need 20 continuous seconds in every zone. Check the details for the observed time.');
+    criteria.push('If you link a session, its plate should match the vehicle in the image.');
+
+    decisionDialog.open({
+        title: pending ? `Review alert #${alertId}` : `Alert #${alertId}`,
+        subtitle: pending ? 'Compare the image with the finding, then confirm or reject.' : 'This alert has already been reviewed.',
+        evidence: a.evidence
+            ? { src: `${API_BASE}?action=sectional_evidence&alert_id=${alertId}`, alt: `Evidence for alert ${alertId}` }
+            : { missing: 'No image was captured for this alert. Decide from the finding details only.' },
+        facts,
+        criteria: pending ? criteria : null,
+        fields: pending ? [{ id: 'session', label: 'Vehicle session ID', type: 'number', min: 1, value: a.session_id ? Number(a.session_id) : '', help: 'Optional. Link the session this alert applies to.' }] : [],
+        actions: pending ? [
+            { label: 'Reject alert', tone: '', outcome: 'Closes the alert. No fine is issued.', run: values => submitAlertReview(alertId, 'REJECTED', values.session) },
+            { label: `Confirm and fine ${formatPeso(SECTIONAL_ALERT_FINE)}`, tone: 'danger', outcome: `Records the violation with a ${formatPeso(SECTIONAL_ALERT_FINE)} fine.`, run: values => submitAlertReview(alertId, 'CONFIRMED', values.session) }
+        ] : []
+    });
+}
+
+async function submitAlertReview(alertId, decision, rawSession) {
+    const sessionId = rawSession ? Number(rawSession) : null;
+    if (rawSession && (!Number.isInteger(sessionId) || sessionId < 1)) throw new Error('Enter a valid session ID, or leave it blank.');
+    await postAdmin('review_sectional_alert', { alert_id: alertId, decision, session_id: sessionId }, 'Review failed');
+    loadSectionalAlerts();
+    loadAdminViolations();
+    loadAdminAnalytics();
 }
 
 async function loadAdminViolations() {
@@ -932,36 +1309,42 @@ async function loadAdminViolations() {
         const data = await response.json();
 
         if (!data.success || !data.violations) {
-            table.innerHTML = `<tr><td colspan="8">${data.error || 'Failed to load violations.'}</td></tr>`;
+            table.innerHTML = `<tr><td colspan="8">${escapeHtml(data.error || 'Failed to load violations.')}</td></tr>`;
             return;
         }
 
         const violations = data.violations;
+        violationsCache = violations;
         if (violations.length === 0) {
             table.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 15px;">No violations on record.</td></tr>`;
             return;
         }
 
         table.innerHTML = violations.map(v => {
+            const id = Number(v.violation_id);
             const isPaid = v.status === 'PAID';
+            const isDismissed = v.status === 'DISMISSED';
+            const statusLabel = isPaid ? 'Paid' : isDismissed ? 'Dismissed' : 'Unpaid';
             const statusBadge = isPaid
-                ? `<span class="badge badge-paid">PAID / SETTLED</span>`
-                : `<span class="badge badge-unpaid">UNPAID / PENDING</span>`;
+                ? `<span class="badge badge-paid">Paid</span>`
+                : isDismissed ? `<span class="badge badge-secondary">Dismissed</span>` : `<span class="badge badge-unpaid">Unpaid</span>`;
 
-            const actionCell = isPaid
-                ? `<span style="font-size: 0.75rem; color: var(--text-muted);">Settled</span>`
-                : `<button class="btn btn-sm btn-success" onclick="resolveAdminViolation(${v.violation_id}, 'PAID')">Mark as Paid</button>
-                   <button class="btn btn-sm btn-outline" style="margin-left: 4px;" onclick="resolveAdminViolation(${v.violation_id}, 'DISMISSED')">Dismiss</button>`;
+            const actionCell = (isPaid || isDismissed)
+                ? `<span style="font-size: 0.8125rem; color: var(--text-muted);">${isPaid ? 'Settled' : 'Closed'}</span>`
+                : `<div class="row-actions">
+                       <button class="btn btn-sm btn-success" onclick="resolveAdminViolation(${id}, 'PAID')">Mark paid</button>
+                       <button class="btn btn-sm btn-outline" onclick="resolveAdminViolation(${id}, 'DISMISSED')">Dismiss</button>
+                   </div>`;
 
             return `
                 <tr>
-                    <td><strong>#V-${v.violation_id}</strong></td>
-                    <td><code>${v.plate_number || 'N/A'}</code></td>
-                    <td>Zone ${v.zone || '—'} &bull; ${v.slot_number || 'Driveway/Lane'}</td>
-                    <td>${v.violation_type}</td>
-                    <td><strong>₱${Number(v.penalty_amount).toFixed(2)}</strong></td>
-                    <td>${statusBadge}</td>
-                    <td style="font-size: 0.78rem; color: var(--text-muted);">${formatPhtDateTime(v.issued_at)}</td>
+                    <td data-sort="${id}"><strong>#V-${id}</strong></td>
+                    <td><code>${escapeHtml(v.plate_number || 'N/A')}</code></td>
+                    <td data-filter="Zone ${escapeHtml(v.zone || '—')}">Zone ${escapeHtml(v.zone || '—')} &bull; ${escapeHtml(v.slot_number || 'Driveway/Lane')}</td>
+                    <td data-filter="${escapeHtml(v.violation_type)}">${escapeHtml(v.violation_type)}</td>
+                    <td data-sort="${Number(v.penalty_amount)}"><strong>${formatPeso(v.penalty_amount)}</strong></td>
+                    <td data-filter="${statusLabel}">${statusBadge}</td>
+                    <td data-sort="${escapeHtml(v.issued_at)}" style="font-size: 0.84rem; color: var(--text-secondary);">${formatPhtDateTime(v.issued_at)}</td>
                     <td>${actionCell}</td>
                 </tr>
             `;
@@ -972,32 +1355,38 @@ async function loadAdminViolations() {
     }
 }
 
-async function resolveAdminViolation(violationId, status) {
-    const actionLabel = status === 'PAID' ? 'confirm cash receipt and mark this penalty as PAID' : 'DISMISS this infraction';
-    if (!confirm(`Are you sure you want to ${actionLabel}? This action will be logged in the immutable audit trail.`)) return;
-
-    try {
-        const response = await apiFetch(`${API_BASE}?action=admin_resolve_violation`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                violation_id: violationId,
-                status: status,
-            })
-        });
-        const data = await response.json();
-
-        if (data.success) {
-            loadAdminViolations();
-            loadAdminStats();
-            loadAdminAnalytics();
-            loadAdminAuditLogs();
-        } else {
-            alert(data.error || 'Failed to update violation.');
-        }
-    } catch (err) {
-        alert('Server communication error.');
-    }
+function resolveAdminViolation(violationId, status) {
+    const v = violationsCache.find(item => Number(item.violation_id) === violationId);
+    if (!v) return;
+    const paying = status === 'PAID';
+    const amount = formatPeso(v.penalty_amount);
+    const facts = [
+        ['Case', `#V-${violationId}`],
+        ['Plate', v.plate_number || 'N/A'],
+        ['Location', `Zone ${v.zone || '—'}, ${v.slot_number || 'Driveway/Lane'}`],
+        ['Infraction', v.violation_type],
+        ['Penalty', amount],
+        ['Logged', formatPhtDateTime(v.issued_at)]
+    ];
+    decisionDialog.open({
+        title: paying ? `Mark case #V-${violationId} as paid` : `Dismiss case #V-${violationId}`,
+        subtitle: paying ? 'Record a cash payment received at the desk.' : 'Close this case without collecting the penalty.',
+        facts,
+        fields: paying ? [{ id: 'received', type: 'checkbox', label: `I have received ${amount} in cash for this penalty.` }] : [],
+        actions: [{
+            label: paying ? `Mark ${amount} as paid` : 'Dismiss case',
+            tone: paying ? 'success' : 'danger',
+            outcome: paying ? 'Settles the penalty and adds an entry to the audit trail.' : 'Closes the case with no payment and adds an entry to the audit trail.',
+            run: async values => {
+                if (paying && !values.received) throw new Error('Confirm that the cash was received first.');
+                await postAdmin('admin_resolve_violation', { violation_id: violationId, status }, 'Failed to update violation.');
+                loadAdminViolations();
+                loadAdminStats();
+                loadAdminAnalytics();
+                loadAdminAuditLogs();
+            }
+        }]
+    });
 }
 
 // --- 4. IMMUTABLE AUDIT TRAIL LOGS ---
@@ -1010,7 +1399,7 @@ async function loadAdminAuditLogs() {
         const data = await response.json();
 
         if (!data.success || !data.logs) {
-            table.innerHTML = `<tr><td colspan="5">${data.error || 'Failed to load audit logs.'}</td></tr>`;
+            table.innerHTML = `<tr><td colspan="5">${escapeHtml(data.error || 'Failed to load audit logs.')}</td></tr>`;
             return;
         }
 
@@ -1021,14 +1410,14 @@ async function loadAdminAuditLogs() {
         }
 
         table.innerHTML = logs.map(l => {
-            const actionClass = `audit-action-${l.action_type}`;
+            const actionClass = `audit-action-${escapeHtml(l.action_type)}`;
             return `
                 <tr>
-                    <td style="white-space: nowrap; font-size: 0.78rem; color: var(--text-muted);">${formatPhtDateTime(l.created_at)}</td>
-                    <td><strong>${l.admin_email}</strong></td>
-                    <td><span class="audit-action-tag ${actionClass}">${l.action_type}</span></td>
-                    <td><code>${l.target_entity} #${l.target_id || ''}</code></td>
-                    <td>${l.details}</td>
+                    <td data-sort="${escapeHtml(l.created_at)}" style="white-space: nowrap; font-size: 0.84rem; color: var(--text-secondary);">${formatPhtDateTime(l.created_at)}</td>
+                    <td data-filter="${escapeHtml(l.admin_email)}"><strong>${escapeHtml(l.admin_email)}</strong></td>
+                    <td data-filter="${escapeHtml(l.action_type)}"><span class="audit-action-tag ${actionClass}">${escapeHtml(l.action_type)}</span></td>
+                    <td><code>${escapeHtml(l.target_entity)} #${escapeHtml(l.target_id || '')}</code></td>
+                    <td>${escapeHtml(l.details)}</td>
                 </tr>
             `;
         }).join('');
@@ -1048,11 +1437,12 @@ async function loadAdminReservations() {
         const data = await response.json();
 
         if (!data.success) {
-            table.innerHTML = `<tr><td colspan="7">${data.error || 'Failed to load reservations.'}</td></tr>`;
+            table.innerHTML = `<tr><td colspan="7">${escapeHtml(data.error || 'Failed to load reservations.')}</td></tr>`;
             return;
         }
 
         const reservations = data.reservations;
+        reservationsCache = reservations || [];
 
         if (!reservations || reservations.length === 0) {
             table.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 15px;">No active reservations on record.</td></tr>`;
@@ -1061,14 +1451,14 @@ async function loadAdminReservations() {
 
         table.innerHTML = reservations.map(r => `
             <tr>
-                <td><code>${r.plate_number}</code></td>
-                <td>${r.email || '—'} ${r.is_vip ? '<span class="badge badge-vip">VIP</span>' : ''}</td>
-                <td>Zone ${r.zone} &bull; Slot ${r.slot_number}</td>
-                <td>${r.start_date || 'N/A'}</td>
-                <td>${r.end_date || 'N/A'}</td>
-                <td><strong>₱${Number(r.fee).toFixed(2)}</strong></td>
+                <td><code>${escapeHtml(r.plate_number)}</code></td>
+                <td>${escapeHtml(r.email || '—')} ${r.is_vip ? '<span class="badge badge-vip">VIP</span>' : ''}</td>
+                <td data-filter="Zone ${escapeHtml(r.zone)}">Zone ${escapeHtml(r.zone)} &bull; Slot ${escapeHtml(r.slot_number)}</td>
+                <td data-sort="${escapeHtml(r.start_date || '')}">${escapeHtml(r.start_date || 'N/A')}</td>
+                <td data-sort="${escapeHtml(r.end_date || '')}">${escapeHtml(r.end_date || 'N/A')}</td>
+                <td data-sort="${Number(r.fee)}"><strong>${formatPeso(r.fee)}</strong></td>
                 <td>
-                    <button class="btn btn-sm btn-danger" onclick="overrideReservation(${r.reservation_id})">Override / Cancel</button>
+                    <button class="btn btn-sm btn-danger" onclick="overrideReservation(${Number(r.reservation_id)})">Cancel booking</button>
                 </td>
             </tr>
         `).join('');
@@ -1085,58 +1475,80 @@ async function loadAdminRefundQueue() {
         const response = await apiFetch(`${API_BASE}?action=admin_refund_queue`);
         const data = await response.json();
         if (!response.ok || !data.success) throw new Error(data.error || 'Refund queue unavailable');
+        refundsCache = data.refunds;
         const escape = value => String(value ?? '—').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
         table.innerHTML = data.refunds.length ? data.refunds.map(r => {
+            const statusLabel = titleCaseStatus(r.refund_status);
+            const canApprove = r.refund_status === 'STAFF_REVIEW' && r.reservation_status === 'CANCELLED';
             return `<tr>
-            <td>#${Number(r.reservation_id)}</td><td>${escape(r.plate_number)}</td>
-            <td>₱${(Number(r.amount_centavos) / 100).toFixed(2)}</td>
-            <td>${escape(r.refund_status)}</td><td><code>${escape(r.payment_id)}</code></td>
-            <td>${r.refund_status === 'STAFF_REVIEW' && r.reservation_status === 'CANCELLED' ? `<button class="btn btn-sm btn-outline" onclick="requestReservationRefund(${Number(r.reservation_id)})">Approve refund</button>` : 'Review payment provider'}</td>
+            <td data-sort="${Number(r.reservation_id)}">#${Number(r.reservation_id)}</td><td><code>${escape(r.plate_number)}</code></td>
+            <td data-sort="${Number(r.amount_centavos) / 100}">${formatPeso(Number(r.amount_centavos) / 100)}</td>
+            <td data-filter="${escape(statusLabel)}">${escape(statusLabel)}</td><td><code>${escape(r.payment_id)}</code></td>
+            <td>${canApprove ? `<button class="btn btn-sm btn-primary" onclick="requestReservationRefund(${Number(r.reservation_id)})">Review refund</button>` : '<small>Handled with the payment provider</small>'}</td>
         </tr>`;
         }).join('') : '<tr><td colspan="6">No refunds awaiting review.</td></tr>';
     } catch (error) { table.innerHTML = '<tr><td colspan="6">Refund queue unavailable.</td></tr>'; }
 }
 
-async function requestReservationRefund(reservationId) {
-    if (!confirm(`Approve a full demo/sandbox refund review for booking #${reservationId}?`)) return;
-    const response = await apiFetch(`${API_BASE}?action=admin_request_refund`, {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({reservation_id: reservationId})
+function requestReservationRefund(reservationId) {
+    const r = refundsCache.find(item => Number(item.reservation_id) === reservationId);
+    if (!r) return;
+    const amount = formatPeso(Number(r.amount_centavos) / 100);
+    decisionDialog.open({
+        title: `Review refund for booking #${reservationId}`,
+        subtitle: 'The booking was cancelled after payment.',
+        facts: [
+            ['Booking', `#${reservationId}`],
+            ['Plate', r.plate_number],
+            ['Booking status', titleCaseStatus(r.reservation_status)],
+            ['Refund status', titleCaseStatus(r.refund_status)],
+            ['Amount paid', amount],
+            ['Payment reference', r.payment_id]
+        ],
+        criteria: ['The booking is cancelled and the slot is no longer held.', 'The amount matches what the driver paid.'],
+        notice: 'Local demo payments move no real money.',
+        actions: [{
+            label: `Approve ${amount} refund`,
+            tone: 'primary',
+            outcome: `Approves a full refund of ${amount} for this booking.`,
+            run: async () => {
+                const data = await postAdmin('admin_request_refund', { reservation_id: reservationId }, 'Refund status unavailable.');
+                loadAdminRefundQueue();
+                loadAdminAnalytics();
+                return data.message || 'Refund review recorded.';
+            }
+        }]
     });
-    const data = await response.json();
-    alert(data.message || data.error || 'Refund status unavailable.');
-    loadAdminRefundQueue();
-    loadAdminAnalytics();
 }
 
-async function overrideReservation(reservationId) {
-    if (!confirm('Override this reservation? This will cancel it, free the assigned slot, and log the action in the audit trail.')) return;
-
-    try {
-        const response = await apiFetch(`${API_BASE}?action=override_reservation`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                reservation_id: reservationId,
-                status: 'CANCELLED',
-                release_slot: true,
-            })
-        });
-        const data = await response.json();
-
-        if (data.success) {
-            loadAdminReservations();
-            loadAdminRefundQueue();
-            loadAdminStats();
-            loadAdminAnalytics();
-            loadAdminMap();
-            loadAdminAuditLogs();
-        } else {
-            alert(data.error || 'Failed to override reservation.');
-        }
-    } catch (err) {
-        alert('Server connection failed.');
-    }
+function overrideReservation(reservationId) {
+    const r = reservationsCache.find(item => Number(item.reservation_id) === reservationId);
+    if (!r) return;
+    decisionDialog.open({
+        title: `Cancel booking for ${r.plate_number}`,
+        subtitle: 'This is a staff override of a prepaid reservation.',
+        facts: [
+            ['Plate', r.plate_number],
+            ['Account', r.email || '—'],
+            ['Space', `Zone ${r.zone}, slot ${r.slot_number}`],
+            ['Period', `${r.start_date || 'N/A'} to ${r.end_date || 'N/A'}`],
+            ['Prepaid fee', formatPeso(r.fee)]
+        ],
+        actions: [{
+            label: 'Cancel booking',
+            tone: 'danger',
+            outcome: 'Cancels the reservation, frees the assigned slot, and adds an entry to the audit trail. A paid booking then appears in Reservation Refund Review.',
+            run: async () => {
+                await postAdmin('override_reservation', { reservation_id: reservationId, status: 'CANCELLED', release_slot: true }, 'Failed to override reservation.');
+                loadAdminReservations();
+                loadAdminRefundQueue();
+                loadAdminStats();
+                loadAdminAnalytics();
+                loadAdminMap();
+                loadAdminAuditLogs();
+            }
+        }]
+    });
 }
 
 // --- 6. USER ACCOUNTS & VIP MANAGEMENT ---
@@ -1168,8 +1580,8 @@ async function loadAdminAccounts(search = '') {
                 <tr>
                     <td><strong>${escapeHtml(a.email)}</strong></td>
                     <td><code>${escapeHtml(a.plate_number || 'No linked vehicle')}</code></td>
-                    <td>${a.plate_number ? (isVip ? '<span class="badge badge-vip">VIP / PWD PRIORITY</span>' : '<span class="badge badge-bypassed">STANDARD</span>') : 'Staff account'}</td>
-                    <td>
+                    <td data-filter="${a.plate_number ? (isVip ? 'VIP / PWD priority' : 'Standard') : 'Staff account'}">${a.plate_number ? (isVip ? '<span class="badge badge-vip">VIP / PWD PRIORITY</span>' : '<span class="badge badge-bypassed">STANDARD</span>') : 'Staff account'}</td>
+                    <td data-sort="${role}" data-filter="${role}">
                         <select id="accountRole-${Number(a.account_id)}" aria-label="Role for ${escapeHtml(a.email)}">
                             ${['ADMIN', 'DRIVER', 'CASHIER', 'VENDOR'].map(option => `<option value="${option}" ${role === option ? 'selected' : ''} ${option === 'DRIVER' && !a.plate_number ? 'disabled' : ''}>${option}</option>`).join('')}
                         </select>
@@ -1265,12 +1677,12 @@ async function loadAlprLogs() {
 
             return `
                 <tr>
-                    <td style="white-space: nowrap; font-size: 0.78rem; color: var(--text-muted);">${formatPhtDateTime(log.timestamp)}</td>
+                    <td data-sort="${escapeHtml(log.timestamp)}" style="white-space: nowrap; font-size: 0.84rem; color: var(--text-secondary);">${formatPhtDateTime(log.timestamp)}</td>
                     <td><code>${log.plate_number}</code></td>
                     <td>${log.zone ? 'Zone ' + log.zone + ' &bull; ' : ''}Slot ${log.slot_number || 'Unassigned'}</td>
-                    <td><span style="font-weight: 600; color: var(--primary);">98.5%</span></td>
-                    <td>${locStatus}</td>
-                    <td><span class="badge ${badgeClass}">${log.status || 'UNPAID'}</span></td>
+                    <td data-sort="98.5"><span style="font-weight: 600; color: var(--primary);">98.5%</span></td>
+                    <td data-filter="${log.location_status === 'EXITED' ? 'Exit gate' : 'Entrance gate'}">${locStatus}</td>
+                    <td data-filter="${escapeHtml(log.status || 'UNPAID')}"><span class="badge ${badgeClass}">${escapeHtml(log.status || 'UNPAID')}</span></td>
                 </tr>
             `;
         }).join('');
@@ -1287,42 +1699,50 @@ async function loadSimulationSessions() {
         const response = await apiFetch(`${API_BASE}?action=admin_simulation_sessions`);
         const data = await response.json();
         if (!data.success) throw new Error(data.error || 'Unable to load simulation sessions.');
+        simulationCache = data.sessions;
         body.innerHTML = data.sessions.length ? data.sessions.map(session => `
             <tr>
-                <td>${Number(session.session_id)}</td>
-                <td>${safeSectionalText(session.scenario_id)}</td>
-                <td>${safeSectionalText(session.plate_number)}</td>
+                <td data-sort="${Number(session.session_id)}">#${Number(session.session_id)}</td>
+                <td data-filter="${safeSectionalText(session.scenario_id)}">${safeSectionalText(session.scenario_id)}</td>
+                <td><code>${safeSectionalText(session.plate_number)}</code></td>
                 <td>${safeSectionalText(session.slot_number)}</td>
-                <td>${safeSectionalText(session.payment_status)}</td>
-                <td><button type="button" class="btn-action" onclick="recoverSimulationSession(${Number(session.session_id)})">Close session</button></td>
+                <td data-filter="${safeSectionalText(titleCaseStatus(session.payment_status))}">${safeSectionalText(titleCaseStatus(session.payment_status))}</td>
+                <td><button type="button" class="btn btn-sm btn-outline" onclick="recoverSimulationSession(${Number(session.session_id)})">Close session</button></td>
             </tr>`).join('') : '<tr><td colspan="6">No open simulation sessions.</td></tr>';
     } catch (error) {
         body.innerHTML = `<tr><td colspan="6">${safeSectionalText(error.message)}</td></tr>`;
     }
 }
 
-async function recoverSimulationSession(sessionId) {
-    const reason = prompt(`Reason for closing simulation session ${sessionId} without an exit feed:`);
-    if (reason === null) return;
-    if (reason.trim().length < 8) {
-        alert('Enter a reason of at least 8 characters.');
-        return;
-    }
-    if (!confirm(`Close simulation session ${sessionId}? This records a simulation recovery, not a camera-confirmed departure.`)) return;
-    try {
-        const response = await apiFetch(`${API_BASE}?action=admin_close_simulation_session`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session_id: sessionId, reason: reason.trim() })
-        });
-        const data = await response.json();
-        if (!data.success) throw new Error(data.error || 'Unable to close session.');
-        await loadSimulationSessions();
-        loadAdminMap();
-        loadAdminStats();
-        loadAdminAuditLogs();
-    } catch (error) {
-        alert(error.message);
-    }
+function recoverSimulationSession(sessionId) {
+    const session = simulationCache.find(item => Number(item.session_id) === sessionId);
+    if (!session) return;
+    decisionDialog.open({
+        title: `Close simulation session #${sessionId}`,
+        subtitle: 'Use this only when the simulation ended before its exit feed.',
+        facts: [
+            ['Session', `#${sessionId}`],
+            ['Scenario', session.scenario_id],
+            ['Plate', session.plate_number],
+            ['Bay', session.slot_number],
+            ['Payment', titleCaseStatus(session.payment_status)]
+        ],
+        criteria: ['Payment or validation is cleared.', 'Any violation fees on the session are cleared.'],
+        fields: [{ id: 'reason', type: 'textarea', label: 'Reason for closing', help: 'At least 8 characters. Saved with the recovery record.' }],
+        actions: [{
+            label: 'Close session',
+            tone: 'danger',
+            outcome: 'Closes the session and reconciles its slot and zone count. It is recorded as a simulation recovery, not a camera-confirmed departure.',
+            run: async values => {
+                if (values.reason.length < 8) throw new Error('Enter a reason of at least 8 characters.');
+                await postAdmin('admin_close_simulation_session', { session_id: sessionId, reason: values.reason }, 'Unable to close session.');
+                await loadSimulationSessions();
+                loadAdminMap();
+                loadAdminStats();
+                loadAdminAuditLogs();
+            }
+        }]
+    });
 }
 
 async function loadAdminMap() {
@@ -1384,8 +1804,8 @@ function renderFilteredSlots() {
                     <strong>${slot.slot_number}</strong>
                     <div class="slot-plate">${plateDisplay}</div>
                     <p class="status-text ${statusClass}">
-                        ${isOccupied ? 'Allocated' : 'Available'}<br>
-                        <small>${zone === 'F' ? `Zone allocation: ${Number(slot.zone_allocated_count || 0)}` : `Camera: ${safeSectionalText(slot.observed_state || 'NOT_OBSERVED')}${slot.observed_color && slot.observed_color !== 'UNKNOWN' ? ` · ${safeSectionalText(slot.observed_color.toLowerCase())}` : ''}${slot.observed_plate ? ` · OCR ${safeSectionalText(slot.observed_plate)}` : ''}`}</small>
+                        <span class="slot-state ${isOccupied ? 'is-occupied' : 'is-available'}"><i aria-hidden="true"></i>${isOccupied ? 'Occupied' : 'Available'}</span>
+                        <small class="slot-detail">${zone === 'F' ? `Zone allocation: ${Number(slot.zone_allocated_count || 0)}` : `Camera: ${safeSectionalText(slot.observed_state || 'NOT_OBSERVED')}${slot.observed_color && slot.observed_color !== 'UNKNOWN' ? ` · ${safeSectionalText(slot.observed_color.toLowerCase())}` : ''}${slot.observed_plate ? ` · OCR ${safeSectionalText(slot.observed_plate)}` : ''}`}</small>
                     </p>
                     <button type="button" class="btn-action slot-override-button" aria-label="Mark ${slot.slot_number} ${isOccupied ? 'available' : 'occupied'}" onclick="toggleSlotOverride(${slot.slot_id}, ${isOccupied ? 0 : 1})">
                         Mark ${isOccupied ? 'available' : 'occupied'}
@@ -1408,32 +1828,45 @@ function renderFilteredSlots() {
     }).join('');
 }
 
-async function toggleSlotOverride(slotId, newOccupiedState) {
+function toggleSlotOverride(slotId, newOccupiedState) {
+    const slot = adminSlotsCache.find(item => Number(item.slot_id) === slotId);
+    if (!slot) return;
     const stateName = newOccupiedState ? 'occupied' : 'available';
-    if (!confirm(`Mark this space as ${stateName}? This manual override will be recorded in the audit trail.`)) return;
-
-    try {
-        const response = await apiFetch(`${API_BASE}?action=toggle_slot`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                slot_id: slotId,
-                is_occupied: newOccupiedState,
-            })
-        });
-        const data = await response.json();
-
-        if (data.success) {
-            loadAdminStats();
-            loadAdminAnalytics();
-            loadAdminMap();
-            loadAdminAuditLogs();
-        } else {
-            alert(data.error || 'Failed to update slot.');
-        }
-    } catch (err) {
-        alert('Server connection failed.');
+    const wasOccupied = slot.is_occupied == 1;
+    const facts = [
+        ['Space', `${slot.slot_number} (Zone ${slot.zone})`],
+        ['Current status', wasOccupied ? 'Occupied' : 'Available'],
+        ['Plate on record', wasOccupied && slot.plate_number ? slot.plate_number : 'None']
+    ];
+    let notice = '';
+    if (slot.zone === 'F') {
+        facts.push(['Zone allocation', Number(slot.zone_allocated_count || 0)]);
+    } else {
+        const observed = slot.observed_state || 'NOT_OBSERVED';
+        facts.push(['Camera state', observed]);
+        if (slot.observed_color && slot.observed_color !== 'UNKNOWN') facts.push(['Vehicle colour', slot.observed_color.toLowerCase()]);
+        if (slot.observed_plate) facts.push(['Plate read by camera', slot.observed_plate]);
+        if (observed === 'NOT_OBSERVED') notice = 'The camera has no reading for this space, so this change rests on your own check of the bay.';
     }
+    decisionDialog.open({
+        title: `Mark ${slot.slot_number} as ${stateName}`,
+        subtitle: 'Manual override of the recorded space status.',
+        facts,
+        notice,
+        criteria: ['Check the camera feed or the bay itself first.', 'The recorded status should not match what you see.'],
+        actions: [{
+            label: `Mark as ${stateName}`,
+            tone: newOccupiedState ? 'danger' : 'success',
+            outcome: `Sets ${slot.slot_number} to ${stateName} and adds an entry to the audit trail.`,
+            run: async () => {
+                await postAdmin('toggle_slot', { slot_id: slotId, is_occupied: newOccupiedState }, 'Failed to update slot.');
+                loadAdminStats();
+                loadAdminAnalytics();
+                loadAdminMap();
+                loadAdminAuditLogs();
+            }
+        }]
+    });
 }
 
 // Zone Filter Buttons Listener
@@ -1582,6 +2015,14 @@ window.addEventListener('scroll', () => {
 pageSessionReady.then(user => {
     if (!adminPage || !user) return;
     initAdminSidebar();
+    tableTools.setup('sectionalAlertsTable', { noun: 'alerts', search: 'Search alerts by scenario, region or finding', filters: [{ col: 0, label: 'Status' }, { col: 2, label: 'Finding' }], noSort: [4, 5] });
+    tableTools.setup('adminViolationsTable', { noun: 'cases', search: 'Search by case, plate or infraction', filters: [{ col: 5, label: 'Status' }, { col: 3, label: 'Infraction' }], numeric: [4], noSort: [7] });
+    tableTools.setup('alprLogsTable', { noun: 'detections', search: 'Search by plate, slot or status', filters: [{ col: 5, label: 'Session status' }, { col: 4, label: 'Gate' }], numeric: [3] });
+    tableTools.setup('simulationSessionsBody', { noun: 'sessions', search: 'Search by session, scenario or plate', filters: [{ col: 4, label: 'Payment' }, { col: 1, label: 'Scenario' }], noSort: [5] });
+    tableTools.setup('adminReservationsTable', { noun: 'reservations', search: 'Search by plate, account or zone', filters: [{ col: 2, label: 'Zone' }], numeric: [5], noSort: [6] });
+    tableTools.setup('adminRefundQueue', { noun: 'refunds', search: 'Search by booking, plate or payment reference', filters: [{ col: 3, label: 'Refund status' }], numeric: [2], noSort: [5] });
+    tableTools.setup('adminAccountsTable', { noun: 'accounts', search: false, filters: [{ col: 3, label: 'Role' }, { col: 2, label: 'Privilege' }], noSort: [4] });
+    tableTools.setup('adminAuditLogsTable', { noun: 'entries', search: 'Search by operator, action or details', filters: [{ col: 2, label: 'Action' }, { col: 1, label: 'Operator' }] });
     loadAdminStats();
     loadAdminAnalytics();
     loadAdminViolations();
