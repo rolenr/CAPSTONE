@@ -147,7 +147,7 @@ body {
 }
 
 .brand-badge {
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.06em;
@@ -738,15 +738,15 @@ body {
 .chart-hour-label {
     position: absolute;
     bottom: -20px;
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    font-weight: 500;
+    font-size: 0.8125rem;
+    color: #475569;
+    font-weight: 600;
 }
 
 .chart-tooltip {
     position: absolute;
     top: -20px;
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
     font-weight: 600;
     color: var(--text-primary);
 }
@@ -1323,7 +1323,7 @@ button[type="submit"]:hover {
 }
 
 .audit-action-tag {
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
     font-weight: 600;
     padding: 2px 8px;
     border-radius: var(--radius-sm);
@@ -1459,7 +1459,7 @@ button[type="submit"]:hover {
 
 .live-map-layout {
     display: grid;
-    grid-template-columns: minmax(0, 410px) minmax(260px, 1fr);
+    grid-template-columns: minmax(0, 520px) minmax(260px, 1fr);
     gap: 1.5rem;
     align-items: start;
 }
@@ -1519,11 +1519,11 @@ button[type="submit"]:hover {
 }
 
 .map-zone-copy strong { font-size: .8rem; }
-.map-zone-copy small { color: var(--text-muted); font-size: 0.75rem; }
+.map-zone-copy small { color: #475569; font-size: 0.8125rem; }
 
 .map-zone-availability {
     margin-left: auto;
-    font-size: 0.75rem;
+    font-size: 0.875rem;
     font-weight: 700;
     white-space: nowrap;
 }
@@ -1531,15 +1531,109 @@ button[type="submit"]:hover {
 .map-zone-availability.available { color: #047857; }
 .map-zone-availability.full { color: #b91c1c; }
 
+/* ---------------- ZOOM VIEW (lot map + camera evidence) ---------------- */
+.zoom-frame {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+}
+
+.zoom-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+}
+
+.zoom-controls {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.zoom-btn {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 12px;
+    border: 1px solid #64748b;
+    border-radius: 8px;
+    background: #fff;
+    color: #0f172a;
+    font: inherit;
+    font-size: 1.25rem;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.zoom-btn.zoom-reset,
+.zoom-btn.zoom-full { font-size: 0.9375rem; font-weight: 600; }
+.zoom-btn:hover:not(:disabled) { background: #eff6ff; border-color: #1d4ed8; color: #1d4ed8; }
+.zoom-btn:disabled { opacity: 0.45; cursor: default; }
+.zoom-btn:focus-visible,
+.zoom-viewport:focus-visible { outline: 3px solid #2563eb; outline-offset: 2px; }
+
+.zoom-level {
+    min-width: 3.5em;
+    text-align: center;
+    font-size: 0.9375rem;
+    font-weight: 700;
+    color: #0f172a;
+    font-variant-numeric: tabular-nums;
+}
+
+.zoom-hint { font-size: 0.875rem; color: #475569; }
+
+.zoom-viewport {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid #94a3b8;
+    border-radius: var(--radius-lg);
+    background: #fff;
+    touch-action: pan-x pan-y; /* page scroll stays available; pinch goes to the viewer */
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.zoom-viewport.is-zoomed { touch-action: none; cursor: grab; }
+.zoom-viewport.is-dragging { cursor: grabbing; }
+
+.zoom-stage {
+    transform-origin: 0 0;
+    will-change: transform;
+}
+
+.zoom-stage.is-animating { transition: transform .18s ease-out; }
+.zoom-stage img { -webkit-user-drag: none; }
+
+/* Evidence viewer: dark backdrop, image kept whole */
+.zoom-evidence .zoom-viewport { background: #0f172a; }
+.zoom-evidence .zoom-stage img {
+    display: block;
+    width: 100%;
+    max-height: 420px;
+    object-fit: contain;
+}
+
+.zoom-frame:fullscreen {
+    padding: 12px;
+    background: #0f172a;
+}
+
+.zoom-frame:fullscreen .zoom-hint,
+.zoom-frame:fullscreen .zoom-level { color: #e2e8f0; }
+.zoom-frame:fullscreen .zoom-viewport { flex: 1; border-color: #334155; }
+.zoom-frame:fullscreen .zoom-stage { height: 100%; }
+.zoom-frame:fullscreen .zoom-stage img { height: 100%; max-height: none; }
+
 .lot-photo-wrap {
     position: relative;
     width: 100%;
-    max-width: 410px;
-    border-radius: var(--radius-lg);
-    overflow: hidden;
     line-height: 0;
     background: var(--white);
-    border: 1px solid var(--border-color);
 }
 
 .lot-photo {
@@ -1547,28 +1641,34 @@ button[type="submit"]:hover {
     display: block;
 }
 
+/* Markers keep the same on-screen size while the map is zoomed */
+.zoom-stage .zone-marker,
+.zoom-stage .slot-dot {
+    transform: translate(-50%, -50%) scale(calc(1 / var(--zoom, 1)));
+}
+
 .zone-marker {
     position: absolute;
     top: 0;
     left: 0;
-    min-height: 25px;
+    min-height: 34px;
     transform: translate(-50%, -50%);
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 4px 7px;
-    border-radius: 4px;
-    border: 1px solid rgba(15, 23, 42, .22);
-    background: rgba(255, 255, 255, .94);
+    padding: 5px 9px;
+    border-radius: 5px;
+    border: 1.5px solid #0f172a;
+    background: #fff;
     color: #0f172a;
     cursor: pointer;
     font-family: inherit;
-    font-size: 0.75rem;
-    font-weight: 750;
-    letter-spacing: .05em;
+    font-size: 0.875rem;
+    font-weight: 800;
+    letter-spacing: .04em;
     line-height: 1;
     white-space: nowrap;
-    box-shadow: 0 2px 7px rgba(15, 23, 42, .18);
+    box-shadow: 0 2px 8px rgba(15, 23, 42, .35);
     transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
     z-index: 2;
 }
@@ -1597,7 +1697,7 @@ button[type="submit"]:hover {
 
 .zone-detail-heading h3 { margin: 2px 0 0; }
 .zone-detail-heading strong { color: #047857; font-size: .82rem; }
-.map-detail-eyebrow { color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: .08em; }
+.map-detail-eyebrow { color: #475569; font-size: 0.8125rem; text-transform: uppercase; letter-spacing: .08em; }
 
 .zone-detail-slots {
     max-height: 230px;
@@ -1608,19 +1708,20 @@ button[type="submit"]:hover {
     position: absolute;
     top: 0;
     left: 0;
-    width: 13px;
-    height: 13px;
+    width: 18px;
+    height: 18px;
     padding: 0;
     border-radius: 50%;
-    border: 1.5px solid white;
+    border: 2.5px solid white;
     transform: translate(-50%, -50%);
     cursor: pointer;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, .6), 0 1px 4px rgba(0,0,0,0.5);
     z-index: 3;
 }
 
-.slot-dot.free { background: #10b981; }
-.slot-dot.occupied { background: #ef4444; }
+/* Shape as well as colour: vacant = circle, occupied = square, reserved = diamond */
+.slot-dot.free { background: #059669; }
+.slot-dot.occupied { background: #dc2626; border-radius: 3px; }
 .slot-dot:hover,
 .slot-dot:focus-visible { box-shadow: 0 0 0 3px rgba(15, 118, 110, .65), 0 1px 3px rgba(0,0,0,.4); }
 
@@ -1634,26 +1735,39 @@ button[type="submit"]:hover {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin: 5px 0;
-    font-size: 0.78rem;
+    margin: 6px 0;
+    font-size: 0.875rem;
+    color: #1e293b;
 }
 
-.slot-row span.free, .slot-row span.occupied {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
+.slot-row small { color: #475569; font-size: 0.8125rem; }
+
+.slot-row span.free, .slot-row span.occupied, .slot-row span.reserved {
+    width: 11px;
+    height: 11px;
+    flex-shrink: 0;
     display: inline-block;
 }
 
-.slot-row span.free { background: #10b981; }
-.slot-row span.occupied { background: #ef4444; }
-.slot-row span.reserved { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: #d97706; }
-.slot-dot.reserved { background: #d97706; }
+.slot-row span.free { background: #059669; border-radius: 50%; }
+.slot-row span.occupied { background: #dc2626; border-radius: 2px; }
+.slot-row span.reserved { background: #d97706; border-radius: 2px; transform: rotate(45deg) scale(.85); }
+.slot-dot.reserved { background: #d97706; border-radius: 3px; }
+/* Invisible 32px hit area around each dot so it is easier to tap */
+.slot-dot::after {
+    content: '';
+    position: absolute;
+    inset: -9px;
+    border-radius: 50%;
+}
+
+.zoom-stage .slot-dot.reserved,
+.slot-dot.reserved { transform: translate(-50%, -50%) scale(calc(.85 / var(--zoom, 1))) rotate(45deg); }
 
 @media (max-width: 760px) {
     .live-map-layout { grid-template-columns: 1fr; }
-    .lot-photo-wrap { margin: 0 auto; }
     .map-sidebar { width: 100%; }
+    .zoom-hint { width: 100%; }
 }
 
 /* ---------------- DIGITAL PASS / WALLET ---------------- */
@@ -2050,9 +2164,13 @@ button[type="submit"]:hover {
         gap: 2px;
     }
 
+    /* Narrow screens: keep labels readable by showing every third hour instead of shrinking them */
     .chart-hour-label {
-        font-size: 0.55rem;
+        font-size: 0.8125rem;
     }
+
+    .chart-bar-col:not(:nth-child(3n + 1)) .chart-hour-label { visibility: hidden; }
+    .chart-bar-col:not(:has(.chart-bar.peak)) .chart-tooltip { display: none; }
 }
 
 /* ---------------- COMMERCIAL TENANT VALIDATION PORTAL ---------------- */

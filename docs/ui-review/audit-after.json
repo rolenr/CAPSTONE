@@ -1,0 +1,113 @@
+{
+  "loginPage": "http://127.0.0.1:8080/frontend/login.html form=true",
+  "afterLogin": "/frontend/admin.html alert= cookies=0",
+  "admin-phone": {
+    "url": "/frontend/admin.html",
+    "viewport": 375,
+    "pageWidth": 375,
+    "horizontalScroll": false,
+    "overflowing": [],
+    "textElements": 1249,
+    "under13px": 1,
+    "under13pxSamples": [
+      "footer.app-footer \"Parking Ltd. · Automated\" 12.75px"
+    ],
+    "controls": 237,
+    "under32px": 0,
+    "under32pxSamples": []
+  },
+  "admin-tablet": {
+    "url": "/frontend/admin.html",
+    "viewport": 768,
+    "pageWidth": 768,
+    "horizontalScroll": false,
+    "overflowing": [],
+    "textElements": 1249,
+    "under13px": 1,
+    "under13pxSamples": [
+      "footer.app-footer \"Parking Ltd. · Automated\" 12.75px"
+    ],
+    "controls": 237,
+    "under32px": 0,
+    "under32pxSamples": []
+  },
+  "admin-desktop": {
+    "url": "/frontend/admin.html",
+    "viewport": 1440,
+    "pageWidth": 1440,
+    "horizontalScroll": false,
+    "overflowing": [],
+    "textElements": 1304,
+    "under13px": 2,
+    "under13pxSamples": [
+      "div.user-card-avatar \"RO\" 12.75px",
+      "footer.app-footer \"Parking Ltd. · Automated\" 12.75px"
+    ],
+    "controls": 257,
+    "under32px": 0,
+    "under32pxSamples": []
+  },
+  "live-map-phone": {
+    "url": "/frontend/live-map.html",
+    "viewport": 375,
+    "pageWidth": 375,
+    "horizontalScroll": false,
+    "overflowing": [],
+    "textElements": 87,
+    "under13px": 1,
+    "under13pxSamples": [
+      "footer.app-footer \"Parking Ltd. · Automated\" 12.75px"
+    ],
+    "controls": 66,
+    "under32px": 0,
+    "under32pxSamples": []
+  },
+  "live-map-tablet": {
+    "url": "/frontend/live-map.html",
+    "viewport": 768,
+    "pageWidth": 768,
+    "horizontalScroll": false,
+    "overflowing": [],
+    "textElements": 87,
+    "under13px": 1,
+    "under13pxSamples": [
+      "footer.app-footer \"Parking Ltd. · Automated\" 12.75px"
+    ],
+    "controls": 66,
+    "under32px": 0,
+    "under32pxSamples": []
+  },
+  "live-map-desktop": {
+    "url": "/frontend/live-map.html",
+    "viewport": 1440,
+    "pageWidth": 1440,
+    "horizontalScroll": false,
+    "overflowing": [],
+    "textElements": 87,
+    "under13px": 1,
+    "under13pxSamples": [
+      "footer.app-footer \"Parking Ltd. · Automated\" 12.75px"
+    ],
+    "controls": 66,
+    "under32px": 0,
+    "under32pxSamples": []
+  },
+  "zoom": {
+    "before": "translate(0px, 0px) scale(1)",
+    "after": "translate(-137.25px, -198.25px) scale(1.95312)",
+    "level": "195%",
+    "toolbarStillVisible": true,
+    "markerTransform": "matrix(0.512, 0, 0, 0.512, -9, -9)"
+  },
+  "evidence": {
+    "noViewer": true,
+    "thumbLoaded": 0,
+    "evidenceHttp": 404,
+    "dialogMessage": "The evidence image could not be loaded."
+  },
+  "evidenceDemo": {
+    "level": "195%",
+    "toolbarVisible": true,
+    "fullscreenButton": true
+  }
+}

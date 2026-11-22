@@ -298,8 +298,191 @@ function getSlotDotPositions(zone, count) {
     return centers.map(([left, top]) => ({ left, top }));
 }
 
+// --- ZOOM VIEW: zoom and pan for the lot map and camera evidence ---
+// The toolbar sits outside the zoomed layer, so its controls never move or get covered.
+function createZoomView(host, options = {}) {
+    const MIN = 1;
+    const MAX = options.max || 4;
+    const STEP = 1.25;
+    const DRAG_THRESHOLD = 5;
+    let scale = 1, x = 0, y = 0;
+
+    const make = (tag, className, text) => {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
+    };
+    const button = (text, label, onClick, extra = '') => {
+        const b = make('button', 'zoom-btn' + (extra ? ' ' + extra : ''), text);
+        b.type = 'button';
+        b.title = label;
+        b.setAttribute('aria-label', label);
+        b.addEventListener('click', onClick);
+        return b;
+    };
+
+    const frame = make('div', 'zoom-frame' + (options.className ? ' ' + options.className : ''));
+    const toolbar = make('div', 'zoom-toolbar');
+    const controls = make('div', 'zoom-controls');
+    controls.setAttribute('role', 'group');
+    controls.setAttribute('aria-label', `${options.label || 'View'} zoom controls`);
+    const level = make('span', 'zoom-level', '100%');
+    level.setAttribute('aria-live', 'polite');
+    const zoomOut = button('−', 'Zoom out', () => zoomAround(scale / STEP));
+    const zoomIn = button('+', 'Zoom in', () => zoomAround(scale * STEP));
+    const reset = button('Reset', 'Reset zoom', () => apply(1, 0, 0, true), 'zoom-reset');
+    controls.append(zoomOut, level, zoomIn, reset);
+
+    if (options.fullscreen && document.fullscreenEnabled) {
+        const full = button('Full screen', 'Toggle full screen', () => {
+            if (document.fullscreenElement === frame) document.exitFullscreen();
+            else frame.requestFullscreen().catch(() => {});
+        }, 'zoom-full');
+        document.addEventListener('fullscreenchange', () => {
+            const active = document.fullscreenElement === frame;
+            full.textContent = active ? 'Exit full screen' : 'Full screen';
+            requestAnimationFrame(() => apply(scale, x, y));
+        });
+        controls.append(full);
+    }
+
+    const hint = make('span', 'zoom-hint', 'Pinch or Ctrl + scroll to zoom. Drag to move.');
+    toolbar.append(controls, hint);
+
+    const viewport = make('div', 'zoom-viewport');
+    viewport.tabIndex = 0;
+    viewport.setAttribute('role', 'group');
+    viewport.setAttribute('aria-label', `${options.label || 'Zoomable view'}. Plus and minus keys zoom, arrow keys move, 0 resets.`);
+    const stage = make('div', 'zoom-stage');
+    viewport.append(stage);
+    frame.append(toolbar, viewport);
+    host.replaceChildren(frame);
+
+    function clamp(value, low, high) { return Math.min(high, Math.max(low, value)); }
+
+    function apply(nextScale, nextX, nextY, animate = false) {
+        scale = clamp(nextScale, MIN, MAX);
+        const w = viewport.clientWidth, h = viewport.clientHeight;
+        x = clamp(nextX, w - w * scale, 0);
+        y = clamp(nextY, h - h * scale, 0);
+        stage.classList.toggle('is-animating', animate);
+        stage.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+        stage.style.setProperty('--zoom', scale);
+        viewport.classList.toggle('is-zoomed', scale > 1.001);
+        level.textContent = `${Math.round(scale * 100)}%`;
+        zoomOut.disabled = scale <= MIN + 0.001;
+        zoomIn.disabled = scale >= MAX - 0.001;
+        reset.disabled = scale <= MIN + 0.001;
+    }
+
+    // Zoom so the point (cx, cy) inside the viewport stays under the cursor/finger.
+    function zoomAround(nextScale, cx = viewport.clientWidth / 2, cy = viewport.clientHeight / 2, animate = true) {
+        const target = clamp(nextScale, MIN, MAX);
+        const px = (cx - x) / scale, py = (cy - y) / scale;
+        apply(target, cx - px * target, cy - py * target, animate);
+    }
+
+    function localPoint(event) {
+        const rect = viewport.getBoundingClientRect();
+        return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    }
+
+    viewport.addEventListener('wheel', event => {
+        if (!event.ctrlKey && !event.metaKey) return; // plain scroll keeps scrolling the page
+        event.preventDefault();
+        const p = localPoint(event);
+        zoomAround(scale * Math.exp(-event.deltaY * 0.0025), p.x, p.y, false);
+    }, { passive: false });
+
+    viewport.addEventListener('dblclick', event => {
+        const p = localPoint(event);
+        zoomAround(scale >= MAX - 0.001 ? 1 : scale * 2, p.x, p.y);
+    });
+
+    const pointers = new Map();
+    let gesture = null;
+    let suppressClick = false;
+
+    viewport.addEventListener('pointerdown', event => {
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        pointers.set(event.pointerId, localPoint(event));
+        const pts = [...pointers.values()];
+        if (pts.length === 2) {
+            const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+            gesture = { type: 'pinch', dist: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1, scale, mid, x, y };
+            [...pointers.keys()].forEach(id => { try { viewport.setPointerCapture(id); } catch (_) {} });
+        } else if (pts.length === 1) {
+            gesture = { type: 'pan', start: pts[0], x, y, moved: false, id: event.pointerId };
+        }
+    });
+
+    viewport.addEventListener('pointermove', event => {
+        if (!pointers.has(event.pointerId) || !gesture) return;
+        pointers.set(event.pointerId, localPoint(event));
+        const pts = [...pointers.values()];
+        if (gesture.type === 'pinch' && pts.length >= 2) {
+            const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+            const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+            const target = clamp(gesture.scale * dist / gesture.dist, MIN, MAX);
+            const px = (gesture.mid.x - gesture.x) / gesture.scale, py = (gesture.mid.y - gesture.y) / gesture.scale;
+            apply(target, mid.x - px * target, mid.y - py * target);
+            suppressClick = true;
+        } else if (gesture.type === 'pan' && scale > 1.001) {
+            const p = pts[0];
+            const dx = p.x - gesture.start.x, dy = p.y - gesture.start.y;
+            if (!gesture.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+            if (!gesture.moved) {
+                gesture.moved = true;
+                suppressClick = true;
+                viewport.classList.add('is-dragging');
+                try { viewport.setPointerCapture(gesture.id); } catch (_) {}
+            }
+            apply(scale, gesture.x + dx, gesture.y + dy);
+        }
+    });
+
+    const endPointer = event => {
+        pointers.delete(event.pointerId);
+        if (pointers.size === 0) { gesture = null; viewport.classList.remove('is-dragging'); }
+        else if (pointers.size === 1) {
+            const [id, p] = [...pointers.entries()][0];
+            gesture = { type: 'pan', start: p, x, y, moved: true, id };
+        }
+    };
+    viewport.addEventListener('pointerup', endPointer);
+    viewport.addEventListener('pointercancel', endPointer);
+
+    // A drag that ends over a map marker must not count as a click on it.
+    viewport.addEventListener('click', event => {
+        if (suppressClick) { event.stopPropagation(); event.preventDefault(); suppressClick = false; }
+    }, true);
+    viewport.addEventListener('pointerdown', () => { suppressClick = false; }, true);
+
+    viewport.addEventListener('keydown', event => {
+        const pan = 60;
+        const keys = {
+            '+': () => zoomAround(scale * STEP), '=': () => zoomAround(scale * STEP),
+            '-': () => zoomAround(scale / STEP), '_': () => zoomAround(scale / STEP),
+            '0': () => apply(1, 0, 0, true),
+            ArrowLeft: () => apply(scale, x + pan, y, true), ArrowRight: () => apply(scale, x - pan, y, true),
+            ArrowUp: () => apply(scale, x, y + pan, true), ArrowDown: () => apply(scale, x, y - pan, true),
+        };
+        if (event.target !== viewport || !keys[event.key]) return;
+        if (event.key.startsWith('Arrow') && scale <= 1.001) return; // let the page scroll
+        event.preventDefault();
+        keys[event.key]();
+    });
+
+    if (window.ResizeObserver) new ResizeObserver(() => apply(scale, x, y)).observe(viewport);
+    apply(1, 0, 0);
+
+    return { frame, stage, viewport, reset: () => apply(1, 0, 0) };
+}
+
 let zonesCache = {};
 let selectedMapZone = null;
+let liveMapZoom = null;
 
 async function fetchLiveMap() {
     if (!liveMap) return;
@@ -363,7 +546,8 @@ async function fetchLiveMap() {
             }
         });
 
-        liveMap.innerHTML = `<div class="lot-photo-wrap">${markersHTML}</div>`;
+        if (!liveMapZoom) liveMapZoom = createZoomView(liveMap, { label: 'Parking lot map', className: 'zoom-map' });
+        liveMapZoom.stage.innerHTML = `<div class="lot-photo-wrap">${markersHTML}</div>`;
         if (zoneList) zoneList.innerHTML = zoneCards;
 
         document.querySelectorAll('#liveMap .zone-marker, #liveMap .slot-dot, #mapZoneList .map-zone-card').forEach(btn => {
@@ -373,6 +557,7 @@ async function fetchLiveMap() {
 
     } catch (error) {
         console.error(error);
+        liveMapZoom = null;
         liveMap.innerHTML = "<p>Error loading live map.</p>";
     }
 }
@@ -999,17 +1184,21 @@ const decisionDialog = (() => {
         const figure = make('figure', 'decision-evidence');
         const missing = text => make('div', 'ev-missing', text);
         if (evidence && evidence.src) {
+            const host = make('div', 'decision-evidence-zoom');
+            const zoom = createZoomView(host, { label: 'Camera evidence', className: 'zoom-evidence', fullscreen: true, max: 6 });
             const image = make('img');
             image.src = evidence.src;
             image.alt = evidence.alt || 'Evidence image';
-            image.addEventListener('error', () => image.replaceWith(missing('The evidence image could not be loaded.')));
+            image.draggable = false;
+            image.addEventListener('error', () => host.replaceWith(missing('The evidence image could not be loaded.')));
+            zoom.stage.append(image);
             const caption = make('figcaption');
-            const link = make('a', '', 'Open full size');
+            const link = make('a', '', 'Open full size in a new tab');
             link.href = evidence.src;
             link.target = '_blank';
             link.rel = 'noopener';
             caption.append(link);
-            figure.append(image, caption);
+            figure.append(host, caption);
         } else {
             figure.append(missing((evidence && evidence.missing) || 'No evidence image was captured.'));
         }
@@ -1218,7 +1407,7 @@ async function loadAdminAnalytics() {
                         </div>
                         <div class="stream-amount">₱${Number(item.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
                         <div class="stream-count">${item.countText}</div>
-                        ${item.subtext ? `<div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 3px;">${item.subtext}</div>` : ''}
+                        ${item.subtext ? `<div style="font-size: 0.8125rem; color: var(--text-muted); margin-top: 3px;">${item.subtext}</div>` : ''}
                         <div style="height: 5px; background: var(--slate-200); border-radius: 3px; margin-top: 8px; overflow: hidden;">
                             <div style="width: ${pct}%; height: 100%; background: ${item.color}; border-radius: 3px;"></div>
                         </div>

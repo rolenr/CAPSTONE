@@ -23,6 +23,10 @@ try:
     from .vehicle_color import classify_vehicle_color, consensus
 except ImportError:
     from vehicle_color import classify_vehicle_color, consensus
+try:
+    from . import overlay
+except ImportError:
+    import overlay
 
 ROOT = Path(__file__).resolve().parents[1]
 BAY_WEIGHTS = ROOT / "computer_vision/models/sectional_occupancy/weights/best.pt"
@@ -281,50 +285,48 @@ class OccupancyMonitor:
         return events
 
 
-def annotate(frame, cv2, slots, zones, vehicles):
+SLOT_STATE_COLOURS = {"OCCUPIED": overlay.OCCUPIED, "VACANT": overlay.VACANT}
+
+
+def annotate(frame, cv2, slots, zones, vehicles, states=None):
+    """Draw bays, restricted zones and vehicles. Labels sit outside each shape."""
     height, width = frame.shape[:2]
-    for name, polygon in slots.items():
-        coords = [(int(x*width), int(y*height)) for x, y in polygon]
-        for a, b in zip(coords, coords[1:] + coords[:1]):
-            cv2.line(frame, a, b, (0, 180, 0), 2)
-        cv2.putText(frame, name, coords[0], cv2.FONT_HERSHEY_SIMPLEX,
-                    .5, (0, 255, 0), 1)
+    states = states or {}
+    to_pixels = lambda polygon: [(int(x * width), int(y * height)) for x, y in polygon]
+    labels = []  # drawn after every shape so no border cuts through a label
+    # Restricted zones first, with a light fill, so bays and vehicles draw on top.
     for name, polygon in zones.items():
-        coords = [(int(x*width), int(y*height)) for x, y in polygon]
-        for a, b in zip(coords, coords[1:] + coords[:1]):
-            cv2.line(frame, a, b, (0, 0, 255), 2)
-        cv2.putText(frame, name, coords[0], cv2.FONT_HERSHEY_SIMPLEX,
-                    .5, (0, 0, 255), 1)
+        points = to_pixels(polygon)
+        overlay.draw_polygon(cv2, frame, points, overlay.RESTRICTED, fill_alpha=0.10)
+        # Inside the bottom-left corner: open roadway, away from bays and vehicles.
+        labels.append((f"{name} (restricted)", min(p[0] for p in points) + overlay.line_width(frame),
+                       max(p[1] for p in points), overlay.RESTRICTED, None, 0.9))
+    for name, polygon in slots.items():
+        points = to_pixels(polygon)
+        state = states.get(name)
+        colour = SLOT_STATE_COLOURS.get(state, overlay.VACANT if not states else overlay.NEUTRAL)
+        overlay.draw_polygon(cv2, frame, points, colour)
+        labels.append((f"{name} {state.title()}" if state else name, min(p[0] for p in points),
+                       min(p[1] for p in points), colour, max(p[1] for p in points), 0.9))
     for label, confidence, box in vehicles:
         x1, y1, x2, y2 = box
         a, b = (int(x1*width), int(y1*height)), (int(x2*width), int(y2*height))
-        cv2.rectangle(frame, a, b, (0, 165, 255), 2)
-        cv2.putText(frame, f"{label} {confidence:.2f}", a,
-                    cv2.FONT_HERSHEY_SIMPLEX, .5, (0, 165, 255), 1)
+        overlay.draw_box(cv2, frame, a, b, overlay.VEHICLE)
+        labels.append((f"{label} {confidence:.0%}", a[0], a[1], overlay.VEHICLE, b[1], 1.0))
+    for text, left, top, colour, bottom, size in labels:
+        overlay.draw_label(cv2, frame, text, left, top, colour, bottom=bottom, size=size)
     return frame
 
 
 def preview_frame(frame, cv2, slots, zones, vehicles, states, label, frame_index, fps):
-    display = annotate(frame.copy(), cv2, slots, zones, vehicles)
-    height, width = display.shape[:2]
-    cv2.rectangle(display, (0, 0), (width, 76), (20, 20, 20), -1)
-    cv2.putText(display, f"SECTIONAL  {label}  {frame_index / fps:.1f}s", (18, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, .7, (255, 255, 255), 2)
+    display = annotate(frame.copy(), cv2, slots, zones, vehicles, states)
     occupied = sum(state == "OCCUPIED" for state in states.values())
     vacant = sum(state == "VACANT" for state in states.values())
     unknown = len(slots) - occupied - vacant
-    cv2.putText(display,
-                f"Bays: {len(slots)} | {occupied} occupied | {vacant} vacant | {unknown} unknown | q: stop",
-                (18, 62),
-                cv2.FONT_HERSHEY_SIMPLEX, .55, (255, 255, 255), 1)
-    for name, polygon in slots.items():
-        state = states.get(name)
-        if not state:
-            continue
-        x, y = polygon[0]
-        anchor = (int(x * width), min(height - 8, int(y * height) + 23))
-        color = (0, 0, 255) if state == "OCCUPIED" else (0, 220, 0)
-        cv2.putText(display, state, anchor, cv2.FONT_HERSHEY_SIMPLEX, .43, color, 2)
+    overlay.status_banner(cv2, display, [
+        f"SECTIONAL  {label}  {frame_index / fps:.1f}s",
+        f"Bays: {len(slots)} | {occupied} occupied | {vacant} vacant | {unknown} unknown | q: stop",
+    ])
     return display
 
 
@@ -625,7 +627,8 @@ def main(argv=None):
                         label = event.get("region", event.get("slot_number", "event"))
                         evidence = evidence_dir / f"{args.camera_id}_{label}_{frame_index}.jpg"
                         if not cv2.imwrite(str(evidence),
-                                           annotate(frame.copy(), cv2, slots, zones, vehicles)):
+                                           annotate(frame.copy(), cv2, slots, zones, vehicles,
+                                                    monitor.slot_state)):
                             raise OSError(f"could not write evidence image: {evidence}")
                         event["evidence"] = str(evidence)
                     stream.write(json.dumps(event) + "\n")

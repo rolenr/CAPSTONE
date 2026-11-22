@@ -63,7 +63,7 @@ body[data-page="admin"] {
 }
 
 .brand-tagline {
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
     color: #a3b1c6;
     font-weight: 600;
     display: block;
@@ -280,7 +280,7 @@ body[data-page="admin"] {
 
 .user-card-role {
     color: #a3b1c6;
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
     font-weight: 600;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -653,11 +653,15 @@ body[data-page="admin"] {
 .admin-table td.num, .admin-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .admin-table .no-match td { padding: 28px 14px; text-align: center; color: var(--slate-600); }
 
+/* Readable floor for secondary text anywhere in the admin console */
+.main-content-body small { font-size: max(0.8125rem, 0.85em); }
+
 .th-sort {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 2px 0;
+    min-height: 36px;
+    padding: 4px 0;
     border: 0;
     background: none;
     color: inherit;
@@ -732,9 +736,10 @@ th[aria-sort="ascending"], th[aria-sort="descending"] { color: var(--primary); }
 .decision-head h2 { margin: 0; font-size: 1.25rem; line-height: 1.3; }
 .decision-head p { margin: 4px 0 0; font-size: 0.9375rem; color: var(--slate-600); }
 .decision-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; padding: 20px 24px; overflow-y: auto; }
-.decision-body.has-evidence { grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); }
+.decision-body.has-evidence { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+.decision-dialog:has(.decision-body.has-evidence) { width: min(1120px, calc(100vw - 32px)); }
 .decision-evidence { margin: 0; }
-.decision-evidence img { display: block; width: 100%; max-height: 360px; object-fit: contain; border: 1px solid var(--slate-300); border-radius: 8px; background: var(--slate-900); }
+.decision-evidence img { display: block; width: 100%; max-height: 420px; object-fit: contain; background: var(--slate-900); }
 .decision-evidence figcaption { margin-top: 6px; font-size: 0.8125rem; color: var(--slate-600); }
 .decision-evidence .ev-missing { padding: 36px 16px; border: 1px dashed var(--slate-400); border-radius: 8px; text-align: center; color: var(--slate-700); background: var(--slate-50); }
 .decision-info h3 { margin: 0 0 8px; font-size: 0.9375rem; }

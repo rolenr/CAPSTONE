@@ -39,6 +39,10 @@ try:
     from .vehicle_color import GateColorObserver
 except ImportError:
     from vehicle_color import GateColorObserver
+try:
+    from . import overlay
+except ImportError:
+    import overlay
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -349,10 +353,8 @@ class PlateDetector:
                 # EasyOCR. This avoids spending CPU on fixed plates and
                 # background detections in the wide approach view.
                 if not eligible:
-                    self.cv2.putText(
-                        annotated, "checking movement", (max(0, x1), max(20, y1 - 8)),
-                        self.cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 2,
-                    )
+                    overlay.draw_label(self.cv2, annotated, "checking movement", x1, y1,
+                                       overlay.PENDING, bottom=y2, size=0.85)
                     continue
 
                 # A little margin preserves characters at the detector's edge.
@@ -360,11 +362,11 @@ class PlateDetector:
                                                    else (0.30, 0.30))
                 pad_x = max(3, int((x2 - x1) * pad_x_fraction))
                 pad_y = max(3, int((y2 - y1) * pad_y_fraction))
-                self.cv2.rectangle(
-                    annotated,
+                overlay.draw_box(
+                    self.cv2, annotated,
                     (max(0, x1 - pad_x), max(0, y1 - pad_y)),
                     (min(width - 1, x2 + pad_x), min(height - 1, y2 + pad_y)),
-                    (255, 180, 0), 2,
+                    overlay.PLATE,
                 )
                 crop = frame[max(0, y1):min(height, y2), max(0, x1):min(width, x2)]
                 padded_crop = frame[
@@ -391,10 +393,8 @@ class PlateDetector:
                                 events.append((self.role, plate))
                             continue
                 if not eligible:
-                    self.cv2.putText(
-                        annotated, "checking movement", (max(0, x1), max(20, y1 - 8)),
-                        self.cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 2,
-                    )
+                    overlay.draw_label(self.cv2, annotated, "checking movement", x1, y1,
+                                       overlay.PENDING, bottom=y2, size=0.85)
                     continue
                 votes = Counter(self.plate_history[track_id]).most_common(2)
                 if not votes or votes[0][1] < MIN_PLATE_READS:
@@ -414,20 +414,18 @@ class PlateDetector:
                 if last_seen is None or now - last_seen >= DISAPPEAR_SECONDS:
                     events.append((self.role, candidate))
 
-        self.cv2.rectangle(annotated, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
+        overlay.draw_box(self.cv2, annotated, (xmin, ymin), (xmax, ymax), overlay.ROI)
+        roi_text = "Detection area"
         if self.color_observer:
             color, _score = self.color_observer.for_single_vehicle()
-            self.cv2.putText(annotated, f"Vehicle color: {color.title()}",
-                             (max(10, xmin), max(28, ymin - 10)),
-                             self.cv2.FONT_HERSHEY_SIMPLEX, .65, (0, 255, 255), 2)
+            roi_text += f" | Vehicle color: {color.title()}"
+        # Above the area when there is room, otherwise tucked under its top-left edge.
+        overlay.draw_label(self.cv2, annotated, roi_text, xmin, ymin, overlay.ROI, size=0.85)
         self._expire(now)
         return annotated, events
 
     def _label(self, frame, plate, x, y):
-        self.cv2.putText(
-            frame, plate, (max(0, x), max(20, y - 8)),
-            self.cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 220, 0), 2,
-        )
+        overlay.draw_label(self.cv2, frame, plate, x, y, overlay.VACANT, size=1.25)
 
     def _expire(self, now):
         for track_id, seen_at in list(self.track_last_seen.items()):
