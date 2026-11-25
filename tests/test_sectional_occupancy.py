@@ -2,11 +2,17 @@ import unittest
 import json
 from pathlib import Path
 
-from computer_vision.sectional_occupancy import (OccupancyMonitor, inside,
+from computer_vision.sectional_occupancy import (OccupancyMonitor, confirmed_plate, inside,
     overlaps_polygon, restricted_region_for_vehicle, vehicles_for_bays)
 
 
 class SectionalOccupancyTests(unittest.TestCase):
+    def test_plate_requires_repeated_majority(self):
+        self.assertEqual(confirmed_plate(['NGF3495']), '')
+        self.assertEqual(confirmed_plate(['NGF3495', 'NGF3495']), 'NGF3495')
+        self.assertEqual(confirmed_plate(['CNY3248', 'CKY3248']), '')
+        self.assertEqual(confirmed_plate(['AAB1234', 'AAB1234', 'CCC5678', 'DDD9012']), '')
+
     def test_every_camera_zone_has_bays_and_a_driveway_region(self):
         root = Path(__file__).resolve().parents[1] / 'computer_vision/recorded_test_cases/regions'
         for zone, capacity in [('a',9),('b',7),('c',6),('d',7),('e',10)]:

@@ -162,15 +162,28 @@ def exit_stage_message(session_id, case):
     return "Pay the due fare in Cashier POS, then press Enter to replay the exit camera."
 
 
-def has_ready_reservation(plate, slot):
+def reservation_plate_for_token(token):
+    with sqlite3.connect(f"file:{DB}?mode=ro", uri=True) as db:
+        row = db.execute("""SELECT UPPER(REPLACE(REPLACE(v.plate_number,' ',''),'-',''))
+            FROM reservations r
+            JOIN vehicles v ON v.vehicle_id=r.vehicle_id
+            WHERE r.token_id=? AND r.status='ACTIVE'
+              AND r.payment_state IN ('PAID','ADMIN_EXEMPT') LIMIT 1""", (token,)).fetchone()
+    return row[0] if row else ''
+
+
+def bay_reserved_for_another_vehicle(plate, slot):
+    """Use the actual booking, regardless of the selected demonstration command."""
+    if not slot:
+        return False
     with sqlite3.connect(f"file:{DB}?mode=ro", uri=True) as db:
         return db.execute("""SELECT 1 FROM reservations r
             JOIN vehicles v ON v.vehicle_id=r.vehicle_id
             JOIN parking_slots s ON s.slot_id=r.slot_id
-            WHERE UPPER(REPLACE(REPLACE(v.plate_number,' ',''),'-',''))=?
-              AND s.slot_number=? AND r.status='ACTIVE'
-              AND r.payment_state IN ('PAID','ADMIN_EXEMPT') LIMIT 1""",
-                          (plate, slot)).fetchone() is not None
+            WHERE s.slot_number=? AND r.status='ACTIVE'
+              AND r.payment_state IN ('PAID','ADMIN_EXEMPT')
+              AND UPPER(REPLACE(REPLACE(v.plate_number,' ',''),'-',''))!=?
+            LIMIT 1""", (slot, plate)).fetchone() is not None
 
 
 def wait_for_entry(plate, since_id, timeout, scenario, process=None):
@@ -196,7 +209,7 @@ def replay_sectional(args, scenario, session_id, assigned_slot, token, phase="pa
         last_frame = db.execute("SELECT COALESCE(MAX(frame_index), -1) FROM sectional_events "
                                 "WHERE scenario_id=? AND camera_id=?", (scenario, args.camera_id)).fetchone()[0]
     frame_offset = int(last_frame) + 1
-    observed_slot = (args.clip_slot if args.case == "reserved_slot"
+    observed_slot = (args.clip_slot if getattr(args, "other_vehicle_booking", False)
                      or (args.zone == "A" and assigned_slot != args.clip_slot)
                      else assigned_slot)
     if phase == "departure":
@@ -344,6 +357,18 @@ def wait_for_alert_review(scenario, alert_id, timeout=900):
     raise TimeoutError(f"Staff did not review sectional alert {alert_id} within {timeout} seconds")
 
 
+def review_pending_parking_alerts(scenario, session_id):
+    """Apply the same staff review gate to any scenario with a parking alert."""
+    with sqlite3.connect(f"file:{DB}?mode=ro", uri=True) as db:
+        alerts = db.execute("""SELECT alert_id,violation_type FROM sectional_alerts
+            WHERE scenario_id=? AND session_id=? AND status='PENDING_REVIEW'
+            ORDER BY alert_id""", (scenario, session_id)).fetchall()
+    for alert_id, kind in alerts:
+        print(f"{kind} alert {alert_id} needs Admin review before exit.", flush=True)
+        status, _ = wait_for_alert_review(scenario, alert_id)
+        print(f"{kind} alert {alert_id}: {status}.", flush=True)
+
+
 def capture_baseline(args, scenario, token):
     """Store a run-scoped, pre-entry sectional snapshot in slot_observations."""
     run_dir = ROOT / "backend/database/simulation_runs" / scenario
@@ -469,22 +494,21 @@ def recorded(args, scenario, token):
                                     "Recorded entrance", "entrance", preview=not args.no_preview,
                                     vehicle_model_path=args.vehicle_model, return_observation=True)
     plate = entry_view["plate"]
-    if not plate and args.case == "reservation" and not args.entry_qr_token:
-        raise RuntimeError("Entrance plate unreadable; use the reservation's issued QR with --entry-qr-token to link its paid bay")
     qr_only = not plate and not args.entry_qr_token
-    if plate and args.plate and plate != args.plate:
-        raise RuntimeError(f"Entrance read {plate}, expected {args.plate}; session was not created")
-    if args.case == "reservation" and plate and not has_ready_reservation(plate, args.clip_slot):
-        raise RuntimeError(f"Create and pay the {args.clip_slot} reservation for {plate} in the frontend before starting this case")
+    if args.plate and plate and plate != args.plate:
+        print(f"Entrance read {plate}; supplied reference was {args.plate}. Using the camera result.", flush=True)
+    entrant_plate = plate or (reservation_plate_for_token(args.entry_qr_token) if args.entry_qr_token else '')
+    other_vehicle_booking = bay_reserved_for_another_vehicle(entrant_plate, args.clip_slot)
+    args.other_vehicle_booking = other_vehicle_booking
     entry = post_camera(args.api_url, token, "camera_entry_event", {
         "plate_number": plate or "", "qr_token": args.entry_qr_token or "",
         "qr_only": qr_only,
         "vehicle_color": entry_view["vehicle_color"],
         "color_confidence": entry_view["color_confidence"],
         "channel": 1, "scenario_id": scenario,
-        "preferred_slot": "" if args.case == "reserved_slot" else (args.preferred_slot or args.clip_slot),
-        "allocation_zone": args.zone if args.case == "reserved_slot" else "",
-        "reserved_bay_test": args.case == "reserved_slot",
+        "preferred_slot": "" if other_vehicle_booking else (args.preferred_slot or args.clip_slot),
+        "allocation_zone": args.zone if other_vehicle_booking else "",
+        "reserved_bay_test": other_vehicle_booking,
         "clip_slot": args.clip_slot,
         "observed_at": datetime.now(timezone.utc).isoformat()})
     plate = entry["plate_number"]
@@ -492,7 +516,7 @@ def recorded(args, scenario, token):
     if not qr_only:
         args.clip_plate = args.clip_plate or plate
     if args.plate and plate != args.plate and not qr_only:
-        raise RuntimeError(f"Entry QR matched {plate}, expected {args.plate}; session was created and needs staff review")
+        print(f"Session belongs to {plate}; supplied reference was {args.plate}.", flush=True)
     session_id = int(entry["session_id"])
     print(f"Entry: {plate}; session {session_id}; assigned {entry['slot_number']}; payment {entry['payment_status']}.", flush=True)
     if entry.get("duplicate"):
@@ -524,6 +548,7 @@ def recorded(args, scenario, token):
         rule = import_module(f"computer_vision.recorded_test_cases.{args.case}")
         rule.apply_business_rule(args, scenario, session_id, token, entry,
                                  violation_alert=violation_alert)
+    review_pending_parking_alerts(scenario, session_id)
     print(exit_stage_message(session_id, args.case), flush=True)
     input()
     if args.case == "grace":
@@ -595,7 +620,7 @@ def live_gates(args, scenario, token):
             raise TimeoutError("No live entrance session was created")
         if (args.plate and session["vehicle_type"] != "QR_ONLY"
                 and session["plate_number"] != args.plate):
-            raise RuntimeError(f"Live entrance read {session['plate_number']}, expected {args.plate}")
+            print(f"Live entrance read {session['plate_number']}; supplied reference was {args.plate}.", flush=True)
         session_id = session["session_id"]
         print(f"Live entry: session {session_id}, assigned {session['slot_number']}.", flush=True)
         stage(args, "Live entry allocated. Begin the parking portion of the sectional clip.")
@@ -627,7 +652,7 @@ def main(argv=None):
     parser.add_argument("--scenario-id")
     parser.add_argument("--zone", choices=["A", "B", "C", "D", "E"], help="Recorded test zone profile")
     parser.add_argument("--case", choices=["grace", "normal_fare", "reservation", "reserved_slot", "tenant", "enforcement"])
-    parser.add_argument("--plate", help="Optional expected test plate for entrance verification")
+    parser.add_argument("--plate", help="Optional reference plate to compare with entrance recognition; never blocks the run")
     parser.add_argument("--entry-qr-token", help="Issued reservation QR when entrance ALPR cannot read the plate")
     parser.add_argument("--clip-plate", help="Labeled vehicle in sectional recording; defaults to entrance plate")
     parser.add_argument("--clip-slot", help="Bay shown by the sectional clip")
@@ -653,7 +678,7 @@ def main(argv=None):
                         help="Continuous occupied video seconds required to confirm parking")
     parser.add_argument("--preferred-slot", help="Vacant bay to allocate for this simulation; defaults to clip slot")
     parser.add_argument("--tenant-expired", action="store_true",
-                        help="Exercise the expired tenant departure window instead of the active window")
+                        help="Prompt for an expired tenant window without changing the clock")
     parser.add_argument("--auto-advance", action="store_true", help="Skip manual stage controls")
     parser.add_argument("--api-url", default=DEFAULT_API)
     parser.add_argument("--no-preview", action="store_true")
@@ -685,8 +710,7 @@ def main(argv=None):
         args.violation_video = args.violation_video or profile.get("violation")
         args.violation_camera_id = profile.get("violation_camera", args.camera_id)
         args.violation_regions = args.violation_regions or profile.get("violation_regions")
-        if args.case != "reserved_slot":
-            args.preferred_slot = args.preferred_slot or profile["slot"]
+        args.preferred_slot = args.preferred_slot or profile["slot"]
         args.scenario_id = args.scenario_id or f"{profile['scenario_prefix']}_{uuid.uuid4().hex[:10]}"
         if not args.scenario_id.lower().startswith(profile["scenario_prefix"] + "_"):
             parser.error(f"scenario ID for this entry point must start with {profile['scenario_prefix']}_")

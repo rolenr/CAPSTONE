@@ -368,6 +368,20 @@ body[data-page="admin"] {
 .main-content-body section[id] { scroll-margin-top: calc(var(--app-header-height, 64px) + 24px); }
 
 /* Slot controls: full-width zone sections with readable per-zone space cards. */
+.admin-live-map-panel {
+    margin-bottom: 1rem;
+    padding: 1rem;
+    border: 1px solid #dbe4ef;
+    border-radius: 12px;
+    background: #fff;
+}
+.admin-live-map-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem; margin-bottom: .75rem; }
+.admin-live-map-heading h3 { margin: 0; color: #0f172a; }
+.admin-live-map-heading span { color: #475569; font-size: .875rem; }
+#slot-controls #liveMap { width: 80%; max-width: 768px; margin: 0 auto; }
+#slot-controls #liveMap .lot-photo-wrap { width: 100%; }
+#slot-controls #liveMap .slot-dot.selected { box-shadow: 0 0 0 5px #2563eb, 0 2px 8px #0f172a; z-index: 5; }
+#adminMapControls .map-focused-slot { outline: 3px solid #2563eb; outline-offset: 3px; transition: outline-color .3s; }
 #slot-controls .slot-controls-description {
     margin: 0 0 1rem;
     max-width: 72ch;

@@ -109,6 +109,7 @@ $actionRoles = [
     'reserve' => ['DRIVER', 'ADMIN'],
     'local_checkout' => ['DRIVER', 'ADMIN'],
     'active_reservation' => ['DRIVER', 'ADMIN'],
+    'driver_notifications' => ['DRIVER'],
     'violations' => ['DRIVER', 'ADMIN'],
     'vendor_lookup' => ['VENDOR', 'ADMIN'],
     'vendor_validate' => ['VENDOR', 'ADMIN'],
@@ -507,6 +508,51 @@ if ($method === 'POST' && $action === 'login') {
 }
 
 // --- ROUTE: Live Map True Availability ---
+if ($method === 'GET' && $action === 'driver_notifications') {
+    $plate = normalizeLicensePlate($sessionUser['plate_number'] ?? '');
+    $events = [];
+    $vehicle = $db->prepare("SELECT vehicle_id FROM vehicles WHERE UPPER(REPLACE(REPLACE(plate_number,' ',''),'-',''))=?");
+    $vehicle->execute([$plate]);
+    $vehicleId = $vehicle->fetchColumn();
+    if ($vehicleId) {
+        $reservations = $db->prepare("SELECT r.reservation_id,r.reservation_time,r.status,r.payment_state,r.expiry_time,s.slot_number
+            FROM reservations r JOIN parking_slots s ON s.slot_id=r.slot_id WHERE r.vehicle_id=? ORDER BY r.reservation_id DESC LIMIT 25");
+        $reservations->execute([$vehicleId]);
+        foreach ($reservations as $r) {
+            $slot = $r['slot_number'];
+            $status = $r['status'];
+            $message = $status === 'ACTIVE' ? "You successfully reserved slot {$slot}."
+                : ($status === 'PENDING_PAYMENT' ? "Slot {$slot} is held while payment is pending."
+                : ($status === 'CANCELLED' ? "Your reservation for slot {$slot} was cancelled."
+                : "Your reservation for slot {$slot} has {$status} status."));
+            $events[] = ['id'=>'reservation-'.$r['reservation_id'].'-'.$status, 'type'=>'reservation', 'message'=>$message,
+                'occurred_at'=>$r['reservation_time'], 'href'=>'wallet.html'];
+        }
+        $sessions = $db->prepare("SELECT ps.session_id,ps.entry_time,ps.exit_time,ps.vendor_scan_time,ps.payment_status,s.slot_number
+            FROM parking_sessions ps LEFT JOIN parking_slots s ON s.slot_id=ps.slot_id WHERE ps.vehicle_id=? ORDER BY ps.session_id DESC LIMIT 25");
+        $sessions->execute([$vehicleId]);
+        foreach ($sessions as $s) {
+            $slot = $s['slot_number'] ? " in slot {$s['slot_number']}" : '';
+            $events[] = ['id'=>'entry-'.$s['session_id'], 'type'=>'entry',
+                'message'=>"Your vehicle entered Parking Ltd.{$slot}", 'occurred_at'=>$s['entry_time'], 'href'=>'wallet.html'];
+            if ($s['vendor_scan_time']) $events[] = ['id'=>'validation-'.$s['session_id'], 'type'=>'validation',
+                'message'=>'Your parking visit was validated by a tenant.', 'occurred_at'=>$s['vendor_scan_time'], 'href'=>'wallet.html'];
+            if ($s['exit_time']) $events[] = ['id'=>'exit-'.$s['session_id'], 'type'=>'exit',
+                'message'=>'Your vehicle exited Parking Ltd.', 'occurred_at'=>$s['exit_time'], 'href'=>'wallet.html'];
+            if (str_starts_with((string)$s['payment_status'], 'PAID')) $events[] = ['id'=>'payment-'.$s['session_id'], 'type'=>'payment',
+                'message'=>'Your parking payment was recorded.', 'occurred_at'=>$s['exit_time'] ?: $s['entry_time'], 'href'=>'wallet.html'];
+        }
+        $violations = $db->prepare("SELECT v.violation_id,v.violation_type,v.issued_at,v.status FROM violations v
+            JOIN parking_sessions ps ON ps.session_id=v.session_id WHERE ps.vehicle_id=? ORDER BY v.violation_id DESC LIMIT 25");
+        $violations->execute([$vehicleId]);
+        foreach ($violations as $v) $events[] = ['id'=>'violation-'.$v['violation_id'].'-'.$v['status'], 'type'=>'violation',
+            'message'=>"Parking violation: {$v['violation_type']} ({$v['status']}).", 'occurred_at'=>$v['issued_at'], 'href'=>'violations.html'];
+    }
+    usort($events, fn($a,$b) => strcmp($b['occurred_at'] ?? '', $a['occurred_at'] ?? ''));
+    echo json_encode(array_slice($events, 0, 40));
+    exit;
+}
+
 if ($method === 'GET' && $action === 'map') {
     ensureSimulationSchema($db);
 
@@ -542,10 +588,7 @@ if ($method === 'GET' && $action === 'map') {
             s.slot_number,
             s.zone,
             s.is_occupied AS is_occupied_raw,
-            CASE WHEN s.is_occupied = 1 OR EXISTS (
-                SELECT 1 FROM reservations r WHERE r.slot_id=s.slot_id
-                AND r.status IN ('ACTIVE','PENDING_PAYMENT')
-            ) THEN 1 ELSE 0 END AS is_occupied,
+            s.is_occupied AS is_occupied,
             CASE WHEN EXISTS (SELECT 1 FROM reservations r WHERE r.slot_id=s.slot_id
                 AND r.status IN ('ACTIVE','PENDING_PAYMENT')) THEN 1 ELSE 0 END AS has_reservation,
             $sessionPlate AS session_plate,

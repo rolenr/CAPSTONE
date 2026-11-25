@@ -306,7 +306,6 @@ function simulationEntry(PDO $db, string $plate, string $scenarioId, string $act
         throw new InvalidArgumentException('Invalid preferred bay.', 400);
     }
     if ($reservedBayTest && ($allocationZone === '' || !in_array($allocationZone, ['A','B','C','D','E'], true)
-            || !preg_match('/^sim_reserved_slot_'.strtolower($allocationZone).'_[A-Za-z0-9_-]+$/D', $scenarioId)
             || !preg_match('/^[A-E]-[0-9]{2}$/D', $clipSlot) || $clipSlot[0] !== $allocationZone
             || $preferredSlot !== '')) {
         throw new InvalidArgumentException('Reserved-bay test requires a zone and separate clip bay.', 400);

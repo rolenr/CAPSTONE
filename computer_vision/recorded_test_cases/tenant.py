@@ -10,16 +10,13 @@ from computer_vision.full_simulation import main
 
 
 def apply_business_rule(args, scenario, session_id, token, entry, violation_alert=None):
-    """Run the short simulation window for tenant exit validation."""
-    from computer_vision.full_simulation import advance_simulation_clock
-    print("Complete tenant validation in the Vendor portal, then press Enter to start the window demo.", flush=True)
+    """Tenant validation uses its actual recorded time, like other live rules."""
+    print("Complete tenant validation in the Vendor portal, then press Enter to continue.", flush=True)
     input()
     if args.tenant_expired:
-        advance_simulation_clock(args, scenario, session_id, token, "TENANT_EXPIRED")
-    if args.tenant_expired:
-        print("Tenant window expired. Settle the cashier bill before retrying exit.", flush=True)
+        print("Use the actual 20-minute validation window; wait for it to expire before testing a late exit.", flush=True)
     else:
-        print("Tenant validation is active. Continue to the exit feed.", flush=True)
+        print("Continue to the exit feed; the API will decide whether validation is still active.", flush=True)
 
 if __name__ == "__main__":
     raise SystemExit(main(["recorded", "--case", "tenant", *sys.argv[1:]]))

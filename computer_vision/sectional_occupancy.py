@@ -16,7 +16,7 @@ import time
 import uuid
 import os
 from urllib.request import Request, urlopen
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
 try:
@@ -288,21 +288,33 @@ class OccupancyMonitor:
 SLOT_STATE_COLOURS = {"OCCUPIED": overlay.OCCUPIED, "VACANT": overlay.VACANT}
 
 
+def confirmed_plate(votes):
+    """Publish only a repeated plate supported by a majority of recent reads."""
+    if len(votes) < 2:
+        return ""
+    counts = Counter(votes)
+    plate, count = counts.most_common(1)[0]
+    return plate if count >= 2 and count > len(votes) / 2 else ""
+
+
 def annotate(frame, cv2, slots, zones, vehicles, states=None):
     """Draw bays, restricted zones and vehicles. Labels sit outside each shape."""
     height, width = frame.shape[:2]
     states = states or {}
     to_pixels = lambda polygon: [(int(x * width), int(y * height)) for x, y in polygon]
     labels = []  # drawn after every shape so no border cuts through a label
+    occupied_areas = []
     # Restricted zones first, with a light fill, so bays and vehicles draw on top.
     for name, polygon in zones.items():
         points = to_pixels(polygon)
-        overlay.draw_polygon(cv2, frame, points, overlay.RESTRICTED, fill_alpha=0.10)
+        overlay.draw_polygon(cv2, frame, points, overlay.RESTRICTED, fill_alpha=0.04)
         # Inside the bottom-left corner: open roadway, away from bays and vehicles.
         labels.append((f"{name} (restricted)", min(p[0] for p in points) + overlay.line_width(frame),
                        max(p[1] for p in points), overlay.RESTRICTED, None, 0.9))
     for name, polygon in slots.items():
         points = to_pixels(polygon)
+        occupied_areas.append((min(p[0] for p in points), min(p[1] for p in points),
+                               max(p[0] for p in points), max(p[1] for p in points)))
         state = states.get(name)
         colour = SLOT_STATE_COLOURS.get(state, overlay.VACANT if not states else overlay.NEUTRAL)
         overlay.draw_polygon(cv2, frame, points, colour)
@@ -311,10 +323,13 @@ def annotate(frame, cv2, slots, zones, vehicles, states=None):
     for label, confidence, box in vehicles:
         x1, y1, x2, y2 = box
         a, b = (int(x1*width), int(y1*height)), (int(x2*width), int(y2*height))
+        occupied_areas.append((a[0], a[1], b[0], b[1]))
         overlay.draw_box(cv2, frame, a, b, overlay.VEHICLE)
         labels.append((f"{label} {confidence:.0%}", a[0], a[1], overlay.VEHICLE, b[1], 1.0))
+    placed_labels = []
     for text, left, top, colour, bottom, size in labels:
-        overlay.draw_label(cv2, frame, text, left, top, colour, bottom=bottom, size=size)
+        overlay.draw_label(cv2, frame, text, left, top, colour, bottom=bottom, size=size,
+                           avoid=occupied_areas, placed=placed_labels)
     return frame
 
 
@@ -572,7 +587,7 @@ def main(argv=None):
                     if state != "OCCUPIED" or slot_name in transitioned:
                         continue
                     votes = plate_history[slot_name]
-                    recognized = votes[-1] if len(votes) >= 2 and votes.count(votes[-1]) >= 2 else ""
+                    recognized = confirmed_plate(votes)
                     color, _ = consensus(color_history[slot_name])
                     previous_plate, previous_color = published_details.get(slot_name,("","UNKNOWN"))
                     if ((recognized and recognized != previous_plate)
@@ -615,8 +630,9 @@ def main(argv=None):
                         event["vehicle_color"] = color
                         event["color_confidence"] = score
                         votes = plate_history[event["slot_number"]]
-                        if len(votes) >= 2 and votes.count(votes[-1]) >= 2:
-                            event["recognized_plate"] = votes[-1]
+                        recognized = confirmed_plate(votes)
+                        if recognized:
+                            event["recognized_plate"] = recognized
                         if event["occupancy_state"] == "OCCUPIED":
                             published_details[event["slot_number"]] = (
                                 event.get("recognized_plate",""),color)

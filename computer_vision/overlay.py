@@ -26,7 +26,7 @@ def unit(frame):
 
 
 def line_width(frame):
-    return max(2, round(2.5 * unit(frame)))
+    return max(3, round(3.5 * unit(frame)))
 
 
 def _text_colour(background):
@@ -57,12 +57,9 @@ def draw_box(cv2, frame, top_left, bottom_right, colour):
     return frame
 
 
-def draw_label(cv2, frame, text, left, top, colour, bottom=None, size=1.0):
-    """Solid label chip placed just above ``top``.
-
-    If there is no room above, the chip goes just below ``bottom`` (the lower
-    edge of the shape) so it still sits outside it. Returns the chip rectangle.
-    """
+def draw_label(cv2, frame, text, left, top, colour, bottom=None, size=1.0,
+               avoid=(), placed=None):
+    """Draw a solid label near a shape, avoiding supplied detection and label boxes."""
     height, width = frame.shape[:2]
     u = unit(frame)
     font = cv2.FONT_HERSHEY_SIMPLEX
@@ -73,17 +70,32 @@ def draw_label(cv2, frame, text, left, top, colour, bottom=None, size=1.0):
     gap = max(2, round(3 * u))
     chip_w, chip_h = text_w + 2 * pad, text_h + baseline + 2 * pad
 
-    y1 = top - gap - chip_h
-    if y1 < 0:
-        y1 = (bottom if bottom is not None else top) + gap
-    y1 = max(0, min(height - chip_h, y1))
-    x1 = max(0, min(width - chip_w, left))
+    def clamp(value, maximum):
+        return max(0, min(maximum, value))
+
+    def overlap(a, b):
+        return max(0, min(a[2], b[2]) - max(a[0], b[0])) * max(0, min(a[3], b[3]) - max(a[1], b[1]))
+
+    lower = bottom if bottom is not None else top
+    positions = [(left, top - gap - chip_h), (left, lower + gap),
+                 (left - chip_w - gap, top), (left + gap, top)]
+    candidates = []
+    for index, (px, py) in enumerate(positions):
+        cx, cy = clamp(px, width - chip_w), clamp(py, height - chip_h)
+        rect = (cx, cy, cx + chip_w, cy + chip_h)
+        clipped = abs(cx - px) + abs(cy - py)
+        penalty = sum(overlap(rect, box) for box in avoid)
+        penalty += 3 * sum(overlap(rect, box) for box in (placed or ()))
+        candidates.append((penalty + clipped * chip_h, index, rect))
+    _, _, (x1, y1, _, _) = min(candidates)
     x2, y2 = x1 + chip_w, y1 + chip_h
 
     cv2.rectangle(frame, (x1 - 1, y1 - 1), (x2 + 1, y2 + 1), OUTLINE, -1)
     cv2.rectangle(frame, (x1, y1), (x2, y2), colour, -1)
     cv2.putText(frame, text, (x1 + pad, y2 - pad - baseline), font, scale,
                 _text_colour(colour), thickness, cv2.LINE_AA)
+    if placed is not None:
+        placed.append((x1, y1, x2, y2))
     return x1, y1, x2, y2
 
 

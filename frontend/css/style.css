@@ -1741,6 +1741,28 @@ button[type="submit"]:hover {
 }
 
 .slot-row small { color: #475569; font-size: 0.8125rem; }
+.slot-row.selected { background: #dbeafe; outline: 2px solid #2563eb; border-radius: 6px; padding: 4px; }
+.zoom-map .slot-dot.selected { box-shadow: 0 0 0 5px #2563eb, 0 2px 8px #0f172a; z-index: 5; }
+
+@media (min-width: 761px) and (min-height: 650px) {
+    body[data-page="live-map"] { height: 100dvh; overflow: hidden; }
+    body[data-page="live-map"] > .container { width: 100%; max-width: 1600px; flex: 1; min-height: 0; margin: 10px auto; display: flex; flex-direction: column; gap: 8px; }
+    body[data-page="live-map"] .page-title-banner { margin: 0; padding: 8px 16px; }
+    body[data-page="live-map"] .live-map-card { width: 100%; max-width: none; flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px 16px; }
+    body[data-page="live-map"] .live-map-card .section-description { margin-bottom: 8px; }
+    body[data-page="live-map"] .live-map-layout { flex: 1; min-height: 0; grid-template-columns: minmax(0, 1.35fr) minmax(320px, 1fr); gap: 16px; }
+    body[data-page="live-map"] #liveMap, body[data-page="live-map"] .zoom-frame { height: 100%; min-height: 0; }
+    body[data-page="live-map"] .zoom-toolbar { flex: 0 0 auto; }
+    body[data-page="live-map"] .zoom-viewport { flex: 1; min-height: 0; }
+    body[data-page="live-map"] .zoom-stage { width: 100%; height: 100%; }
+    body[data-page="live-map"] .lot-photo-wrap { width: fit-content; height: 100%; margin: auto; }
+    body[data-page="live-map"] .lot-photo { width: auto; height: 100%; }
+    body[data-page="live-map"] .map-sidebar { display: flex; flex-direction: column; min-height: 0; }
+    body[data-page="live-map"] .map-zone-list { flex: 0 0 auto; }
+    body[data-page="live-map"] .zone-detail-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+    body[data-page="live-map"] .zone-detail-slots { flex: 1; min-height: 0; max-height: none; align-content: start; }
+    body[data-page="live-map"] .app-footer { display: none; }
+}
 
 .slot-row span.free, .slot-row span.occupied, .slot-row span.reserved {
     width: 11px;

@@ -48,6 +48,16 @@ const AppLayout = (() => {
                 </a>
                 <nav class="main-nav" aria-label="Main navigation"></nav>
                 <div class="header-meta" ${publicPage ? 'hidden' : ''}>
+                    <div class="driver-notifications" data-driver-notifications hidden>
+                        <button type="button" class="notification-trigger" aria-label="Notifications" aria-expanded="false" aria-controls="driverNotificationPanel">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg>
+                            <span class="notification-count" hidden></span>
+                        </button>
+                        <div id="driverNotificationPanel" class="notification-panel" hidden>
+                            <div class="notification-panel-head"><strong>Notifications</strong><button type="button" class="notification-mark-read">Mark all read</button></div>
+                            <div class="notification-list" role="list"></div>
+                        </div>
+                    </div>
                     <span class="user-profile-chip" data-session-email>Checking session…</span>
                     <button type="button" class="btn-signout" data-signout>Sign Out</button>
                 </div>
@@ -91,6 +101,8 @@ const AppLayout = (() => {
     }
 
     function updateIdentity(user) {
+        const notifications = header?.querySelector('[data-driver-notifications]');
+        if (notifications) notifications.hidden = user.role !== 'DRIVER';
         renderNavigation(portals.filter(portal => portal.roles.includes(user.role)));
         document.querySelectorAll('[data-session-email]').forEach(el => {
             el.textContent = user.email || 'Signed-in account';

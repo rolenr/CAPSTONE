@@ -124,6 +124,7 @@ async function enforcePageRole() {
 
         // Dynamically maintain Administrator authority across customer & operational views
         AppLayout.updateIdentity(user);
+        if (user.role === 'DRIVER') initDriverNotifications(user);
         adaptAdminPersona(user, page);
         await checkActiveReservation();
         return user;
@@ -133,6 +134,73 @@ async function enforcePageRole() {
         window.location.replace('login.html');
         return null;
     }
+}
+
+function initDriverNotifications(user) {
+    const host = document.querySelector('[data-driver-notifications]');
+    if (!host || host.dataset.ready) return;
+    host.dataset.ready = 'true';
+    const trigger = host.querySelector('.notification-trigger');
+    const panel = host.querySelector('.notification-panel');
+    const list = host.querySelector('.notification-list');
+    const badge = host.querySelector('.notification-count');
+    const storageKey = `parking.notifications.read.${user.email}`;
+    let events = [];
+    let read = new Set();
+    try { read = new Set(JSON.parse(localStorage.getItem(storageKey) || '[]')); } catch (_) {}
+    const render = () => {
+        const unread = events.filter(event => !read.has(event.id)).length;
+        badge.hidden = unread === 0;
+        badge.textContent = unread > 9 ? '9+' : String(unread);
+        trigger.setAttribute('aria-label', unread ? `Notifications, ${unread} unread` : 'Notifications');
+        list.replaceChildren();
+        if (!events.length) {
+            const empty = document.createElement('p');
+            empty.className = 'notification-empty';
+            empty.textContent = 'No notifications yet.';
+            list.append(empty);
+            return;
+        }
+        events.forEach(event => {
+            const item = document.createElement('a');
+            item.href = event.href;
+            item.className = `notification-item${read.has(event.id) ? '' : ' unread'}`;
+            item.setAttribute('role', 'listitem');
+            const message = document.createElement('span');
+            message.textContent = event.message;
+            const time = document.createElement('small');
+            time.textContent = formatPhtDateTime(event.occurred_at);
+            item.append(message, time);
+            item.addEventListener('click', () => { read.add(event.id); saveRead(); });
+            list.append(item);
+        });
+    };
+    const saveRead = () => { try { localStorage.setItem(storageKey, JSON.stringify([...read])); } catch (_) {} render(); };
+    trigger.addEventListener('click', () => {
+        panel.hidden = !panel.hidden;
+        trigger.setAttribute('aria-expanded', String(!panel.hidden));
+    });
+    host.querySelector('.notification-mark-read').addEventListener('click', () => {
+        events.forEach(event => read.add(event.id));
+        saveRead();
+    });
+    document.addEventListener('click', event => {
+        if (!host.contains(event.target)) { panel.hidden = true; trigger.setAttribute('aria-expanded', 'false'); }
+    });
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && !panel.hidden) { panel.hidden = true; trigger.setAttribute('aria-expanded', 'false'); trigger.focus(); }
+    });
+    const refresh = async () => {
+        try {
+            const response = await apiFetch(`${API_BASE}?action=driver_notifications`);
+            const data = await response.json();
+            if (!response.ok || !Array.isArray(data)) return;
+            events = data;
+            render();
+        } catch (error) { console.error('Unable to load notifications.', error); }
+    };
+    refresh();
+    window.setInterval(refresh, 30000);
 }
 
 function adaptAdminPersona(user, page) {
@@ -508,7 +576,7 @@ async function fetchLiveMap() {
         Object.keys(zones).sort().forEach(zone => {
             const slots = zones[zone];
             const total = slots.length;
-            const free = slots.filter(s => s.is_occupied != 1).length;
+            const free = slots.filter(s => slotStatus(s).key === 'vacant').length;
             const pos = zonePositions[zone];
             const isOverflow = zone === 'F';
 
@@ -537,6 +605,7 @@ async function fetchLiveMap() {
                             <button type="button" class="slot-dot ${status.key === 'vacant' ? 'free' : status.key}"
                                 style="top:${dp.top}%; left:${dp.left}%;"
                                 data-zone="${zone}"
+                                data-slot-id="${slot.slot_id}"
                                 title="${label}"
                                 aria-label="${label}">
                             </button>
@@ -551,7 +620,10 @@ async function fetchLiveMap() {
         if (zoneList) zoneList.innerHTML = zoneCards;
 
         document.querySelectorAll('#liveMap .zone-marker, #liveMap .slot-dot, #mapZoneList .map-zone-card').forEach(btn => {
-            btn.addEventListener('click', () => showZoneDetail(btn.dataset.zone));
+            btn.addEventListener('click', () => {
+                if (document.body.dataset.page === 'admin') focusAdminMapSlot(btn.dataset.zone, btn.dataset.slotId);
+                else showZoneDetail(btn.dataset.zone, btn.dataset.slotId);
+            });
         });
         showZoneDetail(zones[selectedMapZone] ? selectedMapZone : (zones.A ? 'A' : Object.keys(zones)[0]));
 
@@ -562,13 +634,13 @@ async function fetchLiveMap() {
     }
 }
 
-function showZoneDetail(zone) {
+function showZoneDetail(zone, slotId = null) {
     const panel = document.getElementById('zoneDetailPanel');
     if (!panel || !zonesCache[zone]) return;
 
     selectedMapZone = zone;
     const slots = zonesCache[zone];
-    const free = slots.filter(slot => slot.is_occupied != 1).length;
+    const free = slots.filter(slot => slotStatus(slot).key === 'vacant').length;
 
     panel.innerHTML = `
         <div class="zone-detail-heading">
@@ -580,7 +652,7 @@ function showZoneDetail(zone) {
                 const status = slotStatus(slot);
                 const plate = slot.plate_number ? normalizeLicensePlateInput(slot.plate_number) : '';
                 return `
-                <div class="slot-row">
+                <div class="slot-row${String(slot.slot_id) === String(slotId) ? ' selected' : ''}" data-slot-id="${slot.slot_id}">
                     <span>${slot.slot_number}</span>
                     <span class="${status.key === 'vacant' ? 'free' : status.key}"></span>
                     <span>${status.label}${plate ? ' &ndash; ' + safeSectionalText(plate) : ''}
@@ -597,6 +669,32 @@ function showZoneDetail(zone) {
             marker.setAttribute('aria-pressed', String(selected));
         }
     });
+    document.querySelectorAll('#liveMap .slot-dot').forEach(marker => {
+        marker.classList.toggle('selected', !!slotId && marker.dataset.slotId === String(slotId));
+    });
+    if (slotId) {
+        const list = panel.querySelector('.zone-detail-slots');
+        const selected = [...list.querySelectorAll('.slot-row')].find(row => row.dataset.slotId === String(slotId));
+        if (selected) list.scrollTop = selected.offsetTop - list.offsetTop - (list.clientHeight - selected.offsetHeight) / 2;
+    }
+}
+
+function focusAdminMapSlot(zone, slotId) {
+    if (!zone) return;
+    const filter = document.getElementById('zoneFilterButtons');
+    const button = [...(filter?.querySelectorAll('.zone-filter-btn') || [])].find(item => item.dataset.filter === zone);
+    if (button) button.click();
+    document.querySelectorAll('#liveMap .zone-marker, #liveMap .slot-dot').forEach(marker => {
+        marker.classList.toggle('selected', marker.dataset.slotId === slotId && !!slotId);
+    });
+    const target = slotId
+        ? document.querySelector(`#adminMapControls .admin-slot-card[data-slot-id="${CSS.escape(slotId)}"]`)
+        : document.querySelector('#adminMapControls .zone-section');
+    if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        target.classList.add('map-focused-slot');
+        window.setTimeout(() => target.classList.remove('map-focused-slot'), 2500);
+    }
 }
 
 if (liveMap) {
@@ -1859,6 +1957,7 @@ function overrideReservation(reservationId) {
                 loadAdminAnalytics();
                 loadAdminMap();
                 loadAdminAuditLogs();
+                fetchLiveMap();
             }
         }]
     });
@@ -2125,7 +2224,7 @@ function renderFilteredSlots() {
             const next = isOccupied ? 'vacant' : 'occupied';
 
             return `
-                <div class="admin-slot-card slot-${status.key}">
+                <div class="admin-slot-card slot-${status.key}" data-slot-id="${slot.slot_id}">
                     <strong>${slot.slot_number}</strong>
                     <div class="slot-plate">${plateDisplay}</div>
                     ${plateCheck}
@@ -2195,6 +2294,7 @@ function toggleSlotOverride(slotId, newOccupiedState) {
                 loadAdminAnalytics();
                 loadAdminMap();
                 loadAdminAuditLogs();
+                fetchLiveMap();
             }
         }]
     });
