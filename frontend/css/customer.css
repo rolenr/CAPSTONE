@@ -33,7 +33,7 @@
 }
 .customer-eyebrow {
     margin-bottom: 12px;
-    font-size: .72rem;
+    font-size: 0.75rem;
     font-weight: 700;
     letter-spacing: .14em;
     text-transform: uppercase;
@@ -58,7 +58,7 @@
 .customer-section-intro p:not(.customer-eyebrow) { color: var(--text-secondary); }
 .customer-section-intro .customer-eyebrow { margin-bottom: 8px; }
 .customer-vehicle { border-left: 2px solid var(--border-color); padding-left: 20px; }
-.customer-vehicle span { display: block; font-size: .72rem; color: var(--text-muted); margin-bottom: 4px; }
+.customer-vehicle span { display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; }
 .customer-vehicle strong { font-family: var(--font-mono); font-size: 1rem; }
 .customer-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
 .customer-action-card {

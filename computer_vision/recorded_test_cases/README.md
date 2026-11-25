@@ -6,9 +6,9 @@ There are six scenario commands—one per business rule. Pass the zone and optio
 | --- | --- | --- |
 | `grace.py` | A–E | Use the actual entrance timestamp and complete the ₱0 bypass within 15 minutes |
 | `normal_fare.py` | A–E | Simulate parking past grace, collect the normal fare, then exit |
-| `reservation.py` | A–E | Run the paired car and bay after manually creating its frontend reservation |
-| `reserved_slot.py` | A–E | Run a walk-in against another vehicle’s reservation at the clip bay; review the wrong-slot alert before exit |
-| `tenant.py` | A–E | Validate through the Vendor frontend and simulate the tenant departure window; add `--tenant-expired` to test expiry |
+| `reservation.py` | A–E | Demonstrate the entrant’s reservation; the actual booking determines the result |
+| `reserved_slot.py` | A–E | Demonstrate another vehicle’s booking at the clip bay using the same rules |
+| `tenant.py` | A–E | Validate through the Vendor frontend; the actual 20-minute window determines exit eligibility |
 | `enforcement.py` | C only | Use the recorded Zone C violation clip to demonstrate the 20-second rule shared by all zones |
 
 ## Calibrate sectional regions
@@ -50,7 +50,7 @@ You may keep the regular app running independently:
 LOCAL_PAYMENTS_ENABLED=1 php -S 127.0.0.1:8080 backend/router.php
 ```
 
-From another terminal at the repository root, run one scenario command and choose its zone. `--plate` is optional; when supplied, it must be the actual normalized plate from that car’s entrance clip.
+From another terminal at the repository root, run one scenario command and choose its zone. `--plate` is an optional diagnostic reference; the recognized entrance plate controls the session even if it differs.
 
 ```sh
 python computer_vision/recorded_test_cases/grace.py --zone A --plate YOURPLATE
@@ -70,16 +70,16 @@ python computer_vision/recorded_test_cases/normal_fare.py \
   --regions computer_vision/recorded_test_cases/regions/zone_a.json
 ```
 
-The presentation order matches the existing runner: **selected zone sectional snapshot → entrance and allocation → parking clip → bay departure clip → payment or tenant action → exit camera**. Feed previews and manual stage controls are enabled by default. Grace begins at entrance, with no presentation countdown. Normal fare advances only the identified test session past 15 minutes; the expired tenant case advances its validation time past 20 minutes. The active tenant case uses the actual validation time. The simulation clock adjustments remain in the main database audit log.
+The presentation order matches the existing runner: **selected zone sectional snapshot → entrance and allocation → parking clip → bay departure clip → payment or tenant action → exit camera**. Feed previews and manual stage controls are enabled by default. Grace begins at entrance, with no presentation countdown. Normal fare advances only the identified test session past 15 minutes; tenant validation uses its actual time. The normal-fare clock adjustment remain in the main database audit log.
 
 During parking replay the sectional detector reads plates from vehicle crops inside calibrated bays and records a plate only after repeated, sufficiently confident OCR results. It also aggregates simple vehicle color observations. A clip label identifies the staged vehicle but is not reported as camera OCR; a distant or unreadable plate remains unknown.
 
 ## Case prerequisites
 
 - Clear or recover any open session for the test plate before starting. In recorded Zone A runs, a non-VIP XPANDER is assigned the nearest available eligible bay, starting in Zone B. The Zone A parking clip then records where it actually parked and creates a VIP/PWD staff review alert after confirmation. A confirmed alert adds a ₱200 fine, and a rejected alert adds none. Zone A frontend reservations require VIP/PWD status unless an admin overrides the restriction; a paid reservation is reassigned at entry if that status has since been revoked. Zone E reservations use standard eligibility.
-- Before `reservation.py`, manually create and pay or admin-exempt a reservation for the test plate and exact bay in the frontend.
-- Before `reserved_slot.py`, reserve the clip bay for a different registered vehicle and leave the test car without a reservation. The simulation allocates that car to another database-vacant bay in the same zone, then the sectional clip records the car in the reserved bay. Admin review is required before exit.
-- Use `--tenant-expired` on `tenant.py` for the expired 20-minute window path.
+- For a paid-reservation demonstration, create and pay or admin-exempt a booking for the entering vehicle and clip bay. Without it, the API applies walk-in rules.
+- For another vehicle’s reserved-bay demonstration, reserve the clip bay for a different registered vehicle. The runner allocates the entrant elsewhere and applies the same Admin review gate to any alert.
+- For an expired tenant validation, wait until the real 20-minute window ends before attempting exit; `--tenant-expired` no longer changes the clock.
 - `enforcement.py` runs only in Zone C because that is the only zone with a recorded violation clip. The 20-second driveway/double-parking rule and separate bay/roadway analysis apply to all zones with calibrated regions. The Zone C violation feed retains the same six bay polygons and plate/color observation; a separate polygon covers the visible driveway across the zone. A vehicle grounded in that driveway is excluded from bay occupancy while it obstructs the lane. The 35-second recorded clip produces one review alert at about 23 video seconds. Confirmed Admin review creates a ₱200 fine; rejected alerts carry no fine and the run continues. Use Cashier POS for either decision, then replay the exit camera directly; this case skips the bay-departure clip. Review each camera preview and site markings before relying on the A–E roadway polygons for unattended enforcement.
 
 Every successful entrance, including one with a readable plate, receives an issued entry QR. The simulation prints its scannable QR and token and saves a QR PNG. If the exit plate is unreadable, scan that **issued entry QR as the only fallback credential**. Vehicle color supports staff review and cannot authorize exit. Event logs and evidence are saved under `backend/database/simulation_runs/<scenario-id>/`.

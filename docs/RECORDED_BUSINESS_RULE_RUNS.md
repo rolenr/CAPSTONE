@@ -1,6 +1,6 @@
 # Recorded business-rule runs by zone
 
-These commands are adapted from the attached run list for the **current** six Python entry points. Run them one at a time from the repository root. Each command generates its own scenario ID, so there is no need to supply `--scenario-id`. The old `--presentation-seconds 90` flag and countdown are no longer supported: grace starts at actual entrance, while the normal-fare and expired-tenant cases advance only the current test session’s effective time at the rule boundary.
+These commands are adapted from the attached run list for the **current** six Python entry points. Run them one at a time from the repository root. Each command generates its own scenario ID, so there is no need to supply `--scenario-id`. The old `--presentation-seconds 90` flag and countdown are no longer supported: grace starts at actual entrance, while only normal fare advances the current test session past 15 minutes. Tenant validation uses its actual time.
 
 ```sh
 source .venv-cv/bin/activate
@@ -10,7 +10,7 @@ Start the frontend/API in another terminal with `LOCAL_PAYMENTS_ENABLED=1 php -S
 
 The recorded bay is **D-02** for Zone D, even though its parking and departure filenames say `D-01`. A recorded target bay is accepted only after that zone’s snapshot sees it vacant. The entrance detector reads the plate from each video; no command supplies the expected plate. Treat any known plate as a result to verify after recognition, not as an input. The FD entrance clip may need the QR-only fallback if its plate remains unreadable. An unreadable entrance in the paid-reservation case needs that reservation’s QR via `--entry-qr-token TOKEN` so the booking can be linked. In a recorded Zone A run, a non-VIP vehicle is allocated the nearest available eligible bay, starting with Zone B. The Zone A clip still shows where it actually parks. After that clip confirms occupancy, Admin > Violations Log receives one VIP/PWD eligibility alert. Staff can confirm it for a ₱200 fine or reject it with no fine; the run proceeds through payment and exit. A paid Zone A reservation whose VIP status was revoked is reassigned to an eligible bay while retaining its payment and QR. Live entrance allocation also excludes non-VIP vehicles from Zone A.
 
-The runner uses the detected entrance plate to create the session and then labels the sectional replay with that observed result. It never inserts a plate from these commands. Every successful entry prints and saves an issued QR, including readable-plate entries. For an unreadable exit plate, scan that issued token in Cashier POS; the internal `QR_ONLY_...` label is not an exit credential. Color is supporting evidence. Finish each exit and verify the slot is released before moving to the next command.
+The runner uses the detected entrance plate to create the session and then labels the sectional replay with that observed result. It never inserts a plate from these commands. An optional `--plate` is only a diagnostic reference and cannot block a different recognized vehicle. Every successful entry prints and saves an issued QR, including readable-plate entries. For an unreadable exit plate, scan that issued token in Cashier POS; the internal `QR_ONLY_...` label is not an exit credential. Color is supporting evidence. Finish each exit and verify the slot is released before moving to the next command.
 
 For the Zone A recorded simulation, treat every vehicle already visible in the pre-entry snapshot as VIP/PWD authorized. The snapshot records occupied bays without creating accounts, changing VIP flags, or issuing eligibility alerts for those existing vehicles. The priority check applies only to the newly entering vehicle after its own parking clip confirms occupancy.
 
@@ -148,7 +148,7 @@ python computer_vision/recorded_test_cases/reservation.py --zone E
 
 ## Another vehicle’s reserved bay
 
-Reserve the recorded target bay for a different registered vehicle. The entrant must have no active reservation. Review the wrong-slot alert in Admin before exit.
+Reserve the recorded target bay for a different registered vehicle. This is the only setup difference from reserving it for the entrant. The same flow detects booking ownership and sends any resulting alert to Admin review. Without a booking, the run follows the walk-in path.
 
 ### Zone A · A-06
 
@@ -192,7 +192,7 @@ python computer_vision/recorded_test_cases/reserved_slot.py --zone E
 
 ## Tenant validation
 
-Validate the active session in the Vendor portal when prompted. For an expired-window variant, add `--tenant-expired` to an individual command.
+Validate the active session in the Vendor portal when prompted. For an expired-window variant, wait until the real 20-minute validation window has elapsed; `--tenant-expired` does not change the clock.
 
 ### Zone A · A-06
 

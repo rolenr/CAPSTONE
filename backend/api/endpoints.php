@@ -32,6 +32,15 @@ function normalizeLicensePlate($value) {
     return preg_replace('/[^A-Z0-9]/', '', strtoupper(trim($value)));
 }
 
+// Older wrong-slot alerts were stored with a blank observed plate ("observed  in C-01")
+// when the camera could not read it. Fill in the session plate so every record names one.
+function fillMissingAlertPlate($details, $plate) {
+    if (!is_string($details) || !is_string($plate) || $plate === '') return $details;
+    if (strpos($details, 'observed  in ') === false) return $details;
+    return str_replace('observed  in ', "observed {$plate} in ", $details)
+        . ' - plate not readable on camera; identified by entry-gate session';
+}
+
 function isValidLicensePlate($value) {
     return is_string($value) && preg_match('/^[A-Z]{3}[0-9]{3,4}$/D', $value) === 1;
 }
@@ -100,6 +109,7 @@ $actionRoles = [
     'reserve' => ['DRIVER', 'ADMIN'],
     'local_checkout' => ['DRIVER', 'ADMIN'],
     'active_reservation' => ['DRIVER', 'ADMIN'],
+    'driver_notifications' => ['DRIVER'],
     'violations' => ['DRIVER', 'ADMIN'],
     'vendor_lookup' => ['VENDOR', 'ADMIN'],
     'vendor_validate' => ['VENDOR', 'ADMIN'],
@@ -498,23 +508,91 @@ if ($method === 'POST' && $action === 'login') {
 }
 
 // --- ROUTE: Live Map True Availability ---
+if ($method === 'GET' && $action === 'driver_notifications') {
+    $plate = normalizeLicensePlate($sessionUser['plate_number'] ?? '');
+    $events = [];
+    $vehicle = $db->prepare("SELECT vehicle_id FROM vehicles WHERE UPPER(REPLACE(REPLACE(plate_number,' ',''),'-',''))=?");
+    $vehicle->execute([$plate]);
+    $vehicleId = $vehicle->fetchColumn();
+    if ($vehicleId) {
+        $reservations = $db->prepare("SELECT r.reservation_id,r.reservation_time,r.status,r.payment_state,r.expiry_time,s.slot_number
+            FROM reservations r JOIN parking_slots s ON s.slot_id=r.slot_id WHERE r.vehicle_id=? ORDER BY r.reservation_id DESC LIMIT 25");
+        $reservations->execute([$vehicleId]);
+        foreach ($reservations as $r) {
+            $slot = $r['slot_number'];
+            $status = $r['status'];
+            $message = $status === 'ACTIVE' ? "You successfully reserved slot {$slot}."
+                : ($status === 'PENDING_PAYMENT' ? "Slot {$slot} is held while payment is pending."
+                : ($status === 'CANCELLED' ? "Your reservation for slot {$slot} was cancelled."
+                : "Your reservation for slot {$slot} has {$status} status."));
+            $events[] = ['id'=>'reservation-'.$r['reservation_id'].'-'.$status, 'type'=>'reservation', 'message'=>$message,
+                'occurred_at'=>$r['reservation_time'], 'href'=>'wallet.html'];
+        }
+        $sessions = $db->prepare("SELECT ps.session_id,ps.entry_time,ps.exit_time,ps.vendor_scan_time,ps.payment_status,s.slot_number
+            FROM parking_sessions ps LEFT JOIN parking_slots s ON s.slot_id=ps.slot_id WHERE ps.vehicle_id=? ORDER BY ps.session_id DESC LIMIT 25");
+        $sessions->execute([$vehicleId]);
+        foreach ($sessions as $s) {
+            $slot = $s['slot_number'] ? " in slot {$s['slot_number']}" : '';
+            $events[] = ['id'=>'entry-'.$s['session_id'], 'type'=>'entry',
+                'message'=>"Your vehicle entered Parking Ltd.{$slot}", 'occurred_at'=>$s['entry_time'], 'href'=>'wallet.html'];
+            if ($s['vendor_scan_time']) $events[] = ['id'=>'validation-'.$s['session_id'], 'type'=>'validation',
+                'message'=>'Your parking visit was validated by a tenant.', 'occurred_at'=>$s['vendor_scan_time'], 'href'=>'wallet.html'];
+            if ($s['exit_time']) $events[] = ['id'=>'exit-'.$s['session_id'], 'type'=>'exit',
+                'message'=>'Your vehicle exited Parking Ltd.', 'occurred_at'=>$s['exit_time'], 'href'=>'wallet.html'];
+            if (str_starts_with((string)$s['payment_status'], 'PAID')) $events[] = ['id'=>'payment-'.$s['session_id'], 'type'=>'payment',
+                'message'=>'Your parking payment was recorded.', 'occurred_at'=>$s['exit_time'] ?: $s['entry_time'], 'href'=>'wallet.html'];
+        }
+        $violations = $db->prepare("SELECT v.violation_id,v.violation_type,v.issued_at,v.status FROM violations v
+            JOIN parking_sessions ps ON ps.session_id=v.session_id WHERE ps.vehicle_id=? ORDER BY v.violation_id DESC LIMIT 25");
+        $violations->execute([$vehicleId]);
+        foreach ($violations as $v) $events[] = ['id'=>'violation-'.$v['violation_id'].'-'.$v['status'], 'type'=>'violation',
+            'message'=>"Parking violation: {$v['violation_type']} ({$v['status']}).", 'occurred_at'=>$v['issued_at'], 'href'=>'violations.html'];
+    }
+    usort($events, fn($a,$b) => strcmp($b['occurred_at'] ?? '', $a['occurred_at'] ?? ''));
+    echo json_encode(array_slice($events, 0, 40));
+    exit;
+}
+
 if ($method === 'GET' && $action === 'map') {
     ensureSimulationSchema($db);
 
+    // Every bay reports exactly one of three statuses (OCCUPIED, RESERVED, VACANT)
+    // and one canonical plate, normalized the same way the camera OCR is
+    // (uppercase, letters and digits only), so the plate an operator sees on
+    // screen is byte-for-byte what a camera read is compared against.
+    $plateSql = "UPPER(REPLACE(REPLACE(%s,' ',''),'-',''))";
+    $sessionPlate = sprintf($plateSql, "(SELECT ve.plate_number FROM parking_sessions ps
+                    JOIN vehicles ve ON ve.vehicle_id=ps.vehicle_id
+                    WHERE ps.slot_id=s.slot_id AND ps.exit_time IS NULL
+                    ORDER BY ps.entry_time DESC LIMIT 1)");
+    $reservationPlate = sprintf($plateSql, "(SELECT ve.plate_number FROM reservations r
+                    JOIN vehicles ve ON ve.vehicle_id=r.vehicle_id
+                    WHERE r.slot_id=s.slot_id AND r.status IN ('ACTIVE','PENDING_PAYMENT')
+                    ORDER BY r.reservation_id DESC LIMIT 1)");
     $stmt = $db->query("
+        SELECT x.*,
+            CASE WHEN x.is_occupied_raw=1 OR x.session_plate IS NOT NULL THEN 'OCCUPIED'
+                 WHEN x.reservation_plate IS NOT NULL OR x.has_reservation=1 THEN 'RESERVED'
+                 ELSE 'VACANT' END AS slot_status,
+            CASE WHEN x.is_occupied_raw=1 OR x.session_plate IS NOT NULL
+                     THEN COALESCE(x.session_plate, x.camera_plate)
+                 WHEN x.reservation_plate IS NOT NULL THEN x.reservation_plate
+                 ELSE NULL END AS plate_number,
+            CASE WHEN x.session_plate IS NOT NULL THEN 'SESSION'
+                 WHEN x.is_occupied_raw=1 AND x.camera_plate IS NOT NULL THEN 'CAMERA'
+                 WHEN x.is_occupied_raw=0 AND x.reservation_plate IS NOT NULL THEN 'RESERVATION'
+                 ELSE NULL END AS plate_source
+        FROM (
         SELECT
             s.slot_id,
             s.slot_number,
             s.zone,
-            CASE WHEN s.is_occupied = 1 OR EXISTS (
-                SELECT 1 FROM reservations r WHERE r.slot_id=s.slot_id
-                AND r.status IN ('ACTIVE','PENDING_PAYMENT')
-            ) THEN 1 ELSE 0 END AS is_occupied,
-            CASE WHEN s.is_occupied=1 THEN 'OCCUPIED'
-                 WHEN EXISTS (SELECT 1 FROM reservations r WHERE r.slot_id=s.slot_id AND r.status='PENDING_PAYMENT') THEN 'HELD'
-                 WHEN EXISTS (SELECT 1 FROM reservations r WHERE r.slot_id=s.slot_id AND r.status='ACTIVE') THEN 'RESERVED'
-                 ELSE 'FREE' END AS availability_status,
-            v.plate_number
+            s.is_occupied AS is_occupied_raw,
+            s.is_occupied AS is_occupied,
+            CASE WHEN EXISTS (SELECT 1 FROM reservations r WHERE r.slot_id=s.slot_id
+                AND r.status IN ('ACTIVE','PENDING_PAYMENT')) THEN 1 ELSE 0 END AS has_reservation,
+            $sessionPlate AS session_plate,
+            $reservationPlate AS reservation_plate
             ,CASE WHEN s.zone='F' THEN 'ALLOCATION_ONLY'
                   ELSE COALESCE((SELECT o.occupancy_state FROM slot_observations o
                     WHERE o.slot_id=s.slot_id ORDER BY o.observed_at DESC LIMIT 1),'NOT_OBSERVED') END AS observed_state
@@ -526,32 +604,46 @@ if ($method === 'GET' && $action === 'map') {
                     WHERE o.slot_id=s.slot_id ORDER BY o.observed_at DESC LIMIT 1),'UNKNOWN') END AS observed_color
             ,CASE WHEN s.zone='F' THEN NULL
                   ELSE (SELECT o.recognized_plate FROM slot_observations o
-                    WHERE o.slot_id=s.slot_id ORDER BY o.observed_at DESC LIMIT 1) END AS observed_plate
+                    WHERE o.slot_id=s.slot_id ORDER BY o.observed_at DESC LIMIT 1) END AS camera_plate
             ,a.active_parked_count AS zone_allocated_count
         FROM parking_slots s
         LEFT JOIN spatial_allocation a ON a.zone_id=s.zone
-        LEFT JOIN parking_sessions ps
-            ON s.slot_id = ps.slot_id AND ps.exit_time IS NULL
-        LEFT JOIN vehicles v
-            ON ps.vehicle_id = v.vehicle_id
         WHERE s.is_active = 1
-        ORDER BY s.zone, s.slot_number
+        ) x
+        ORDER BY x.zone, x.slot_number
     ");
 
     $slots = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    if (($_SESSION['auth_user']['role'] ?? '') !== 'ADMIN') {
-        foreach ($slots as &$slot) unset($slot['plate_number']);
-        unset($slot);
+    $isAdmin = ($_SESSION['auth_user']['role'] ?? '') === 'ADMIN';
+    foreach ($slots as &$slot) {
+        $slot['availability_status'] = $slot['slot_status'];
+        // The camera read agrees with the bay's plate, disagrees, or has nothing to compare.
+        $slot['plate_check'] = (!$slot['camera_plate'] || !$slot['plate_number']) ? 'NONE'
+            : ($slot['camera_plate'] === $slot['plate_number'] ? 'MATCH' : 'MISMATCH');
+        $slot['observed_plate'] = $slot['camera_plate'];
+        unset($slot['is_occupied_raw'], $slot['has_reservation'], $slot['session_plate'],
+              $slot['reservation_plate'], $slot['camera_plate']);
+        if (!$isAdmin) {
+            // Drivers see availability only, never another motorist's plate.
+            unset($slot['plate_number'], $slot['plate_source'], $slot['observed_plate'], $slot['plate_check']);
+        }
     }
+    unset($slot);
     echo json_encode($slots);
     exit;
 }
 
 if ($method === 'GET' && $action === 'sectional_alerts') {
     ensureSimulationSchema($db);
-    $rows = $db->query("SELECT alert_id,scenario_id,session_id,camera_id,violation_type,region,track_id,
-        evidence,details,status,reviewed_by,reviewed_at,violation_id,created_at
-        FROM sectional_alerts ORDER BY alert_id DESC LIMIT 100")->fetchAll(PDO::FETCH_ASSOC);
+    $rows = $db->query("SELECT a.alert_id,a.scenario_id,a.session_id,a.camera_id,a.violation_type,a.region,a.track_id,
+        a.evidence,a.details,a.status,a.reviewed_by,a.reviewed_at,a.violation_id,a.created_at,
+        UPPER(REPLACE(REPLACE(ve.plate_number,' ',''),'-','')) AS plate_number
+        FROM sectional_alerts a
+        LEFT JOIN parking_sessions ps ON ps.session_id=a.session_id
+        LEFT JOIN vehicles ve ON ve.vehicle_id=ps.vehicle_id
+        ORDER BY a.alert_id DESC LIMIT 100")->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$row) $row['details'] = fillMissingAlertPlate($row['details'], $row['plate_number']);
+    unset($row);
     echo json_encode(['success'=>true,'alerts'=>$rows]);
     exit;
 }
@@ -1886,6 +1978,10 @@ if ($method === 'GET' && $action === 'admin_audit_logs') {
 // --- ROUTE: Admin Violations Management List ---
 if ($method === 'GET' && $action === 'admin_violations_list') {
     try {
+        ensureSimulationSchema($db);
+        // Each case carries its supporting record: the camera alert that raised it
+        // (where it was seen, what was observed, the evidence frame and who confirmed
+        // it) plus the parking session it was charged to.
         $stmt = $db->query("
             SELECT
                 v.violation_id,
@@ -1894,16 +1990,36 @@ if ($method === 'GET' && $action === 'admin_violations_list') {
                 v.penalty_amount,
                 v.status,
                 v.issued_at,
-                ve.plate_number,
+                UPPER(REPLACE(REPLACE(ve.plate_number,' ',''),'-','')) AS plate_number,
+                ve.vehicle_type,
                 sl.slot_number,
-                sl.zone
+                sl.zone,
+                ps.entry_time,
+                ps.exit_time,
+                ps.payment_status,
+                ps.location_status,
+                ps.vehicle_color,
+                sa.alert_id,
+                sa.violation_type AS alert_code,
+                sa.region AS observed_region,
+                sa.camera_id,
+                sa.details AS alert_details,
+                sa.created_at AS detected_at,
+                sa.reviewed_by,
+                sa.reviewed_at,
+                CASE WHEN sa.evidence IS NOT NULL AND sa.evidence != '' THEN 1 ELSE 0 END AS has_evidence
             FROM violations v
             LEFT JOIN parking_sessions ps ON v.session_id = ps.session_id
             LEFT JOIN vehicles ve ON ps.vehicle_id = ve.vehicle_id
             LEFT JOIN parking_slots sl ON ps.slot_id = sl.slot_id
+            LEFT JOIN sectional_alerts sa ON sa.alert_id = (
+                SELECT MAX(a2.alert_id) FROM sectional_alerts a2 WHERE a2.violation_id = v.violation_id)
             ORDER BY v.issued_at DESC
         ");
-        echo json_encode(["success" => true, "violations" => $stmt->fetchAll(PDO::FETCH_ASSOC)]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as &$row) $row['alert_details'] = fillMissingAlertPlate($row['alert_details'], $row['plate_number']);
+        unset($row);
+        echo json_encode(["success" => true, "violations" => $rows]);
     } catch (PDOException $e) {
         echo json_encode(["error" => "Failed to fetch violations: " . $e->getMessage()]);
     }
@@ -1948,16 +2064,28 @@ if ($method === 'GET' && $action === 'violations') {
         $plate = normalizeLicensePlate($_SESSION['auth_user']['plate_number'] ?? '');
     }
 
+    ensureSimulationSchema($db);
     $stmt = $db->prepare("
-        SELECT v.violation_type, v.penalty_amount, v.status, v.issued_at
+        SELECT v.violation_id, v.violation_type, v.penalty_amount, v.status, v.issued_at,
+               UPPER(REPLACE(REPLACE(ve.plate_number, ' ', ''), '-', '')) AS plate_number,
+               sl.zone, sl.slot_number, ps.entry_time, ps.exit_time,
+               sa.region AS observed_region, sa.details AS alert_details,
+               sa.created_at AS detected_at, sa.reviewed_at
         FROM violations v
         JOIN parking_sessions ps ON v.session_id = ps.session_id
         JOIN vehicles ve ON ps.vehicle_id = ve.vehicle_id
+        LEFT JOIN parking_slots sl ON ps.slot_id = sl.slot_id
+        LEFT JOIN sectional_alerts sa ON sa.alert_id = (
+            SELECT MAX(a2.alert_id) FROM sectional_alerts a2 WHERE a2.violation_id = v.violation_id)
         WHERE UPPER(REPLACE(REPLACE(ve.plate_number, ' ', ''), '-', '')) = ?
+        ORDER BY v.issued_at DESC
     ");
 
     $stmt->execute([$plate]);
-    echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$row) $row['alert_details'] = fillMissingAlertPlate($row['alert_details'], $row['plate_number']);
+    unset($row);
+    echo json_encode($rows);
     exit;
 }
 

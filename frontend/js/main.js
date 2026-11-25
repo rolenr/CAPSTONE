@@ -124,6 +124,7 @@ async function enforcePageRole() {
 
         // Dynamically maintain Administrator authority across customer & operational views
         AppLayout.updateIdentity(user);
+        if (user.role === 'DRIVER') initDriverNotifications(user);
         adaptAdminPersona(user, page);
         await checkActiveReservation();
         return user;
@@ -133,6 +134,73 @@ async function enforcePageRole() {
         window.location.replace('login.html');
         return null;
     }
+}
+
+function initDriverNotifications(user) {
+    const host = document.querySelector('[data-driver-notifications]');
+    if (!host || host.dataset.ready) return;
+    host.dataset.ready = 'true';
+    const trigger = host.querySelector('.notification-trigger');
+    const panel = host.querySelector('.notification-panel');
+    const list = host.querySelector('.notification-list');
+    const badge = host.querySelector('.notification-count');
+    const storageKey = `parking.notifications.read.${user.email}`;
+    let events = [];
+    let read = new Set();
+    try { read = new Set(JSON.parse(localStorage.getItem(storageKey) || '[]')); } catch (_) {}
+    const render = () => {
+        const unread = events.filter(event => !read.has(event.id)).length;
+        badge.hidden = unread === 0;
+        badge.textContent = unread > 9 ? '9+' : String(unread);
+        trigger.setAttribute('aria-label', unread ? `Notifications, ${unread} unread` : 'Notifications');
+        list.replaceChildren();
+        if (!events.length) {
+            const empty = document.createElement('p');
+            empty.className = 'notification-empty';
+            empty.textContent = 'No notifications yet.';
+            list.append(empty);
+            return;
+        }
+        events.forEach(event => {
+            const item = document.createElement('a');
+            item.href = event.href;
+            item.className = `notification-item${read.has(event.id) ? '' : ' unread'}`;
+            item.setAttribute('role', 'listitem');
+            const message = document.createElement('span');
+            message.textContent = event.message;
+            const time = document.createElement('small');
+            time.textContent = formatPhtDateTime(event.occurred_at);
+            item.append(message, time);
+            item.addEventListener('click', () => { read.add(event.id); saveRead(); });
+            list.append(item);
+        });
+    };
+    const saveRead = () => { try { localStorage.setItem(storageKey, JSON.stringify([...read])); } catch (_) {} render(); };
+    trigger.addEventListener('click', () => {
+        panel.hidden = !panel.hidden;
+        trigger.setAttribute('aria-expanded', String(!panel.hidden));
+    });
+    host.querySelector('.notification-mark-read').addEventListener('click', () => {
+        events.forEach(event => read.add(event.id));
+        saveRead();
+    });
+    document.addEventListener('click', event => {
+        if (!host.contains(event.target)) { panel.hidden = true; trigger.setAttribute('aria-expanded', 'false'); }
+    });
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && !panel.hidden) { panel.hidden = true; trigger.setAttribute('aria-expanded', 'false'); trigger.focus(); }
+    });
+    const refresh = async () => {
+        try {
+            const response = await apiFetch(`${API_BASE}?action=driver_notifications`);
+            const data = await response.json();
+            if (!response.ok || !Array.isArray(data)) return;
+            events = data;
+            render();
+        } catch (error) { console.error('Unable to load notifications.', error); }
+    };
+    refresh();
+    window.setInterval(refresh, 30000);
 }
 
 function adaptAdminPersona(user, page) {
@@ -298,8 +366,191 @@ function getSlotDotPositions(zone, count) {
     return centers.map(([left, top]) => ({ left, top }));
 }
 
+// --- ZOOM VIEW: zoom and pan for the lot map and camera evidence ---
+// The toolbar sits outside the zoomed layer, so its controls never move or get covered.
+function createZoomView(host, options = {}) {
+    const MIN = 1;
+    const MAX = options.max || 4;
+    const STEP = 1.25;
+    const DRAG_THRESHOLD = 5;
+    let scale = 1, x = 0, y = 0;
+
+    const make = (tag, className, text) => {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
+    };
+    const button = (text, label, onClick, extra = '') => {
+        const b = make('button', 'zoom-btn' + (extra ? ' ' + extra : ''), text);
+        b.type = 'button';
+        b.title = label;
+        b.setAttribute('aria-label', label);
+        b.addEventListener('click', onClick);
+        return b;
+    };
+
+    const frame = make('div', 'zoom-frame' + (options.className ? ' ' + options.className : ''));
+    const toolbar = make('div', 'zoom-toolbar');
+    const controls = make('div', 'zoom-controls');
+    controls.setAttribute('role', 'group');
+    controls.setAttribute('aria-label', `${options.label || 'View'} zoom controls`);
+    const level = make('span', 'zoom-level', '100%');
+    level.setAttribute('aria-live', 'polite');
+    const zoomOut = button('−', 'Zoom out', () => zoomAround(scale / STEP));
+    const zoomIn = button('+', 'Zoom in', () => zoomAround(scale * STEP));
+    const reset = button('Reset', 'Reset zoom', () => apply(1, 0, 0, true), 'zoom-reset');
+    controls.append(zoomOut, level, zoomIn, reset);
+
+    if (options.fullscreen && document.fullscreenEnabled) {
+        const full = button('Full screen', 'Toggle full screen', () => {
+            if (document.fullscreenElement === frame) document.exitFullscreen();
+            else frame.requestFullscreen().catch(() => {});
+        }, 'zoom-full');
+        document.addEventListener('fullscreenchange', () => {
+            const active = document.fullscreenElement === frame;
+            full.textContent = active ? 'Exit full screen' : 'Full screen';
+            requestAnimationFrame(() => apply(scale, x, y));
+        });
+        controls.append(full);
+    }
+
+    const hint = make('span', 'zoom-hint', 'Pinch or Ctrl + scroll to zoom. Drag to move.');
+    toolbar.append(controls, hint);
+
+    const viewport = make('div', 'zoom-viewport');
+    viewport.tabIndex = 0;
+    viewport.setAttribute('role', 'group');
+    viewport.setAttribute('aria-label', `${options.label || 'Zoomable view'}. Plus and minus keys zoom, arrow keys move, 0 resets.`);
+    const stage = make('div', 'zoom-stage');
+    viewport.append(stage);
+    frame.append(toolbar, viewport);
+    host.replaceChildren(frame);
+
+    function clamp(value, low, high) { return Math.min(high, Math.max(low, value)); }
+
+    function apply(nextScale, nextX, nextY, animate = false) {
+        scale = clamp(nextScale, MIN, MAX);
+        const w = viewport.clientWidth, h = viewport.clientHeight;
+        x = clamp(nextX, w - w * scale, 0);
+        y = clamp(nextY, h - h * scale, 0);
+        stage.classList.toggle('is-animating', animate);
+        stage.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+        stage.style.setProperty('--zoom', scale);
+        viewport.classList.toggle('is-zoomed', scale > 1.001);
+        level.textContent = `${Math.round(scale * 100)}%`;
+        zoomOut.disabled = scale <= MIN + 0.001;
+        zoomIn.disabled = scale >= MAX - 0.001;
+        reset.disabled = scale <= MIN + 0.001;
+    }
+
+    // Zoom so the point (cx, cy) inside the viewport stays under the cursor/finger.
+    function zoomAround(nextScale, cx = viewport.clientWidth / 2, cy = viewport.clientHeight / 2, animate = true) {
+        const target = clamp(nextScale, MIN, MAX);
+        const px = (cx - x) / scale, py = (cy - y) / scale;
+        apply(target, cx - px * target, cy - py * target, animate);
+    }
+
+    function localPoint(event) {
+        const rect = viewport.getBoundingClientRect();
+        return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    }
+
+    viewport.addEventListener('wheel', event => {
+        if (!event.ctrlKey && !event.metaKey) return; // plain scroll keeps scrolling the page
+        event.preventDefault();
+        const p = localPoint(event);
+        zoomAround(scale * Math.exp(-event.deltaY * 0.0025), p.x, p.y, false);
+    }, { passive: false });
+
+    viewport.addEventListener('dblclick', event => {
+        const p = localPoint(event);
+        zoomAround(scale >= MAX - 0.001 ? 1 : scale * 2, p.x, p.y);
+    });
+
+    const pointers = new Map();
+    let gesture = null;
+    let suppressClick = false;
+
+    viewport.addEventListener('pointerdown', event => {
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        pointers.set(event.pointerId, localPoint(event));
+        const pts = [...pointers.values()];
+        if (pts.length === 2) {
+            const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+            gesture = { type: 'pinch', dist: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1, scale, mid, x, y };
+            [...pointers.keys()].forEach(id => { try { viewport.setPointerCapture(id); } catch (_) {} });
+        } else if (pts.length === 1) {
+            gesture = { type: 'pan', start: pts[0], x, y, moved: false, id: event.pointerId };
+        }
+    });
+
+    viewport.addEventListener('pointermove', event => {
+        if (!pointers.has(event.pointerId) || !gesture) return;
+        pointers.set(event.pointerId, localPoint(event));
+        const pts = [...pointers.values()];
+        if (gesture.type === 'pinch' && pts.length >= 2) {
+            const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+            const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+            const target = clamp(gesture.scale * dist / gesture.dist, MIN, MAX);
+            const px = (gesture.mid.x - gesture.x) / gesture.scale, py = (gesture.mid.y - gesture.y) / gesture.scale;
+            apply(target, mid.x - px * target, mid.y - py * target);
+            suppressClick = true;
+        } else if (gesture.type === 'pan' && scale > 1.001) {
+            const p = pts[0];
+            const dx = p.x - gesture.start.x, dy = p.y - gesture.start.y;
+            if (!gesture.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+            if (!gesture.moved) {
+                gesture.moved = true;
+                suppressClick = true;
+                viewport.classList.add('is-dragging');
+                try { viewport.setPointerCapture(gesture.id); } catch (_) {}
+            }
+            apply(scale, gesture.x + dx, gesture.y + dy);
+        }
+    });
+
+    const endPointer = event => {
+        pointers.delete(event.pointerId);
+        if (pointers.size === 0) { gesture = null; viewport.classList.remove('is-dragging'); }
+        else if (pointers.size === 1) {
+            const [id, p] = [...pointers.entries()][0];
+            gesture = { type: 'pan', start: p, x, y, moved: true, id };
+        }
+    };
+    viewport.addEventListener('pointerup', endPointer);
+    viewport.addEventListener('pointercancel', endPointer);
+
+    // A drag that ends over a map marker must not count as a click on it.
+    viewport.addEventListener('click', event => {
+        if (suppressClick) { event.stopPropagation(); event.preventDefault(); suppressClick = false; }
+    }, true);
+    viewport.addEventListener('pointerdown', () => { suppressClick = false; }, true);
+
+    viewport.addEventListener('keydown', event => {
+        const pan = 60;
+        const keys = {
+            '+': () => zoomAround(scale * STEP), '=': () => zoomAround(scale * STEP),
+            '-': () => zoomAround(scale / STEP), '_': () => zoomAround(scale / STEP),
+            '0': () => apply(1, 0, 0, true),
+            ArrowLeft: () => apply(scale, x + pan, y, true), ArrowRight: () => apply(scale, x - pan, y, true),
+            ArrowUp: () => apply(scale, x, y + pan, true), ArrowDown: () => apply(scale, x, y - pan, true),
+        };
+        if (event.target !== viewport || !keys[event.key]) return;
+        if (event.key.startsWith('Arrow') && scale <= 1.001) return; // let the page scroll
+        event.preventDefault();
+        keys[event.key]();
+    });
+
+    if (window.ResizeObserver) new ResizeObserver(() => apply(scale, x, y)).observe(viewport);
+    apply(1, 0, 0);
+
+    return { frame, stage, viewport, reset: () => apply(1, 0, 0) };
+}
+
 let zonesCache = {};
 let selectedMapZone = null;
+let liveMapZoom = null;
 
 async function fetchLiveMap() {
     if (!liveMap) return;
@@ -325,7 +576,7 @@ async function fetchLiveMap() {
         Object.keys(zones).sort().forEach(zone => {
             const slots = zones[zone];
             const total = slots.length;
-            const free = slots.filter(s => s.is_occupied != 1).length;
+            const free = slots.filter(s => slotStatus(s).key === 'vacant').length;
             const pos = zonePositions[zone];
             const isOverflow = zone === 'F';
 
@@ -347,13 +598,14 @@ async function fetchLiveMap() {
                     slots.forEach((slot, i) => {
                         const dp = dotPositions[i];
                         if (!dp) return;
-                        const isOccupied = slot.is_occupied == 1;
-                        const label = `Zone ${zone} - ${slot.slot_number}: ${slot.availability_status || (isOccupied ? 'Occupied' : 'Free')}`;
+                        const status = slotStatus(slot);
+                        const label = `Zone ${zone} - ${slot.slot_number}: ${status.label}`;
 
                         markersHTML += `
-                            <button type="button" class="slot-dot ${isOccupied ? 'occupied' : 'free'}"
+                            <button type="button" class="slot-dot ${status.key === 'vacant' ? 'free' : status.key}"
                                 style="top:${dp.top}%; left:${dp.left}%;"
                                 data-zone="${zone}"
+                                data-slot-id="${slot.slot_id}"
                                 title="${label}"
                                 aria-label="${label}">
                             </button>
@@ -363,27 +615,32 @@ async function fetchLiveMap() {
             }
         });
 
-        liveMap.innerHTML = `<div class="lot-photo-wrap">${markersHTML}</div>`;
+        if (!liveMapZoom) liveMapZoom = createZoomView(liveMap, { label: 'Parking lot map', className: 'zoom-map' });
+        liveMapZoom.stage.innerHTML = `<div class="lot-photo-wrap">${markersHTML}</div>`;
         if (zoneList) zoneList.innerHTML = zoneCards;
 
         document.querySelectorAll('#liveMap .zone-marker, #liveMap .slot-dot, #mapZoneList .map-zone-card').forEach(btn => {
-            btn.addEventListener('click', () => showZoneDetail(btn.dataset.zone));
+            btn.addEventListener('click', () => {
+                if (document.body.dataset.page === 'admin') focusAdminMapSlot(btn.dataset.zone, btn.dataset.slotId);
+                else showZoneDetail(btn.dataset.zone, btn.dataset.slotId);
+            });
         });
         showZoneDetail(zones[selectedMapZone] ? selectedMapZone : (zones.A ? 'A' : Object.keys(zones)[0]));
 
     } catch (error) {
         console.error(error);
+        liveMapZoom = null;
         liveMap.innerHTML = "<p>Error loading live map.</p>";
     }
 }
 
-function showZoneDetail(zone) {
+function showZoneDetail(zone, slotId = null) {
     const panel = document.getElementById('zoneDetailPanel');
     if (!panel || !zonesCache[zone]) return;
 
     selectedMapZone = zone;
     const slots = zonesCache[zone];
-    const free = slots.filter(slot => slot.is_occupied != 1).length;
+    const free = slots.filter(slot => slotStatus(slot).key === 'vacant').length;
 
     panel.innerHTML = `
         <div class="zone-detail-heading">
@@ -391,14 +648,18 @@ function showZoneDetail(zone) {
             <strong>${free}/${slots.length} free</strong>
         </div>
         <div class="zone-detail-slots">
-            ${slots.map(slot => `
-                <div class="slot-row">
+            ${slots.map(slot => {
+                const status = slotStatus(slot);
+                const plate = slot.plate_number ? normalizeLicensePlateInput(slot.plate_number) : '';
+                return `
+                <div class="slot-row${String(slot.slot_id) === String(slotId) ? ' selected' : ''}" data-slot-id="${slot.slot_id}">
                     <span>${slot.slot_number}</span>
-                    <span class="${slot.is_occupied == 1 ? 'occupied' : 'free'}"></span>
-                    <span>${slot.availability_status || (slot.is_occupied == 1 ? 'Allocated' : 'Free')}${slot.plate_number ? ' &ndash; ' + slot.plate_number : ''}
-                    <small> · ${zone === 'F' ? `Zone allocation: ${Number(slot.zone_allocated_count || 0)} vehicles` : `Camera: ${safeSectionalText(slot.observed_state || 'NOT_OBSERVED')}`}</small></span>
+                    <span class="${status.key === 'vacant' ? 'free' : status.key}"></span>
+                    <span>${status.label}${plate ? ' &ndash; ' + safeSectionalText(plate) : ''}
+                    <small> · ${zone === 'F' ? `Zone allocation: ${Number(slot.zone_allocated_count || 0)} vehicles` : `Camera: ${titleCaseStatus(slot.observed_state || 'NOT_OBSERVED')}`}</small></span>
                 </div>
-            `).join('')}
+            `;
+            }).join('')}
         </div>
     `;
     document.querySelectorAll('#mapZoneList .map-zone-card, #liveMap .zone-marker').forEach(marker => {
@@ -408,6 +669,32 @@ function showZoneDetail(zone) {
             marker.setAttribute('aria-pressed', String(selected));
         }
     });
+    document.querySelectorAll('#liveMap .slot-dot').forEach(marker => {
+        marker.classList.toggle('selected', !!slotId && marker.dataset.slotId === String(slotId));
+    });
+    if (slotId) {
+        const list = panel.querySelector('.zone-detail-slots');
+        const selected = [...list.querySelectorAll('.slot-row')].find(row => row.dataset.slotId === String(slotId));
+        if (selected) list.scrollTop = selected.offsetTop - list.offsetTop - (list.clientHeight - selected.offsetHeight) / 2;
+    }
+}
+
+function focusAdminMapSlot(zone, slotId) {
+    if (!zone) return;
+    const filter = document.getElementById('zoneFilterButtons');
+    const button = [...(filter?.querySelectorAll('.zone-filter-btn') || [])].find(item => item.dataset.filter === zone);
+    if (button) button.click();
+    document.querySelectorAll('#liveMap .zone-marker, #liveMap .slot-dot').forEach(marker => {
+        marker.classList.toggle('selected', marker.dataset.slotId === slotId && !!slotId);
+    });
+    const target = slotId
+        ? document.querySelector(`#adminMapControls .admin-slot-card[data-slot-id="${CSS.escape(slotId)}"]`)
+        : document.querySelector('#adminMapControls .zone-section');
+    if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        target.classList.add('map-focused-slot');
+        window.setTimeout(() => target.classList.remove('map-focused-slot'), 2500);
+    }
 }
 
 if (liveMap) {
@@ -644,6 +931,59 @@ if (reservationForm) {
 }
 
 // ---------------- VIOLATIONS ----------------
+// What each infraction means and what record supports it, shown to drivers and staff.
+function violationRule(type) {
+    const t = String(type || '').toLowerCase();
+    if (t.includes('zone a') || t.includes('vip')) return {
+        rule: 'Zone A bays are reserved for vehicles with VIP or PWD priority status.',
+        basis: 'The sectional camera saw this vehicle parked in a Zone A bay, and the account for this plate has no VIP / PWD status.'
+    };
+    if (t.includes('wrong slot')) return {
+        rule: 'Each vehicle must park in the bay assigned to it at the entrance gate.',
+        basis: 'The sectional camera saw this vehicle in a different bay from the one on its parking ticket.'
+    };
+    if (t.includes('double')) return {
+        rule: 'Vehicles may not double-park or block other parked vehicles.',
+        basis: 'The camera tracked the vehicle standing in a no-parking area for at least 20 continuous seconds.'
+    };
+    if (t.includes('driveway') || t.includes('no parking')) return {
+        rule: 'Driveways and lanes must stay clear. Stopping there is limited to under 20 seconds.',
+        basis: 'The camera tracked the vehicle standing in the driveway for at least 20 continuous seconds.'
+    };
+    if (t.includes('bypass')) return {
+        rule: 'Every vehicle must settle its parking fee before leaving through the exit gate.',
+        basis: 'The exit gate camera read this plate leaving while the session was still unpaid.'
+    };
+    if (t.includes('reserved')) return {
+        rule: 'A reserved bay may only be used by the vehicle that booked it.',
+        basis: 'The plate read in the reserved bay did not match the plate on the reservation.'
+    };
+    if (t.includes('plate')) return {
+        rule: 'The vehicle in a bay must match the plate registered at the entrance gate.',
+        basis: 'The camera read a different plate in the bay than the one assigned to it.'
+    };
+    if (t.includes('color')) return {
+        rule: 'The vehicle in a bay must match the vehicle registered at the entrance gate.',
+        basis: 'The vehicle colour seen in the bay did not match the colour recorded at entry.'
+    };
+    if (t.includes('lost') && t.includes('ticket')) return {
+        rule: 'A lost parking ticket carries a replacement fee.',
+        basis: 'The driver reported the ticket lost at the cashier.'
+    };
+    return { rule: 'Parking regulation infraction recorded by staff.', basis: 'Recorded against the parking session for this plate.' };
+}
+
+// Where the infraction happened: the bay the camera saw versus the bay that was assigned.
+function violationLocation(v) {
+    const assigned = v.slot_number ? `${v.slot_number} (Zone ${v.zone || '?'})` : '';
+    const seen = v.observed_region || '';
+    const seenLabel = /^[A-F]-\d+$/i.test(seen) ? seen : seen.replace(/_/g, ' ');
+    if (seen && assigned && seen !== v.slot_number) return { seen: seenLabel, assigned, text: `Seen in ${seenLabel} · assigned ${assigned}` };
+    if (seen) return { seen: seenLabel, assigned, text: `Seen in ${seenLabel}` };
+    if (assigned) return { seen: '', assigned, text: `Assigned bay ${assigned}` };
+    return { seen: '', assigned: '', text: 'Driveway / lane' };
+}
+
 if (violationForm) {
     violationForm.addEventListener("submit", async function (e) {
         e.preventDefault();
@@ -674,11 +1014,21 @@ if (violationForm) {
                     ? '<span class="badge badge-paid">PAID / SETTLED</span>'
                     : '<span class="badge badge-unpaid">UNPAID / OUTSTANDING</span>';
 
+                const info = violationRule(v.violation_type);
+                const place = violationLocation(v);
                 html += `
                     <div class="violation-card-item">
                         <div class="violation-card-info">
-                            <h4>${v.violation_type}</h4>
-                            <p>Location: Zone ${v.zone || '—'} &bull; Slot ${v.slot_number || 'Driveway/Perimeter'} &bull; Issued: ${formatPhtDateTime(v.issued_at)}</p>
+                            <h4>${v.violation_id ? `Case #V-${Number(v.violation_id)} · ` : ''}${escapeHtml(v.violation_type)}</h4>
+                            <p class="violation-rule">${escapeHtml(info.rule)}</p>
+                            <dl class="violation-facts">
+                                <dt>Plate</dt><dd><code>${escapeHtml(v.plate_number || plate)}</code></dd>
+                                <dt>Location</dt><dd>${escapeHtml(place.text)}</dd>
+                                ${v.entry_time ? `<dt>Entered</dt><dd>${formatPhtDateTime(v.entry_time)}</dd>` : ''}
+                                ${v.detected_at ? `<dt>Detected</dt><dd>${formatPhtDateTime(v.detected_at)}</dd>` : ''}
+                                <dt>Issued</dt><dd>${formatPhtDateTime(v.issued_at)}</dd>
+                                <dt>Evidence</dt><dd>${escapeHtml(info.basis)}${v.alert_details ? ` <small>Camera record: ${escapeHtml(v.alert_details)}</small>` : ''}</dd>
+                            </dl>
                         </div>
                         <div class="violation-card-meta">
                             <div class="violation-fine-amount">₱${parseFloat(v.penalty_amount || 0).toFixed(2)}</div>
@@ -706,6 +1056,15 @@ let reservationsCache = [];
 let refundsCache = [];
 let simulationCache = [];
 const SECTIONAL_ALERT_FINE = 200;
+
+// A bay is always exactly one of: Occupied, Reserved, Vacant.
+function slotStatus(slot) {
+    const raw = String(slot.slot_status || slot.availability_status || '').toUpperCase();
+    if (raw === 'OCCUPIED') return { key: 'occupied', label: 'Occupied' };
+    if (raw === 'RESERVED' || raw === 'HELD') return { key: 'reserved', label: 'Reserved' };
+    if (raw === 'VACANT' || raw === 'FREE') return { key: 'vacant', label: 'Vacant' };
+    return slot.is_occupied == 1 ? { key: 'occupied', label: 'Occupied' } : { key: 'vacant', label: 'Vacant' };
+}
 
 function formatPeso(value) {
     return '₱' + Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -923,17 +1282,21 @@ const decisionDialog = (() => {
         const figure = make('figure', 'decision-evidence');
         const missing = text => make('div', 'ev-missing', text);
         if (evidence && evidence.src) {
+            const host = make('div', 'decision-evidence-zoom');
+            const zoom = createZoomView(host, { label: 'Camera evidence', className: 'zoom-evidence', fullscreen: true, max: 6 });
             const image = make('img');
             image.src = evidence.src;
             image.alt = evidence.alt || 'Evidence image';
-            image.addEventListener('error', () => image.replaceWith(missing('The evidence image could not be loaded.')));
+            image.draggable = false;
+            image.addEventListener('error', () => host.replaceWith(missing('The evidence image could not be loaded.')));
+            zoom.stage.append(image);
             const caption = make('figcaption');
-            const link = make('a', '', 'Open full size');
+            const link = make('a', '', 'Open full size in a new tab');
             link.href = evidence.src;
             link.target = '_blank';
             link.rel = 'noopener';
             caption.append(link);
-            figure.append(image, caption);
+            figure.append(host, caption);
         } else {
             figure.append(missing((evidence && evidence.missing) || 'No evidence image was captured.'));
         }
@@ -1142,7 +1505,7 @@ async function loadAdminAnalytics() {
                         </div>
                         <div class="stream-amount">₱${Number(item.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
                         <div class="stream-count">${item.countText}</div>
-                        ${item.subtext ? `<div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 3px;">${item.subtext}</div>` : ''}
+                        ${item.subtext ? `<div style="font-size: 0.8125rem; color: var(--text-muted); margin-top: 3px;">${item.subtext}</div>` : ''}
                         <div style="height: 5px; background: var(--slate-200); border-radius: 3px; margin-top: 8px; overflow: hidden;">
                             <div style="width: ${pct}%; height: 100%; background: ${item.color}; border-radius: 3px;"></div>
                         </div>
@@ -1329,19 +1692,26 @@ async function loadAdminViolations() {
                 ? `<span class="badge badge-paid">Paid</span>`
                 : isDismissed ? `<span class="badge badge-secondary">Dismissed</span>` : `<span class="badge badge-unpaid">Unpaid</span>`;
 
+            const viewButton = `<button class="btn btn-sm btn-outline" onclick="viewAdminViolation(${id})">View case</button>`;
             const actionCell = (isPaid || isDismissed)
-                ? `<span style="font-size: 0.8125rem; color: var(--text-muted);">${isPaid ? 'Settled' : 'Closed'}</span>`
+                ? `<div class="row-actions">${viewButton}</div><small>${isPaid ? 'Settled' : 'Closed'}</small>`
                 : `<div class="row-actions">
+                       ${viewButton}
                        <button class="btn btn-sm btn-success" onclick="resolveAdminViolation(${id}, 'PAID')">Mark paid</button>
                        <button class="btn btn-sm btn-outline" onclick="resolveAdminViolation(${id}, 'DISMISSED')">Dismiss</button>
                    </div>`;
+            const place = violationLocation(v);
+            const info = violationRule(v.violation_type);
+            const evidenceNote = Number(v.has_evidence) === 1
+                ? `Camera alert #${Number(v.alert_id)} with image`
+                : v.alert_id ? `Camera alert #${Number(v.alert_id)}, no image` : 'No camera alert linked';
 
             return `
                 <tr>
-                    <td data-sort="${id}"><strong>#V-${id}</strong></td>
-                    <td><code>${escapeHtml(v.plate_number || 'N/A')}</code></td>
-                    <td data-filter="Zone ${escapeHtml(v.zone || '—')}">Zone ${escapeHtml(v.zone || '—')} &bull; ${escapeHtml(v.slot_number || 'Driveway/Lane')}</td>
-                    <td data-filter="${escapeHtml(v.violation_type)}">${escapeHtml(v.violation_type)}</td>
+                    <td data-sort="${id}"><strong>#V-${id}</strong>${v.session_id ? `<small>Session #${Number(v.session_id)}</small>` : ''}</td>
+                    <td><code>${escapeHtml(v.plate_number || 'N/A')}</code>${v.vehicle_color && v.vehicle_color !== 'UNKNOWN' ? `<small>${escapeHtml(v.vehicle_color.toLowerCase())}${v.vehicle_type ? ' ' + escapeHtml(v.vehicle_type.toLowerCase()) : ''}</small>` : ''}</td>
+                    <td data-filter="Zone ${escapeHtml(v.zone || '—')}">${escapeHtml(place.text)}</td>
+                    <td data-filter="${escapeHtml(v.violation_type)}"><strong>${escapeHtml(v.violation_type)}</strong><small>${escapeHtml(v.alert_details || info.basis)}</small><small class="violation-evidence-note">${escapeHtml(evidenceNote)}</small></td>
                     <td data-sort="${Number(v.penalty_amount)}"><strong>${formatPeso(v.penalty_amount)}</strong></td>
                     <td data-filter="${statusLabel}">${statusBadge}</td>
                     <td data-sort="${escapeHtml(v.issued_at)}" style="font-size: 0.84rem; color: var(--text-secondary);">${formatPhtDateTime(v.issued_at)}</td>
@@ -1355,23 +1725,64 @@ async function loadAdminViolations() {
     }
 }
 
+function violationCaseFacts(v) {
+    const place = violationLocation(v);
+    const facts = [
+        ['Case', `#V-${Number(v.violation_id)}`],
+        ['Plate', v.plate_number || 'N/A'],
+        ['Vehicle', [v.vehicle_color && v.vehicle_color !== 'UNKNOWN' ? v.vehicle_color.toLowerCase() : '', v.vehicle_type ? v.vehicle_type.toLowerCase() : ''].filter(Boolean).join(' ') || 'Not recorded'],
+        ['Infraction', v.violation_type],
+        ['Seen in', place.seen || 'Not recorded'],
+        ['Assigned bay', place.assigned || 'None'],
+        ['Penalty', formatPeso(v.penalty_amount)],
+        ['Case status', titleCaseStatus(v.status || 'UNPAID')]
+    ];
+    if (v.session_id) facts.push(['Parking session', `#${Number(v.session_id)} · ${titleCaseStatus(v.payment_status || 'UNPAID')}`]);
+    if (v.entry_time) facts.push(['Entered', formatPhtDateTime(v.entry_time)]);
+    if (v.exit_time) facts.push(['Exited', formatPhtDateTime(v.exit_time)]);
+    if (v.camera_id) facts.push(['Camera', v.camera_id]);
+    if (v.detected_at) facts.push(['Detected', formatPhtDateTime(v.detected_at)]);
+    if (v.alert_details) facts.push(['Camera record', v.alert_details]);
+    if (v.reviewed_by) facts.push(['Confirmed by', `${v.reviewed_by}${v.reviewed_at ? ' · ' + formatPhtDateTime(v.reviewed_at) : ''}`]);
+    facts.push(['Fine issued', formatPhtDateTime(v.issued_at)]);
+    return facts;
+}
+
+function violationEvidence(v) {
+    return Number(v.has_evidence) === 1 && v.alert_id
+        ? { src: `${API_BASE}?action=sectional_evidence&alert_id=${Number(v.alert_id)}`, alt: `Camera frame for case #V-${Number(v.violation_id)}` }
+        : { missing: v.alert_id ? 'The camera alert for this case has no saved image.' : 'This case was recorded without a camera alert, so there is no image.' };
+}
+
+function viewAdminViolation(violationId) {
+    const v = violationsCache.find(item => Number(item.violation_id) === violationId);
+    if (!v) return;
+    const info = violationRule(v.violation_type);
+    decisionDialog.open({
+        title: `Case #V-${violationId}: ${v.violation_type}`,
+        subtitle: info.rule,
+        evidence: violationEvidence(v),
+        facts: violationCaseFacts(v),
+        notice: `Basis for the fine: ${info.basis}`,
+        actions: []
+    });
+}
+
 function resolveAdminViolation(violationId, status) {
     const v = violationsCache.find(item => Number(item.violation_id) === violationId);
     if (!v) return;
     const paying = status === 'PAID';
     const amount = formatPeso(v.penalty_amount);
-    const facts = [
-        ['Case', `#V-${violationId}`],
-        ['Plate', v.plate_number || 'N/A'],
-        ['Location', `Zone ${v.zone || '—'}, ${v.slot_number || 'Driveway/Lane'}`],
-        ['Infraction', v.violation_type],
-        ['Penalty', amount],
-        ['Logged', formatPhtDateTime(v.issued_at)]
-    ];
+    const facts = violationCaseFacts(v);
     decisionDialog.open({
         title: paying ? `Mark case #V-${violationId} as paid` : `Dismiss case #V-${violationId}`,
         subtitle: paying ? 'Record a cash payment received at the desk.' : 'Close this case without collecting the penalty.',
+        evidence: violationEvidence(v),
         facts,
+        criteria: paying ? null : [
+            'The image or camera record does not show the vehicle committing this infraction, or',
+            'The plate in the image does not match the plate on this case.'
+        ],
         fields: paying ? [{ id: 'received', type: 'checkbox', label: `I have received ${amount} in cash for this penalty.` }] : [],
         actions: [{
             label: paying ? `Mark ${amount} as paid` : 'Dismiss case',
@@ -1546,6 +1957,7 @@ function overrideReservation(reservationId) {
                 loadAdminAnalytics();
                 loadAdminMap();
                 loadAdminAuditLogs();
+                fetchLiveMap();
             }
         }]
     });
@@ -1791,24 +2203,37 @@ function renderFilteredSlots() {
 
     adminMap.innerHTML = Object.keys(zones).sort().map(zone => {
         const zoneSlots = zones[zone];
-        const occupiedCount = zoneSlots.filter(s => s.is_occupied == 1).length;
-        const totalCount = zoneSlots.length;
+        const counts = { occupied: 0, reserved: 0, vacant: 0 };
+        zoneSlots.forEach(s => { counts[slotStatus(s).key] += 1; });
 
         const cards = zoneSlots.map(slot => {
-            const isOccupied = slot.is_occupied == 1;
-            const statusClass = isOccupied ? 'slot-occupied' : 'slot-available';
-            const plateDisplay = isOccupied && slot.plate_number ? slot.plate_number : '—';
+            const status = slotStatus(slot);
+            const isOccupied = status.key === 'occupied';
+            const plate = slot.plate_number ? normalizeLicensePlateInput(slot.plate_number) : '';
+            const plateDisplay = plate
+                ? `<code>${safeSectionalText(plate)}</code>${status.key === 'reserved' ? ' <small>reserved for</small>' : ''}`
+                : '—';
+            const cameraPlate = slot.observed_plate ? normalizeLicensePlateInput(slot.observed_plate) : '';
+            let plateCheck = '';
+            if (slot.plate_check === 'MATCH') plateCheck = `<small class="plate-check is-match">Camera read matches</small>`;
+            else if (slot.plate_check === 'MISMATCH') plateCheck = `<small class="plate-check is-mismatch">Camera read ${safeSectionalText(cameraPlate)} does not match</small>`;
+            else if (cameraPlate && !plate) plateCheck = `<small class="plate-check">Camera read ${safeSectionalText(cameraPlate)}</small>`;
+            const camera = zone === 'F'
+                ? `Zone allocation: ${Number(slot.zone_allocated_count || 0)}`
+                : `Camera: ${titleCaseStatus(slot.observed_state || 'NOT_OBSERVED')}${slot.observed_color && slot.observed_color !== 'UNKNOWN' ? ` · ${safeSectionalText(slot.observed_color.toLowerCase())}` : ''}`;
+            const next = isOccupied ? 'vacant' : 'occupied';
 
             return `
-                <div class="admin-slot-card ${statusClass}">
+                <div class="admin-slot-card slot-${status.key}" data-slot-id="${slot.slot_id}">
                     <strong>${slot.slot_number}</strong>
                     <div class="slot-plate">${plateDisplay}</div>
-                    <p class="status-text ${statusClass}">
-                        <span class="slot-state ${isOccupied ? 'is-occupied' : 'is-available'}"><i aria-hidden="true"></i>${isOccupied ? 'Occupied' : 'Available'}</span>
-                        <small class="slot-detail">${zone === 'F' ? `Zone allocation: ${Number(slot.zone_allocated_count || 0)}` : `Camera: ${safeSectionalText(slot.observed_state || 'NOT_OBSERVED')}${slot.observed_color && slot.observed_color !== 'UNKNOWN' ? ` · ${safeSectionalText(slot.observed_color.toLowerCase())}` : ''}${slot.observed_plate ? ` · OCR ${safeSectionalText(slot.observed_plate)}` : ''}`}</small>
+                    ${plateCheck}
+                    <p class="status-text slot-${status.key}">
+                        <span class="slot-state is-${status.key}"><i aria-hidden="true"></i>${status.label}</span>
+                        <small class="slot-detail">${camera}</small>
                     </p>
-                    <button type="button" class="btn-action slot-override-button" aria-label="Mark ${slot.slot_number} ${isOccupied ? 'available' : 'occupied'}" onclick="toggleSlotOverride(${slot.slot_id}, ${isOccupied ? 0 : 1})">
-                        Mark ${isOccupied ? 'available' : 'occupied'}
+                    <button type="button" class="btn-action slot-override-button" aria-label="Mark ${slot.slot_number} ${next}" onclick="toggleSlotOverride(${slot.slot_id}, ${isOccupied ? 0 : 1})">
+                        Mark ${next}
                     </button>
                 </div>
             `;
@@ -1818,7 +2243,7 @@ function renderFilteredSlots() {
             <div class="zone-section">
                 <div class="zone-header">
                     <h3>Zone ${zone}</h3>
-                    <span class="zone-badge"><strong>${totalCount - occupiedCount}</strong> available <span aria-hidden="true">·</span> ${occupiedCount} occupied</span>
+                    <span class="zone-badge"><strong>${counts.vacant}</strong> vacant <span aria-hidden="true">·</span> ${counts.reserved} reserved <span aria-hidden="true">·</span> ${counts.occupied} occupied</span>
                 </div>
                 <div class="admin-grid">
                     ${cards}
@@ -1831,22 +2256,27 @@ function renderFilteredSlots() {
 function toggleSlotOverride(slotId, newOccupiedState) {
     const slot = adminSlotsCache.find(item => Number(item.slot_id) === slotId);
     if (!slot) return;
-    const stateName = newOccupiedState ? 'occupied' : 'available';
-    const wasOccupied = slot.is_occupied == 1;
+    const stateName = newOccupiedState ? 'occupied' : 'vacant';
+    const status = slotStatus(slot);
     const facts = [
         ['Space', `${slot.slot_number} (Zone ${slot.zone})`],
-        ['Current status', wasOccupied ? 'Occupied' : 'Available'],
-        ['Plate on record', wasOccupied && slot.plate_number ? slot.plate_number : 'None']
+        ['Current status', status.label],
+        [status.key === 'reserved' ? 'Reserved for' : 'Plate on record', slot.plate_number ? normalizeLicensePlateInput(slot.plate_number) : 'None']
     ];
-    let notice = '';
+    let notice = status.key === 'reserved' && !newOccupiedState
+        ? 'This bay has an active reservation. It stays reserved until the booking is cancelled or expires.'
+        : '';
     if (slot.zone === 'F') {
         facts.push(['Zone allocation', Number(slot.zone_allocated_count || 0)]);
     } else {
         const observed = slot.observed_state || 'NOT_OBSERVED';
         facts.push(['Camera state', observed]);
         if (slot.observed_color && slot.observed_color !== 'UNKNOWN') facts.push(['Vehicle colour', slot.observed_color.toLowerCase()]);
-        if (slot.observed_plate) facts.push(['Plate read by camera', slot.observed_plate]);
-        if (observed === 'NOT_OBSERVED') notice = 'The camera has no reading for this space, so this change rests on your own check of the bay.';
+        if (slot.observed_plate) {
+            const check = slot.plate_check === 'MATCH' ? ' (matches)' : slot.plate_check === 'MISMATCH' ? ' (does not match plate on record)' : '';
+            facts.push(['Plate read by camera', normalizeLicensePlateInput(slot.observed_plate) + check]);
+        }
+        if (observed === 'NOT_OBSERVED' && !notice) notice = 'The camera has no reading for this space, so this change rests on your own check of the bay.';
     }
     decisionDialog.open({
         title: `Mark ${slot.slot_number} as ${stateName}`,
@@ -1864,6 +2294,7 @@ function toggleSlotOverride(slotId, newOccupiedState) {
                 loadAdminAnalytics();
                 loadAdminMap();
                 loadAdminAuditLogs();
+                fetchLiveMap();
             }
         }]
     });

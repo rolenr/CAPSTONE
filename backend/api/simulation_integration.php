@@ -306,7 +306,6 @@ function simulationEntry(PDO $db, string $plate, string $scenarioId, string $act
         throw new InvalidArgumentException('Invalid preferred bay.', 400);
     }
     if ($reservedBayTest && ($allocationZone === '' || !in_array($allocationZone, ['A','B','C','D','E'], true)
-            || !preg_match('/^sim_reserved_slot_'.strtolower($allocationZone).'_[A-Za-z0-9_-]+$/D', $scenarioId)
             || !preg_match('/^[A-E]-[0-9]{2}$/D', $clipSlot) || $clipSlot[0] !== $allocationZone
             || $preferredSlot !== '')) {
         throw new InvalidArgumentException('Reserved-bay test requires a zone and separate clip bay.', 400);
@@ -651,8 +650,15 @@ function simulationSectionalEvent(PDO $db, array $event): array {
                         $alert = $db->prepare("INSERT INTO sectional_alerts
                             (event_id,scenario_id,session_id,camera_id,violation_type,region,evidence,details)
                             VALUES(?,?,?,?,?,?,?,?)");
+                        // Always name a plate: the camera read when there is one,
+                        // otherwise the session plate the recorded clip is bound to.
+                        $seenPlate = $readPlate !== '' ? $readPlate : $expectedPlate;
+                        $plateBasis = $readPlate !== ''
+                            ? 'plate read by camera'
+                            : 'plate not readable on camera; identified by entry-gate session';
                         $alert->execute([$id,$scenario,$sessionId,$camera,$result,$slotName,
-                            (string)($event['evidence'] ?? ''),"Expected {$expectedPlate} in {$session['slot_number']} ({$session['vehicle_color']}); observed {$readPlate} in {$slotName} ({$observedColor})"]);
+                            (string)($event['evidence'] ?? ''),
+                            "Expected {$expectedPlate} in {$session['slot_number']} ({$session['vehicle_color']}); observed {$seenPlate} in {$slotName} ({$observedColor}) - {$plateBasis}"]);
                     }
                 }
             }

@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="css/style.css">
     <link rel="stylesheet" href="css/admin.css">
     <link rel="stylesheet" href="css/layout.css">
+    <link rel="stylesheet" href="css/dropdowns.css">
 </head>
 <body data-page="admin">
 
@@ -371,7 +372,12 @@
             <span class="section-tag">Facility Controls</span>
         </div>
 
-        <p class="section-description slot-controls-description">Review availability by zone. Manual status changes are recorded in the audit trail.</p>
+        <p class="section-description slot-controls-description">Vacant means no car or reservation; occupied means a car is detected; reserved means no car is detected but the slot is booked. Manual status changes are recorded in the audit trail.</p>
+
+        <div class="admin-live-map-panel">
+            <div class="admin-live-map-heading"><h3>Live parking map</h3><span>Select a marker to find its slot below</span></div>
+            <div id="liveMap">Loading parking map...</div>
+        </div>
 
         <div class="toolbar-wrap slot-controls-toolbar">
             <div class="zone-filter-buttons" id="zoneFilterButtons" role="group" aria-label="Filter parking spaces by zone">
@@ -386,7 +392,8 @@
             <div class="slot-controls-meta">
                 <span id="filteredSlotsCount" class="counter-label" aria-live="polite">Loading spaces…</span>
                 <div class="slot-status-legend" aria-label="Space status legend">
-                    <span><i class="slot-legend-dot available" aria-hidden="true"></i>Available</span>
+                    <span><i class="slot-legend-dot available" aria-hidden="true"></i>Vacant</span>
+                    <span><i class="slot-legend-dot reserved" aria-hidden="true"></i>Reserved</span>
                     <span><i class="slot-legend-dot occupied" aria-hidden="true"></i>Occupied</span>
                 </div>
             </div>

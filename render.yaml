@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: capstone-uat
+    runtime: docker
+    plan: starter
+    branch: Test-CL
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /frontend/login.html
+    disk:
+      name: parking-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PORT
+        value: "80"
+      - key: PARKING_DB_PATH
+        value: /var/data/database/parking.db
+      - key: LOCAL_PAYMENTS_ENABLED
+        value: "1"
