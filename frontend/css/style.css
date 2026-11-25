@@ -2270,3 +2270,57 @@ button[type="submit"]:hover {
     font-size: 0.75rem;
     font-weight: 600;
 }
+/* Shared tenant and cashier activity logs. */
+.activity-filters {
+    display: grid;
+    grid-template-columns: minmax(240px, 1.6fr) repeat(3, minmax(150px, 1fr)) max-content;
+    align-items: end;
+    gap: 12px;
+    margin: 16px 0 24px;
+}
+.activity-filters label {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+    margin: 0;
+    font-size: .8125rem;
+    line-height: 1.25;
+    color: var(--text-secondary);
+}
+.activity-filters input,
+.activity-filters select,
+.activity-filters .btn {
+    box-sizing: border-box;
+    height: 40px;
+    min-height: 40px;
+    width: 100%;
+    margin: 0;
+    font-size: .8125rem;
+    line-height: 1.25;
+}
+.activity-filters input,
+.activity-filters select {
+    min-width: 0;
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+}
+.activity-filters .btn { padding: 8px 16px; align-self: end; }
+.activity-count { flex-shrink: 0; white-space: nowrap; margin-left: auto; }
+.table-scroll .activity-table { min-width: 1200px; }
+.activity-table td { overflow-wrap: normal; }
+.activity-table td:first-child,
+.activity-table td:nth-child(3),
+.activity-table .badge { white-space: nowrap; }
+.activity-table td:nth-child(5),
+.activity-table td:nth-child(7) { min-width: 150px; }
+@media (max-width: 1100px) {
+    .activity-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 600px) {
+    .activity-filters { grid-template-columns: minmax(0, 1fr); }
+}

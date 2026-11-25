@@ -6,6 +6,7 @@
     <title>Commercial Tenant Validation - Parking Ltd.</title>
     <link rel="stylesheet" href="css/style.css">
     <link rel="stylesheet" href="css/layout.css">
+    <link rel="stylesheet" href="css/dropdowns.css">
 </head>
 <body data-page="vendor">
 
@@ -200,16 +201,20 @@
             <div class="card-header-clean">
                 <div>
                     <h2>3. Commercial Validation Activity Ledger</h2>
-                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">Log of dining parking fee waivers authorized today</p>
                 </div>
-                <div style="display: flex; gap: 8px; align-items: center;">
-                    <input type="text" id="ledger-search-input" placeholder="Filter plate or receipt..." style="width: 220px; height: 32px; padding: 4px 8px; font-size: 0.75rem;">
-                    <span class="badge badge-secondary" id="ledger-count-badge">0 records</span>
-                </div>
+                <span class="badge badge-secondary activity-count" id="ledger-count-badge" aria-live="polite">0 records</span>
+            </div>
+            <p class="section-description">History of dining parking fee waivers.</p>
+            <div class="activity-filters">
+                <label>Search<input type="search" id="ledger-search-input" placeholder="Plate, receipt, slot or staff"></label>
+                <label>Zone<select id="ledger-zone"><option value="">All zones</option><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option><option>F</option></select></label>
+                <label>Departure window<select id="ledger-grace"><option value="">All windows</option><option value="active">Active</option><option value="expired">Expired</option><option value="departed">Departed</option></select></label>
+                <label>Lot status<select id="ledger-status"><option value="">All statuses</option><option value="PARKED">Parked</option><option value="EXITED">Exited</option></select></label>
+                <button type="button" class="btn btn-secondary" id="ledger-reset">Clear filters</button>
             </div>
             <div class="table-container">
                 <div class="table-scroll" role="region" aria-label="Parking records" tabindex="0">
-<table class="data-table" id="validations-ledger-table">
+<table class="admin-table activity-table" id="validations-ledger-table">
                     <thead>
                         <tr>
                             <th>Validation Time</th>
@@ -496,7 +501,7 @@
                     document.getElementById('stat-total-subsidy').textContent = `₱${parseFloat(data.stats.total_subsidy_php || 0).toFixed(2)}`;
 
                     validationsHistory = data.validations || [];
-                    renderLedgerTable(validationsHistory);
+                    applyLedgerFilters();
                 } catch (err) {
                     console.error('Failed to load recent validations:', err);
                 }
@@ -514,7 +519,7 @@
                     tbody.innerHTML = `
                         <tr>
                             <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 2rem;">
-                                No commercial validations recorded today.
+                                No validations match the selected filters.
                             </td>
                         </tr>
                     `;
@@ -550,19 +555,24 @@
                 }).join('');
             }
 
-            // Filter Table
-            document.getElementById('ledger-search-input')?.addEventListener('input', function(e) {
-                const term = e.target.value.toLowerCase().trim();
-                if (!term) {
-                    renderLedgerTable(validationsHistory);
-                    return;
-                }
-                const filtered = validationsHistory.filter(item => 
-                    (item.plate_number && item.plate_number.toLowerCase().includes(term)) ||
-                    (item.receipt_number && item.receipt_number.toLowerCase().includes(term)) ||
-                    (item.slot_number && item.slot_number.toLowerCase().includes(term))
-                );
-                renderLedgerTable(filtered);
+            function applyLedgerFilters() {
+                const term = document.getElementById('ledger-search-input').value.trim().toLowerCase();
+                const zone = document.getElementById('ledger-zone').value;
+                const status = document.getElementById('ledger-status').value;
+                const grace = document.getElementById('ledger-grace').value;
+                renderLedgerTable(validationsHistory.filter(item => {
+                    const windowStatus = item.location_status === 'EXITED' ? 'departed' : item.is_grace_active ? 'active' : 'expired';
+                    const searchable = [item.plate_number, item.receipt_number, item.slot_number, item.staff_info].join(' ').toLowerCase();
+                    return (!term || searchable.includes(term)) && (!zone || item.zone === zone)
+                        && (!status || item.location_status === status) && (!grace || windowStatus === grace);
+                }));
+            }
+            ['ledger-search-input', 'ledger-zone', 'ledger-status', 'ledger-grace'].forEach(id => {
+                document.getElementById(id).addEventListener(id === 'ledger-search-input' ? 'input' : 'change', applyLedgerFilters);
+            });
+            document.getElementById('ledger-reset').addEventListener('click', () => {
+                ['ledger-search-input', 'ledger-zone', 'ledger-status', 'ledger-grace'].forEach(id => document.getElementById(id).value = '');
+                applyLedgerFilters();
             });
 
             // Form Handlers

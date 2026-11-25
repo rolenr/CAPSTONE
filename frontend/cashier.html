@@ -6,6 +6,7 @@
     <title>Cashier POS &amp; Exit Gatehouse - Parking Ltd.</title>
     <link rel="stylesheet" href="css/style.css">
     <link rel="stylesheet" href="css/layout.css">
+    <link rel="stylesheet" href="css/dropdowns.css">
 </head>
 <body data-page="cashier">
 
@@ -221,12 +222,19 @@
     <div class="card">
         <div class="card-header-clean">
             <h2>Recent Gatehouse Settlements &amp; Exit Clearances</h2>
-            <span class="section-tag">Exit Log</span>
+            <span class="badge badge-secondary activity-count" id="exits-count" aria-live="polite">0 records</span>
         </div>
         <p class="section-description">Chronological record of vehicles cleared at Gate 1, highlighting the exit verification method used (ALPR Priority vs. QR Fallback).</p>
 
+        <div class="activity-filters">
+            <label>Search<input type="search" id="exits-search" placeholder="Session, plate, slot or staff"></label>
+            <label>Zone<select id="exits-zone"><option value="">All zones</option><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option><option>F</option></select></label>
+            <label>Payment status<select id="exits-payment"><option value="">All payment statuses</option></select></label>
+            <label>Verification<select id="exits-method"><option value="">All methods</option><option value="ALPR">ALPR camera</option><option value="QR_FALLBACK">QR fallback</option><option value="SESSION_ID">Manual session lookup</option></select></label>
+            <button type="button" class="btn btn-secondary" id="exits-reset">Clear filters</button>
+        </div>
         <div class="table-scroll" role="region" aria-label="Parking records" tabindex="0">
-<table class="admin-table">
+<table class="admin-table activity-table">
             <thead>
                 <tr>
                     <th>Session ID</th>
@@ -573,6 +581,8 @@
         }
     }
 
+    let recentExitHistory = [];
+
     // Load recent gatehouse transactions
     async function loadRecentExits() {
         const table = document.getElementById('recentExitsTable');
@@ -582,10 +592,14 @@
             const response = await apiFetch(`${API_BASE}?action=cashier_recent_transactions`);
             const data = await response.json();
 
-            if (!data.success || !data.transactions || data.transactions.length === 0) {
-                table.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 15px;">No exit transactions logged yet.</td></tr>';
-                return;
-            }
+            if (!data.success || !Array.isArray(data.transactions)) return;
+            recentExitHistory = data.transactions;
+            const paymentSelect = document.getElementById('exits-payment');
+            const selectedPayment = paymentSelect.value;
+            const statuses = [...new Set(recentExitHistory.map(t => t.payment_status).filter(Boolean))].sort();
+            paymentSelect.replaceChildren(new Option('All payment statuses', ''));
+            statuses.forEach(status => paymentSelect.add(new Option(status.replaceAll('_', ' '), status)));
+            if (statuses.includes(selectedPayment)) paymentSelect.value = selectedPayment;
 
             const stagedId = Number(currentSession?.session?.session_id || 0);
             const departed = data.transactions.find(t => Number(t.session_id) === stagedId && stagedId > 0);
@@ -599,7 +613,29 @@
                 loadActiveParkedChips();
             }
 
-            table.innerHTML = data.transactions.map(t => {
+            renderRecentExits();
+        } catch (err) {
+            console.error(err);
+        }
+    }
+
+    function renderRecentExits() {
+        const table = document.getElementById('recentExitsTable');
+        const term = document.getElementById('exits-search').value.trim().toLowerCase();
+        const zone = document.getElementById('exits-zone').value;
+        const payment = document.getElementById('exits-payment').value;
+        const method = document.getElementById('exits-method').value;
+        const filtered = recentExitHistory.filter(t => {
+            const searchable = [t.session_id, '#S-' + t.session_id, t.plate_number, t.slot_number, t.staff_id].join(' ').toLowerCase();
+            return (!term || searchable.includes(term)) && (!zone || t.zone === zone)
+                && (!payment || t.payment_status === payment) && (!method || t.exit_method === method);
+        });
+        document.getElementById('exits-count').textContent = filtered.length + ' records';
+        if (!filtered.length) {
+            table.innerHTML = '<tr><td colspan="8">No exit records match the selected filters.</td></tr>';
+            return;
+        }
+        table.innerHTML = filtered.map(t => {
                 const methodBadges = {
                     ALPR: '<span class="badge badge-paid">ALPR CAMERA</span>',
                     QR_FALLBACK: '<span class="badge badge-overnight">QR TOKEN (FALLBACK)</span>',
@@ -621,10 +657,14 @@
                     </tr>
                 `;
             }).join('');
-        } catch (err) {
-            console.error(err);
-        }
     }
+    ['exits-search', 'exits-zone', 'exits-payment', 'exits-method'].forEach(id => {
+        document.getElementById(id).addEventListener(id === 'exits-search' ? 'input' : 'change', renderRecentExits);
+    });
+    document.getElementById('exits-reset').addEventListener('click', () => {
+        ['exits-search', 'exits-zone', 'exits-payment', 'exits-method'].forEach(id => document.getElementById(id).value = '');
+        renderRecentExits();
+    });
 
     // Bootstrap
     loadActiveParkedChips();
