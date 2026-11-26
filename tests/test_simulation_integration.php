@@ -117,8 +117,8 @@ $baselineOccupant['camera_id'] = 'simulation_zone_a';
 simulationSectionalEvent($priorityDb,$baselineOccupant);
 check((int)$priorityDb->query('SELECT COUNT(*) FROM sectional_alerts')->fetchColumn()===0,
     'pre-entry Zone A snapshot occupants are assumed authorized and raise no priority alerts');
-$priorityEntry = simulationEntry($priorityDb,'DBF2489',$priorityScenario,'TEST','A-06');
-check($priorityEntry['slot_number']==='B-01','recorded non-VIP entrant receives nearest eligible Zone B bay');
+$priorityEntry = simulationEntry($priorityDb,'DBF2489',$priorityScenario,'TEST');
+check($priorityEntry['slot_number']==='B-01','recorded non-VIP entrant without a requested bay receives nearest eligible Zone B bay');
 $nextPriorityEntry = simulationEntry($priorityDb,'XYZ9876',$priorityScenario,'TEST','A-06');
 check($nextPriorityEntry['slot_number']==='C-01','allocator falls through to the next available eligible zone');
 check((int)$priorityDb->query("SELECT is_occupied FROM parking_slots WHERE slot_number='A-06'")->fetchColumn()===0,

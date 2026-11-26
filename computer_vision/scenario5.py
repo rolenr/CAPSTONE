@@ -129,7 +129,7 @@ def process_video_feed(video_path, model_path, window_name, feed_type="exit", pr
     if feed_type not in ("entrance", "exit"):
         raise ValueError("feed_type must be 'entrance' or 'exit'")
     print(f"[VISION PIPELINE]: Analyzing recorded {feed_type} feed: {video_path}...", flush=True)
-    vehicle_model = YOLO(str(vehicle_model_path)) if vehicle_model_path else None
+    vehicle_model = YOLO(str(vehicle_model_path or os.path.join(SCRIPT_DIR, "..", "yolov8n.pt")))
     detector = PlateDetector(feed_type, YOLO(model_path), easyocr.Reader(["en"]), cv2,
                              vehicle_model=vehicle_model)
     cap = cv2.VideoCapture(video_path)
@@ -139,7 +139,9 @@ def process_video_feed(video_path, model_path, window_name, feed_type="exit", pr
     fps = cap.get(cv2.CAP_PROP_FPS)
     if not math.isfinite(fps) or fps <= 0:
         fps = 25.0
-    stride = max(1, round(fps / 5))
+    sample_interval = 1 / 9
+    last_sample = -math.inf
+    previous_capture_time = -math.inf
     frame_index = 0
     analyzed = 0
     confirmed = None
@@ -148,10 +150,15 @@ def process_video_feed(video_path, model_path, window_name, feed_type="exit", pr
             ok, frame = cap.read()
             if not ok:
                 break
-            if frame_index % stride:
+            capture_time = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+            if not math.isfinite(capture_time) or capture_time <= previous_capture_time:
+                capture_time = max(frame_index / fps, previous_capture_time + 1 / fps)
+            previous_capture_time = capture_time
+            if capture_time - last_sample < sample_interval:
                 frame_index += 1
                 continue
-            annotated, events = detector.process(frame, now=frame_index / fps)
+            last_sample = capture_time
+            annotated, events = detector.process(frame, now=capture_time)
             analyzed += 1
             if preview:
                 cv2.imshow(window_name, annotated)
@@ -172,6 +179,7 @@ def process_video_feed(video_path, model_path, window_name, feed_type="exit", pr
     if not confirmed:
         print(f"[VISION PIPELINE]: No confirmed {feed_type} plate after {analyzed} analyzed frames "
               f"({frame_index} decoded frames).", flush=True)
+    print(f"[VISION PIPELINE]: {feed_type} evidence {dict(detector.metrics)}.", flush=True)
     if return_observation:
         color, score = ((detector.confirmed_colors.get(confirmed) if confirmed else None)
                         or (detector.color_observer.for_single_vehicle()

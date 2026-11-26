@@ -131,11 +131,12 @@ def consensus(votes, minimum=3):
 
 
 class GateColorObserver:
-    """Match plate boxes to vehicle boxes and aggregate color by plate track."""
+    """Track vehicles and aggregate color observations."""
 
     def __init__(self, vehicle_model, cv2):
         self.model, self.cv2 = vehicle_model, cv2
         self.boxes = []
+        self.tracked_boxes = {}
         self.frame = None
         self.track_votes = defaultdict(lambda: deque(maxlen=8))
         self.single_vehicle_votes = deque(maxlen=8)
@@ -143,15 +144,19 @@ class GateColorObserver:
     def observe(self, frame):
         self.frame = frame
         height, width = frame.shape[:2]
-        result = self.model.predict(frame, conf=.4, imgsz=640, verbose=False, device="cpu")[0]
+        classes = [key for key, name in self.model.names.items() if name in VEHICLE_NAMES]
+        result = self.model.track(frame, persist=True, tracker="bytetrack.yaml", conf=.20,
+                                  classes=classes, agnostic_nms=True, imgsz=640,
+                                  verbose=False, device="cpu")[0]
         self.boxes = []
+        self.tracked_boxes = {}
         for item in result.boxes:
-            if self.model.names[int(item.cls[0])] not in VEHICLE_NAMES:
-                continue
             x1, y1, x2, y2 = (float(n) for n in item.xyxy[0].tolist())
             box = (x1 / width, y1 / height, x2 / width, y2 / height)
             if (x2 - x1) * (y2 - y1) >= .004 * width * height:
                 self.boxes.append(box)
+                if item.id is not None:
+                    self.tracked_boxes[int(item.id[0])] = box
         ranked = sorted(self.boxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]), reverse=True)
         if ranked:
             largest_area = (ranked[0][2] - ranked[0][0]) * (ranked[0][3] - ranked[0][1])
@@ -164,21 +169,11 @@ class GateColorObserver:
         else:
             self.single_vehicle_votes.clear()
 
-    def sample_plate(self, track_id, plate_box):
-        if self.frame is None:
-            return
-        height, width = self.frame.shape[:2]
-        x1, y1, x2, y2 = plate_box
-        center = ((x1 + x2) / (2 * width), (y1 + y2) / (2 * height))
-        matches = [box for box in self.boxes if box[0] <= center[0] <= box[2]
-                   and box[1] <= center[1] <= box[3]]
-        if not matches:
-            return
-        box = min(matches, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
+    def sample_vehicle(self, track_id, box):
         self.track_votes[track_id].append(classify_vehicle_color(self.frame, box, self.cv2))
 
     def for_track(self, track_id):
-        return consensus(self.track_votes[track_id])
+        return consensus(self.track_votes.get(track_id, ()))
 
     def for_single_vehicle(self):
         return consensus(self.single_vehicle_votes)

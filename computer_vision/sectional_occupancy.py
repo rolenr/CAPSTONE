@@ -414,6 +414,8 @@ def main(argv=None):
     parser.add_argument("--event-url", help="Authenticated parking API sectional_event endpoint")
     parser.add_argument("--event-token", help="Camera-event token; defaults to PARKING_EXIT_EVENT_TOKEN or token file")
     parser.add_argument("--output", default="sectional_events.jsonl")
+    parser.add_argument("--occupancy-summary", type=Path,
+                        help="Save continuous occupancy duration at the end of the replay for each occupied bay")
     parser.add_argument("--evidence-dir", default="sectional_evidence")
     parser.add_argument("--sample-seconds", type=float, default=1.0)
     parser.add_argument("--max-seconds", type=float, help="Stop after this much source video for a pre-entry snapshot")
@@ -534,6 +536,8 @@ def main(argv=None):
         capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
     count = 0
     target_occupied_since = None
+    occupied_since = {}
+    last_sample_time = None
     parking_confirmed = False
     target_was_occupied = args.initial_target_occupied
     departure_confirmed = False
@@ -566,9 +570,19 @@ def main(argv=None):
                 vehicles = predictions(vehicle_result, width, height,
                                        vehicle_model.names, VEHICLE_NAMES)
                 bay_vehicles = vehicles_for_bays(vehicles, zones)
+                when = time.monotonic() if live else frame_index / fps
+                if args.occupancy_summary:
+                    if last_sample_time is not None and when - last_sample_time > args.max_observation_gap:
+                        occupied_since.clear()
+                    last_sample_time = when
                 for slot_name, polygon in slots.items():
                     candidates = [(confidence, box) for _, confidence, box in bay_vehicles
                                   if overlaps_polygon(box, polygon)]
+                    if args.occupancy_summary:
+                        if candidates:
+                            occupied_since.setdefault(slot_name, when)
+                        else:
+                            occupied_since.pop(slot_name, None)
                     if candidates:
                         _, vehicle_box = max(candidates, key=lambda item: item[0])
                         color_history[slot_name].append(
@@ -579,7 +593,6 @@ def main(argv=None):
                 plate_reads = read_plates(frame, plate_model, reader, cv2, slots, bay_vehicles) if plate_model else {}
                 for slot, (_confidence, plate) in plate_reads.items():
                     plate_history[slot].append(plate)
-                when = time.monotonic() if live else frame_index / fps
                 events = monitor.update(when, frame_index, bay_hits, vehicles)
                 transitioned = {event["slot_number"] for event in events
                                 if event["event_type"] == "sectional.slot.observed"}
@@ -678,6 +691,13 @@ def main(argv=None):
         capture.release()
         if args.preview:
             cv2.destroyWindow(window)
+    if args.occupancy_summary:
+        args.occupancy_summary.parent.mkdir(parents=True, exist_ok=True)
+        args.occupancy_summary.write_text(json.dumps({
+            slot: last_sample_time - started
+            for slot, started in occupied_since.items()
+            if monitor.slot_state.get(slot) == "OCCUPIED"
+        }, indent=2))
     print(f"Processed {frame_index} frames; emitted {count} events to {output}.", file=sys.stderr)
     if args.stop_after_occupied_seconds is not None and not parking_confirmed:
         print(f"Parking was not confirmed in {args.target_slot} before the clip ended.", file=sys.stderr)

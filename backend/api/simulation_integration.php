@@ -391,7 +391,7 @@ function simulationEntry(PDO $db, string $plate, string $scenarioId, string $act
             // The recorded clip may show an ineligible vehicle parking in A,
             // but the entry allocator must still direct that vehicle elsewhere.
             $recordedZoneA = false;
-            if (($preferredSlot !== '' && str_starts_with($preferredSlot,'A-'))
+            if ($preferredSlot === '' || str_starts_with($preferredSlot,'A-')
                     || ($reservedBayTest && $allocationZone === 'A')) {
                 $run = $db->prepare("SELECT 1 FROM simulation_occupancy_runs
                     WHERE scenario_id=? AND zone='A' AND status='ACTIVE' LIMIT 1");

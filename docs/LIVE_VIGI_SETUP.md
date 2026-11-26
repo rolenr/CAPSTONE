@@ -1,6 +1,6 @@
 # Live VIGI entrance and exit setup
 
-This guide connects the VIGI NVR to the parking app. Entrance is **NVR channel 1** and exit is **NVR channel 13**. Both use `computer_vision/live_vigi.py` and the same `PlateDetector` class that reads recorded entrance and exit clips in `computer_vision/scenario5.py` and `computer_vision/full_simulation.py`. The gate detector uses `computer_vision/best.pt`, EasyOCR, motion and repeated-read confirmation, and `yolov8n.pt` for supporting vehicle color. The live feeds publish confirmed gate events to `backend/api/endpoints.php`.
+This guide connects the VIGI NVR to the parking app. Entrance is **NVR channel 1** and exit is **NVR channel 13**. Both use `computer_vision/live_vigi.py` and the same `PlateDetector` class that reads recorded entrance and exit clips in `computer_vision/scenario5.py` and `computer_vision/full_simulation.py`. The gate detector uses `computer_vision/best.pt` for plate boxes, EasyOCR for text, and `yolov8n.pt` for vehicle tracking and color. It combines reads across frames and confirms them after a directed lane crossing. The live feeds publish confirmed gate events to `backend/api/endpoints.php`.
 
 ## Choose the run mode
 
@@ -77,6 +77,33 @@ python computer_vision/live_vigi.py --detection-only
 Look for `[entrance] Stream connected.` and `[exit] Stream connected.` and two preview windows. Move a vehicle through each camera view. A confirmed plate prints as `ENTRANCE plate: ...` or `EXIT plate: ...`. Detection-only mode does **not** send gate events to the API, allocate a bay, issue an entry QR, or close a session. Press `q` in a preview window or Ctrl+C to stop.
 
 If a stream does not connect, check its NVR channel, credentials, RTSP permission, IP, port, and network path. The process retries interrupted streams. If video connects but a plate is not confirmed, inspect camera focus, angle, motion, lighting, and whether the plate stays visible through several frames. A single plausible OCR frame is intentionally insufficient. `--no-preview` still prints detections but gives no visual feedback.
+
+### Gate calibration and replay
+
+The preview shows the plate capture rectangle in green and the vehicle and plate crossing lines in orange. The vehicle line uses the bottom center of a tracked vehicle. The plate line uses the plate center and can supply crossing evidence when the vehicle tracker loses the vehicle. Each line accepts movement from its negative side to its positive side. For a horizontal line drawn left to right, movement is downward. For a vertical line drawn top to bottom, movement is right to left. Reversing endpoint order reverses the accepted direction.
+
+The defaults are based on the recorded gate views. For a different camera angle or crop, set `PARKING_GATE_REGIONS` to a JSON file with normalized coordinates. The same setting applies to live gates and recorded replay.
+
+```json
+{
+  "entrance": {
+    "zone": [0.03, 0.34, 0.98, 0.98],
+    "vehicle_line": [[0.05, 0.60], [0.95, 0.60]],
+    "plate_line": [[0.05, 0.54], [0.95, 0.54]]
+  },
+  "exit": {
+    "zone": [0.18, 0.015, 0.98, 0.60],
+    "vehicle_line": [[0.77, 0.235], [0.77, 0.95]],
+    "plate_line": [[0.57, 0.015], [0.57, 0.60]]
+  }
+}
+```
+
+Check the preview in detection-only mode on each live camera. Place the lines across the travel lane and keep the plate capture rectangle away from unrelated traffic. The optional regression test replays the four local Civic and Xpander night gate clips and the daytime Xpander exit without sending parking events.
+
+```sh
+RUN_NIGHT_LPR=1 python -m unittest discover -s tests -p test_lpr_regression.py
+```
 
 ## 4. Run direct live entrance and exit
 

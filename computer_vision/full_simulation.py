@@ -209,7 +209,7 @@ def replay_sectional(args, scenario, session_id, assigned_slot, token, phase="pa
         last_frame = db.execute("SELECT COALESCE(MAX(frame_index), -1) FROM sectional_events "
                                 "WHERE scenario_id=? AND camera_id=?", (scenario, args.camera_id)).fetchone()[0]
     frame_offset = int(last_frame) + 1
-    observed_slot = (args.clip_slot if getattr(args, "other_vehicle_booking", False)
+    observed_slot = (args.clip_slot if args.discover_parking_bay or getattr(args, "other_vehicle_booking", False)
                      or (args.zone == "A" and assigned_slot != args.clip_slot)
                      else assigned_slot)
     if phase == "departure":
@@ -220,23 +220,29 @@ def replay_sectional(args, scenario, session_id, assigned_slot, token, phase="pa
                 (scenario, args.camera_id, observed_slot)).fetchone()
         if not prior or prior[0] != "OCCUPIED":
             raise RuntimeError(f"Departure needs a prior occupied observation for {observed_slot}")
+    discovering = phase == "parking" and args.discover_parking_bay
+    output = run_dir / output_name
+    summary = run_dir / "parking_occupancy_summary.json"
     command = [sys.executable, str(ROOT / "computer_vision/sectional_occupancy.py"),
                "--source", str(source), "--camera-id", args.camera_id,
                "--config", str(args.regions), "--vehicle-model", str(args.vehicle_model),
-               "--scenario-id", scenario, "--session-id", str(session_id),
-               "--clip-plate", args.clip_plate or "", "--clip-slot", args.clip_slot or "",
-               "--event-url", f"{args.api_url}?action=sectional_event", "--event-token", token,
-               "--output", str(run_dir / output_name),
+               "--scenario-id", scenario,
+               "--output", str(output),
                "--evidence-dir", str(run_dir / evidence_name),
                "--sample-seconds", str(args.sample_seconds),
                "--start-seconds", str(0 if args.five_clips else args.baseline_seconds),
                "--frame-offset", str(frame_offset),
-               "--target-slot", observed_slot,
                "--preview-label", "BAY DEPARTURE" if phase == "departure" else "PARKING REPLAY"]
-    if phase == "departure":
-        command += ["--stop-on-vacant", "--initial-target-occupied", "--publish-target-only"]
+    if discovering:
+        command += ["--occupancy-summary", str(summary)]
     else:
-        command += ["--stop-after-occupied-seconds", str(args.parked_seconds)]
+        command += ["--session-id", str(session_id), "--clip-plate", args.clip_plate or "",
+                    "--clip-slot", args.clip_slot or "", "--target-slot", observed_slot,
+                    "--event-url", f"{args.api_url}?action=sectional_event", "--event-token", token]
+        if phase == "departure":
+            command += ["--stop-on-vacant", "--initial-target-occupied", "--publish-target-only"]
+        else:
+            command += ["--stop-after-occupied-seconds", str(args.parked_seconds)]
     if not args.no_preview:
         command.append("--preview")
     command += ["--plate-model", str(args.sectional_plate_model or ROOT / "computer_vision/best.pt")]
@@ -248,6 +254,26 @@ def replay_sectional(args, scenario, session_id, assigned_slot, token, phase="pa
                     f"occupied for {args.parked_seconds:g} continuous video seconds")
         raise RuntimeError(f"{phase.capitalize()} clip did not confirm {observed_slot} {expected}; "
                            f"see {run_dir / output_name}")
+    if discovering:
+        holds = json.loads(summary.read_text())
+        candidates = sorted(slot for slot, duration in holds.items()
+                            if slot in args.baseline_vacancies and duration >= args.parked_seconds)
+        if len(candidates) != 1:
+            detail = ", ".join(candidates) or "none"
+            raise RuntimeError(f"Parking replay did not establish one newly occupied bay "
+                               f"for {args.parked_seconds:g} video seconds; candidates: {detail}. "
+                               f"See {summary}")
+        observed_slot = args.clip_slot = candidates[0]
+        events = [json.loads(line) for line in output.read_text().splitlines()]
+        observed_event = next(event for event in reversed(events)
+                              if event.get("slot_number") == observed_slot
+                              and event.get("occupancy_state") == "OCCUPIED")
+        observed_event.update(session_id=session_id, clip_slot=observed_slot, clip_plate=args.clip_plate or "")
+        output.write_text("".join(json.dumps(event) + "\n" for event in events))
+        for event in events:
+            post_camera(args.api_url, token, "sectional_event", event)
+        print(f"Parking confirmed in observed bay {observed_slot}; assigned bay was {assigned_slot}.",
+              flush=True)
     expected_state = "VACANT" if phase == "departure" else "OCCUPIED"
     with sqlite3.connect(f"file:{DB}?mode=ro", uri=True) as db:
         observed = db.execute("""SELECT o.occupancy_state FROM slot_observations o
@@ -411,6 +437,9 @@ def capture_baseline(args, scenario, token):
         print("Simulation assumption: vehicles already parked in the Zone A snapshot "
               "are VIP / PWD authorized. Eligibility review applies to the newly "
               "entering vehicle after its parking clip.", flush=True)
+    args.baseline_vacancies = {slot for slot, state in rows if state == "VACANT"}
+    if args.discover_parking_bay and not args.baseline_vacancies:
+        raise RuntimeError(f"Zone {zone} snapshot reported no vacant bays for parking replay")
     if args.clip_slot:
         observed_state = dict(rows).get(args.clip_slot)
         if observed_state != "VACANT":
@@ -506,7 +535,7 @@ def recorded(args, scenario, token):
         "vehicle_color": entry_view["vehicle_color"],
         "color_confidence": entry_view["color_confidence"],
         "channel": 1, "scenario_id": scenario,
-        "preferred_slot": "" if other_vehicle_booking else (args.preferred_slot or args.clip_slot),
+        "preferred_slot": "" if other_vehicle_booking or args.allocate_from_snapshot else (args.preferred_slot or args.clip_slot),
         "allocation_zone": args.zone if other_vehicle_booking else "",
         "reserved_bay_test": other_vehicle_booking,
         "clip_slot": args.clip_slot,
@@ -676,7 +705,10 @@ def main(argv=None):
                         help="Video seconds between pre-entry occupancy samples")
     parser.add_argument("--parked-seconds", type=float, default=10.0,
                         help="Continuous occupied video seconds required to confirm parking")
-    parser.add_argument("--preferred-slot", help="Vacant bay to allocate for this simulation; defaults to clip slot")
+    allocation = parser.add_mutually_exclusive_group()
+    allocation.add_argument("--preferred-slot", help="Request a specific vacant bay during allocation")
+    allocation.add_argument("--allocate-from-snapshot", action="store_true",
+                            help="Use normal snapshot-based allocation without requesting the recorded bay")
     parser.add_argument("--tenant-expired", action="store_true",
                         help="Prompt for an expired tenant window without changing the clock")
     parser.add_argument("--auto-advance", action="store_true", help="Skip manual stage controls")
@@ -685,6 +717,9 @@ def main(argv=None):
     parser.add_argument("--entry-timeout", type=int, default=600)
     parser.add_argument("--exit-timeout", type=int, default=1800)
     args = parser.parse_args(argv)
+    if args.allocate_from_snapshot and args.mode != "recorded":
+        parser.error("--allocate-from-snapshot applies to recorded mode")
+    args.discover_parking_bay = False
     profile = None
     if args.zone or args.case:
         if not args.zone or not args.case or args.mode != "recorded":
@@ -704,13 +739,18 @@ def main(argv=None):
             args.baseline_sample_seconds = .5
         args.departure_video = (None if args.case == "enforcement" else
                                 args.departure_video or profile["departure"])
-        args.clip_slot = args.clip_slot or profile["slot"]
+        args.discover_parking_bay = args.clip_slot is None and args.case not in ("reservation", "reserved_slot")
+        if args.discover_parking_bay:
+            args.allocate_from_snapshot = args.preferred_slot is None
+        else:
+            args.clip_slot = args.clip_slot or profile["slot"]
         args.camera_id = args.camera_id or profile["camera"]
         args.regions = args.regions or profile["regions"]
         args.violation_video = args.violation_video or profile.get("violation")
         args.violation_camera_id = profile.get("violation_camera", args.camera_id)
         args.violation_regions = args.violation_regions or profile.get("violation_regions")
-        args.preferred_slot = args.preferred_slot or profile["slot"]
+        if not args.allocate_from_snapshot:
+            args.preferred_slot = args.preferred_slot or profile["slot"]
         args.scenario_id = args.scenario_id or f"{profile['scenario_prefix']}_{uuid.uuid4().hex[:10]}"
         if not args.scenario_id.lower().startswith(profile["scenario_prefix"] + "_"):
             parser.error(f"scenario ID for this entry point must start with {profile['scenario_prefix']}_")

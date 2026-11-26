@@ -22,11 +22,10 @@ import re
 import signal
 import threading
 import time
-from collections import Counter, defaultdict, deque
+from collections import Counter
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
-from statistics import median
 from urllib.parse import quote
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -36,8 +35,10 @@ try:
 except ImportError:
     from plate_utils import normalize_license_plate
 try:
+    from .gate_passage import Crossing, GateGeometry, Passage, PlateCrop, associated_vehicle, center, match_passage
     from .vehicle_color import GateColorObserver
 except ImportError:
+    from gate_passage import Crossing, GateGeometry, Passage, PlateCrop, associated_vehicle, center, match_passage
     from vehicle_color import GateColorObserver
 try:
     from . import overlay
@@ -51,13 +52,8 @@ CAMERAS = (("entrance", 1, "VIGI Entrance - Channel 1"),
 PLATE_PATTERN = re.compile(r"[A-Z]{3}\d{3,4}")
 DISAPPEAR_SECONDS = 5.0
 TRACK_EXPIRY_SECONDS = 10.0
-MIN_PLATE_READS = 3
 OCR_MIN_CONFIDENCE = 0.20
 OCR_STRONG_CONFIDENCE = 0.65
-OCR_TWO_READ_CONFIDENCE = 0.90
-ENTRANCE_MOTION_FRACTION = 0.035
-EXIT_MOTION_FRACTION = 0.08
-PLATE_OBSERVATION_SECONDS = 6.0
 LETTER_FIXES = str.maketrans({"0": "O", "1": "I", "5": "S", "6": "G", "8": "B"})
 DIGIT_FIXES = str.maketrans({"B": "8", "G": "6", "I": "1", "L": "1", "O": "0", "S": "5", "Z": "2"})
 
@@ -140,37 +136,8 @@ def best_ocr_plate(reads):
     return best_ocr_candidate(reads)[1]
 
 
-def is_approaching(history, role):
-    """Use a short size trend; exit view has no reliable vertical direction."""
-    if len(history["areas"]) < 4:
-        return False
-    areas = list(history["areas"])
-    older_area = max(median(areas[:2]), 1e-9)
-    recent_area = median(areas[-2:])
-    if recent_area >= older_area * 1.15:
-        return True
-    if role == "entrance":
-        centers = list(history["centers"])
-        moved_down = median(centers[-2:]) - median(centers[:2]) >= 0.015
-        return moved_down and recent_area >= older_area * 0.95
-    return False
-
-
-def has_entrance_motion(history):
-    """Accept a plate traveling across the entrance without growing in view."""
-    positions = history["positions"]
-    if len(positions) < 4:
-        return False
-    start = history["origin"]
-    start_x = median(point[0] for point in start)
-    start_y = median(point[1] for point in start)
-    end_x = median(point[0] for point in list(positions)[-2:])
-    end_y = median(point[1] for point in list(positions)[-2:])
-    return ((end_x - start_x) ** 2 + (end_y - start_y) ** 2) ** 0.5 >= ENTRANCE_MOTION_FRACTION
-
-
 class PlateDetector:
-    """Scenario 5's ALPR rules, with state scoped to one camera."""
+    """Collect plate evidence per passage and confirm after a directed crossing."""
 
     def __init__(self, role, model, reader, cv2, image_size=960, vehicle_model=None):
         self.role = role
@@ -178,51 +145,13 @@ class PlateDetector:
         self.reader = reader
         self.cv2 = cv2
         self.image_size = image_size
+        self.geometry = GateGeometry.load(role)
         self.color_observer = GateColorObserver(vehicle_model, cv2) if vehicle_model else None
         self.confirmed_colors = {}
-        self.track_history = defaultdict(
-            lambda: {
-                "centers": deque(maxlen=8), "areas": deque(maxlen=8),
-                "positions": deque(maxlen=8), "origin": deque(maxlen=2),
-            }
-        )
-        self.plate_history = defaultdict(lambda: deque(maxlen=10))
-        self.track_last_seen = {}
-        self.eligible_tracks = set()
-        self.confirmed_tracks = {}
+        self.passages = []
+        self.vehicle_crossings = {}
         self.plate_last_seen = {}
-        # ByteTrack can give a moving plate a new ID after a missed frame.
-        # Keep a short plate-level history so those reads can still agree.
-        self.plate_observations = defaultdict(lambda: deque(maxlen=10))
-
-    def _moving_plate_confirmed(self, plate, position, now, confidence):
-        observations = self.plate_observations[plate]
-        observations.append((now, position, confidence))
-        while observations and now - observations[0][0] > PLATE_OBSERVATION_SECONDS:
-            observations.popleft()
-        if len(observations) < 2:
-            return False
-        first = observations[0][1]
-        movement = max(
-            ((point[0] - first[0]) ** 2 + (point[1] - first[1]) ** 2) ** 0.5
-            for _, point, _ in observations
-        )
-        minimum_motion = (ENTRANCE_MOTION_FRACTION if self.role == "entrance"
-                          else EXIT_MOTION_FRACTION)
-        if len(observations) >= MIN_PLATE_READS and movement >= minimum_motion:
-            return True
-        # Two particularly clear reads can suffice when the plate has moved
-        # substantially and CPU inference skipped the remaining frames.
-        strong = [entry for entry in observations if entry[2] >= OCR_TWO_READ_CONFIDENCE]
-        if len(strong) < 2 or strong[-1][0] - strong[0][0] < 0.25:
-            return False
-        strong_first = strong[0][1]
-        strong_motion = max(
-            ((point[0] - strong_first[0]) ** 2 +
-             (point[1] - strong_first[1]) ** 2) ** 0.5
-            for _, point, _ in strong
-        )
-        return strong_motion >= max(minimum_motion, 0.08)
+        self.metrics = Counter()
 
     def _read_plate(self, crop, padded_crop):
         """Read the whole plate from tight and context-padded crops."""
@@ -275,6 +204,14 @@ class PlateDetector:
                 )
                 candidates.append(best_ocr_candidate(self.reader.readtext(binary, **options)))
 
+        # Try a plate-shaped quadrilateral when the regular crops are weak.
+        if max((score for score, plate in candidates if plate), default=0) < .80:
+            rectified = self._rectify_plate(enlarged_sources[0])
+            if rectified is not None:
+                score, plate = best_ocr_candidate(self.reader.readtext(rectified, **options))
+                if plate and score >= OCR_STRONG_CONFIDENCE:
+                    candidates.append((score, plate))
+
         valid = [candidate for candidate in candidates if candidate[1]]
         if not valid:
             return max(candidates, default=(0.0, None))
@@ -291,162 +228,194 @@ class PlateDetector:
                 selected = candidate
         return selected
 
+    def _rectify_plate(self, crop):
+        """Warp a plausible four-corner plate outline to a rectangle."""
+        import numpy as np
+
+        cv2 = self.cv2
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+        _, bright = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+        contours, _ = cv2.findContours(bright, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        height, width = gray.shape
+        for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:3]:
+            if not .24 * width * height <= cv2.contourArea(contour) <= .92 * width * height:
+                continue
+            polygon = cv2.approxPolyDP(contour, .035 * cv2.arcLength(contour, True), True)
+            if len(polygon) != 4 or not cv2.isContourConvex(polygon):
+                continue
+            points = sorted(polygon.reshape(4, 2).tolist())
+            tl, bl = sorted(points[:2], key=lambda point: point[1])
+            tr, br = sorted(points[2:], key=lambda point: point[1])
+            out_width = round(max(np.linalg.norm(np.subtract(tr, tl)), np.linalg.norm(np.subtract(br, bl))))
+            out_height = round(max(np.linalg.norm(np.subtract(bl, tl)), np.linalg.norm(np.subtract(br, tr))))
+            if out_height == 0 or not 1.6 <= out_width / out_height <= 6:
+                continue
+            source = np.float32([tl, tr, br, bl])
+            target = np.float32([[0, 0], [out_width - 1, 0],
+                                 [out_width - 1, out_height - 1], [0, out_height - 1]])
+            return cv2.warpPerspective(crop, cv2.getPerspectiveTransform(source, target),
+                                       (out_width, out_height))
+        return None
+
+    def _collect_crop(self, frame, pixels, confidence, now):
+        height, width = frame.shape[:2]
+        x1, y1, x2, y2 = pixels
+        pad_x = max(3, int((x2 - x1) * .30))
+        pad_y = max(3, int((y2 - y1) * (.38 if self.role == "entrance" else .30)))
+        tight = frame[y1:y2, x1:x2]
+        padded = frame[max(0, y1 - pad_y):min(height, y2 + pad_y),
+                       max(0, x1 - pad_x):min(width, x2 + pad_x)]
+        gray = self.cv2.cvtColor(tight, self.cv2.COLOR_BGR2GRAY)
+        gray = self.cv2.resize(gray, (128, 48), interpolation=self.cv2.INTER_AREA)
+        sharpness = self.cv2.Laplacian(gray, self.cv2.CV_64F).var()
+        glare = (gray >= 245).mean()
+        quality = confidence ** .5 * (x2 - x1) ** .5 * (1 + min(sharpness, 1200)) ** .25 * (1 - .7 * glare)
+        return PlateCrop(now, quality, tight.copy(), padded.copy())
+
+    def _read_pending(self, passage, now, crossed):
+        passage.candidates[:] = [c for c in passage.candidates if now - c.timestamp <= 2]
+        if not passage.candidates or passage.confirmed_plate():
+            return
+        if not crossed and now - passage.last_ocr < .24:
+            return
+        # At the line, use a second buffered frame if the first leaves the vote undecided.
+        budget = 2 if crossed and passage.last_ocr < now - .18 else 1
+        for _ in range(min(budget, len(passage.candidates))):
+            crop = passage.candidates.pop(0)
+            passage.last_ocr = now
+            self.metrics["ocr_frames"] += 1
+            confidence, plate = self._read_plate(crop.tight, crop.padded)
+            if plate and confidence >= .55:
+                passage.reads.append((crop.timestamp, plate, confidence))
+                self.metrics["valid_reads"] += 1
+                if passage.confirmed_plate():
+                    break
+
     def process(self, frame, now=None):
-        """Annotate a frame and return newly confirmed (role, plate) events."""
         now = time.monotonic() if now is None else now
+        self._expire(now)
+        annotated = frame.copy()
+        height, width = frame.shape[:2]
+        vehicles = {}
         if self.color_observer:
             self.color_observer.observe(frame)
-        height, width = frame.shape[:2]
-        if self.role == "entrance":
-            # Keep the full drive-up approach in view. The newer clips place
-            # plates above or left of the previous narrow entrance ROI.
-            xmin, xmax = int(width * 0.03), int(width * 0.98)
-            ymin, ymax = int(height * 0.08), int(height * 0.98)
-            confidence, image_size = 0.15, max(self.image_size, 1152)
-        else:
-            # Include close plates near the bottom of the live exit view.
-            xmin, xmax = int(width * 0.20), int(width * 0.95)
-            ymin, ymax = int(height * 0.05), int(height * 0.95)
-            confidence, image_size = 0.25, self.image_size
+            vehicles = self.color_observer.tracked_boxes
+            if self.role == "exit":
+                minimum_bottom = min(point[1] for point in self.geometry.vehicle_line)
+                vehicles = {key: box for key, box in vehicles.items() if box[3] >= minimum_bottom}
+        for vehicle_id, box in vehicles.items():
+            crossing, _ = self.vehicle_crossings.get(vehicle_id, (Crossing(), now))
+            crossing.observe((center(box)[0], box[3]), self.geometry.vehicle_line)
+            self.vehicle_crossings[vehicle_id] = crossing, now
 
-        # Draw on a separate image so the ROI and labels cannot affect OCR.
-        annotated = frame.copy()
-        results = self.model.track(
-            frame, persist=True, tracker="bytetrack.yaml", conf=confidence,
-            imgsz=image_size, verbose=False, device="cpu",
-        )
-        events = []
-        for result in results:
-            boxes = result.boxes
-            if boxes.id is None:
+        entrance = self.role == "entrance"
+        detections = self.model.predict(
+            frame, conf=.15 if entrance else .20,
+            imgsz=max(self.image_size, 1152) if entrance else self.image_size,
+            iou=.50, agnostic_nms=True, verbose=False, device="cpu",
+        )[0].boxes
+        used = set()
+        for detection in sorted(detections, key=lambda box: float(box.conf[0]), reverse=True):
+            x1, y1, x2, y2 = map(int, detection.xyxy[0].tolist())
+            pixels = max(0, x1), max(0, y1), min(width, x2), min(height, y2)
+            x1, y1, x2, y2 = pixels
+            if x2 - x1 < max(24, .018 * width) or y2 - y1 < 9:
                 continue
-            for box, raw_id in zip(boxes.xyxy.cpu().numpy(), boxes.id.cpu().numpy()):
-                x1, y1, x2, y2 = map(int, box)
-                track_id = int(raw_id)
-                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-                area = max(0, x2 - x1) * max(0, y2 - y1)
-                history = self.track_history[track_id]
-                history["centers"].append(cy / height)
-                history["areas"].append(area / (width * height))
-                position = (cx / width, cy / height)
-                history["positions"].append(position)
-                if len(history["origin"]) < 2:
-                    history["origin"].append(position)
-                self.track_last_seen[track_id] = now
-                if self.color_observer:
-                    self.color_observer.sample_plate(track_id, (x1, y1, x2, y2))
-                if (is_approaching(history, self.role) or
-                        (self.role == "entrance" and has_entrance_motion(history))):
-                    self.eligible_tracks.add(track_id)
-                eligible = track_id in self.eligible_tracks
+            box = x1 / width, y1 / height, x2 / width, y2 / height
+            point = center(box)
+            if not self.geometry.contains(point):
+                continue
+            self.metrics["plate_boxes"] += 1
+            vehicle_ids = associated_vehicle(point, vehicles)
+            if len(vehicle_ids) > 1:
+                self.metrics["ambiguous_vehicle_matches"] += 1
+                continue
+            vehicle_id = vehicle_ids[0] if vehicle_ids else None
+            # Accept at most one plate candidate per vehicle per frame.
+            if vehicle_id is not None and any(self.passages[i].vehicle_id == vehicle_id for i in used):
+                continue
+            index = match_passage(box, vehicle_id, self.passages, used, vehicles, now)
+            if index is None:
+                index = len(self.passages)
+                self.passages.append(Passage(now, box, vehicle_id))
+                self.metrics["passages_started"] += 1
+            passage = self.passages[index]
+            used.add(index)
+            passage.last_seen, passage.box = now, box
+            if vehicle_id is not None:
+                passage.vehicle_id = vehicle_id
+                if not passage.plate:
+                    self.color_observer.sample_vehicle(vehicle_id, vehicles[vehicle_id])
+            passage.crossing.observe(point, self.geometry.plate_line)
+            if passage.plate:
+                self.plate_last_seen[passage.plate] = now
+                self._label(annotated, passage.plate, x1, y1)
+                continue
+            passage.candidates[:] = [crop for crop in passage.candidates if now - crop.timestamp <= 2]
+            candidate = self._collect_crop(frame, pixels, float(detection.conf[0]), now)
+            passage.candidates.append(candidate)
+            passage.candidates.sort(key=lambda item: item.quality, reverse=True)
+            del passage.candidates[5:]
 
-                if track_id in self.confirmed_tracks:
-                    plate = self.confirmed_tracks[track_id]
-                    self.plate_last_seen[plate] = now
-                    self._label(annotated, plate, x1, y1)
-                    continue
+        events = []
+        for index, passage in enumerate(self.passages):
+            vehicle_crossing = self.vehicle_crossings.get(passage.vehicle_id)
+            crossed = passage.crossing.crossed or (vehicle_crossing and vehicle_crossing[0].crossed)
+            if crossed and not passage.crossed:
+                passage.crossed = True
+                self.metrics["crossings"] += 1
+            if passage.plate or (index not in used and not crossed):
+                continue
+            self._read_pending(passage, now, crossed)
+            plate = passage.confirmed_plate()
+            if not plate or not crossed:
+                continue
+            passage.plate = plate
+            passage.candidates.clear()
+            x, y = passage.box[:2]
+            self._label(annotated, plate, int(x * width), int(y * height))
+            if now - self.plate_last_seen.get(plate, -DISAPPEAR_SECONDS) < DISAPPEAR_SECONDS:
+                continue
+            self.plate_last_seen[plate] = now
+            if self.color_observer:
+                color = self.color_observer.for_track(passage.vehicle_id)
+                if color[0] == "UNKNOWN":
+                    color = self.color_observer.for_single_vehicle()
+                self.confirmed_colors[plate] = color
+            self.metrics["confirmed"] += 1
+            events.append((self.role, plate))
 
-                if not (xmin <= cx <= xmax and ymin <= cy <= ymax):
-                    continue
-
-                # Wait for the vehicle to cross the entrance before running
-                # EasyOCR. This avoids spending CPU on fixed plates and
-                # background detections in the wide approach view.
-                if not eligible:
-                    overlay.draw_label(self.cv2, annotated, "checking movement", x1, y1,
-                                       overlay.PENDING, bottom=y2, size=0.85)
-                    continue
-
-                # A little margin preserves characters at the detector's edge.
-                pad_x_fraction, pad_y_fraction = ((0.30, 0.38) if self.role == "entrance"
-                                                   else (0.30, 0.30))
-                pad_x = max(3, int((x2 - x1) * pad_x_fraction))
-                pad_y = max(3, int((y2 - y1) * pad_y_fraction))
-                overlay.draw_box(
-                    self.cv2, annotated,
-                    (max(0, x1 - pad_x), max(0, y1 - pad_y)),
-                    (min(width - 1, x2 + pad_x), min(height - 1, y2 + pad_y)),
-                    overlay.PLATE,
-                )
-                crop = frame[max(0, y1):min(height, y2), max(0, x1):min(width, x2)]
-                padded_crop = frame[
-                    max(0, y1 - pad_y):min(height, y2 + pad_y),
-                    max(0, x1 - pad_x):min(width, x2 + pad_x),
-                ]
-                if crop.size:
-                    ocr_confidence, plate = self._read_plate(crop, padded_crop)
-                    if plate:
-                        # One vote per processed frame, including when EasyOCR
-                        # returns multiple text boxes or processing variants.
-                        self.plate_history[track_id].append(plate)
-                        if self._moving_plate_confirmed(plate, position, now, ocr_confidence):
-                            self.confirmed_tracks[track_id] = plate
-                            if self.color_observer:
-                                color = self.color_observer.for_track(track_id)
-                                if color[0] == "UNKNOWN":
-                                    color = self.color_observer.for_single_vehicle()
-                                self.confirmed_colors[plate] = color
-                            last_seen = self.plate_last_seen.get(plate)
-                            self.plate_last_seen[plate] = now
-                            self._label(annotated, plate, x1, y1)
-                            if last_seen is None or now - last_seen >= DISAPPEAR_SECONDS:
-                                events.append((self.role, plate))
-                            continue
-                if not eligible:
-                    overlay.draw_label(self.cv2, annotated, "checking movement", x1, y1,
-                                       overlay.PENDING, bottom=y2, size=0.85)
-                    continue
-                votes = Counter(self.plate_history[track_id]).most_common(2)
-                if not votes or votes[0][1] < MIN_PLATE_READS:
-                    continue
-                if len(votes) > 1 and votes[0][1] == votes[1][1]:
-                    continue
-                candidate = votes[0][0]
-                self.confirmed_tracks[track_id] = candidate
-                if self.color_observer:
-                    color = self.color_observer.for_track(track_id)
-                    if color[0] == "UNKNOWN":
-                        color = self.color_observer.for_single_vehicle()
-                    self.confirmed_colors[candidate] = color
-                last_seen = self.plate_last_seen.get(candidate)
-                self.plate_last_seen[candidate] = now
-                self._label(annotated, candidate, x1, y1)
-                if last_seen is None or now - last_seen >= DISAPPEAR_SECONDS:
-                    events.append((self.role, candidate))
-
-        overlay.draw_box(self.cv2, annotated, (xmin, ymin), (xmax, ymax), overlay.ROI)
-        roi_text = "Detection area"
+        x1, y1, x2, y2 = self.geometry.zone
+        self.cv2.rectangle(annotated, (int(x1 * width), int(y1 * height)),
+                           (int(x2 * width), int(y2 * height)), (0, 255, 0), 2)
+        for line in (self.geometry.vehicle_line, self.geometry.plate_line):
+            start, end = ((int(x * width), int(y * height)) for x, y in line)
+            self.cv2.line(annotated, start, end, (50, 190, 255), 2)
         if self.color_observer:
             color, _score = self.color_observer.for_single_vehicle()
-            roi_text += f" | Vehicle color: {color.title()}"
-        # Above the area when there is room, otherwise tucked under its top-left edge.
-        overlay.draw_label(self.cv2, annotated, roi_text, xmin, ymin, overlay.ROI, size=0.85)
-        self._expire(now)
+            self.cv2.putText(annotated, f"Vehicle color: {color.title()}",
+                             (10, 32), self.cv2.FONT_HERSHEY_SIMPLEX, .65, (255, 255, 255), 2)
         return annotated, events
 
     def _label(self, frame, plate, x, y):
         overlay.draw_label(self.cv2, frame, plate, x, y, overlay.VACANT, size=1.25)
 
     def _expire(self, now):
-        for track_id, seen_at in list(self.track_last_seen.items()):
-            if now - seen_at > TRACK_EXPIRY_SECONDS:
-                del self.track_last_seen[track_id]
-                self.track_history.pop(track_id, None)
-                self.plate_history.pop(track_id, None)
-                self.eligible_tracks.discard(track_id)
-                self.confirmed_tracks.pop(track_id, None)
+        self.vehicle_crossings = {key: state for key, state in self.vehicle_crossings.items()
+                                  if now - state[1] <= TRACK_EXPIRY_SECONDS}
+        if self.color_observer:
+            for key in self.color_observer.track_votes.keys() - self.vehicle_crossings.keys():
+                del self.color_observer.track_votes[key]
+        self.passages = [p for p in self.passages if now - p.last_seen <= TRACK_EXPIRY_SECONDS
+                         and (now - p.last_seen <= 2 or p.vehicle_id in self.vehicle_crossings)]
         for plate, seen_at in list(self.plate_last_seen.items()):
-            if now - seen_at > TRACK_EXPIRY_SECONDS:
+            if now - seen_at > DISAPPEAR_SECONDS:
                 del self.plate_last_seen[plate]
-        for plate, observations in list(self.plate_observations.items()):
-            while observations and now - observations[0][0] > PLATE_OBSERVATION_SECONDS:
-                observations.popleft()
-            if not observations:
-                del self.plate_observations[plate]
+                self.confirmed_colors.pop(plate, None)
 
 
 def capture_frames(cv2, url, role, frames, stop):
-    """Keep the newest frame only, and reopen a channel after a disconnect."""
+    """Buffer a few timestamped frames and reopen a channel after disconnects."""
     delay = 1.0
     while not stop.is_set():
         capture = None
@@ -471,14 +440,15 @@ def capture_frames(cv2, url, role, frames, stop):
                     if not ok:
                         print(f"[{role}] Stream interrupted; reconnecting.", flush=True)
                         break
+                    item = (time.monotonic(), frame)
                     try:
-                        frames.put_nowait(frame)
+                        frames.put_nowait(item)
                     except queue.Full:
                         try:
                             frames.get_nowait()
                         except queue.Empty:
                             pass
-                        frames.put_nowait(frame)
+                        frames.put_nowait(item)
         except Exception as exc:
             # OpenCV errors can include the RTSP URL, so do not print the
             # exception text or the URL (both may contain credentials).
@@ -568,11 +538,13 @@ def publish_camera_events(events, stop, token, url, role, scenario_id):
 def recognize_frames(role, frames, detector, latest, lock, stop, event_queues=None):
     while not stop.is_set():
         try:
-            frame = frames.get(timeout=0.2)
+            captured_at, frame = frames.get(timeout=0.2)
         except queue.Empty:
             continue
+        if time.monotonic() - captured_at > 2:
+            continue
         try:
-            annotated, events = detector.process(frame)
+            annotated, events = detector.process(frame, now=captured_at)
         except Exception as exc:
             print(f"[{role}] Recognition stopped: {type(exc).__name__}: {exc}", flush=True)
             stop.set()
@@ -635,7 +607,7 @@ def main(argv=None):
             detector = PlateDetector(role, YOLO(str(model_file)), easyocr.Reader(["en"]), cv2,
                                      vehicle_model=YOLO(args.vehicle_model))
             detectors[role] = detector
-            frames = queue.Queue(maxsize=1)
+            frames = queue.Queue(maxsize=4)
             url = rtsp_url(host, port, username, password, channel)
             workers.extend((
                 threading.Thread(target=capture_frames,
